@@ -38,6 +38,8 @@ from liteeth.phy.a7_1000basex import A7_1000BASEX
 
 from litesata.phy import LiteSATAPHY
 
+from litescope import LiteScopeAnalyzer
+
 # CRG ----------------------------------------------------------------------------------------------
 
 class CRG(LiteXModule):
@@ -94,7 +96,7 @@ class BaseSoC(SoCCore):
         eth_ip          = "192.168.1.50",
         remote_ip       = None,
         eth_dynamic_ip  = False,
-        with_led_chaser = True,
+        with_led_chaser = False,
         with_sata       = False, sata_gen="gen2",
         **kwargs):
         platform = sqrl_acorn.Platform(variant=variant)
@@ -126,12 +128,55 @@ class BaseSoC(SoCCore):
         # PCIe -------------------------------------------------------------------------------------
         if with_pcie:
             assert not with_sata
-            self.pcie_phy = S7PCIEPHY(platform, platform.request("pcie_x1"),
+            pcie_pads = platform.request("pcie_x1")
+            pcie_pads_rst_n = pcie_pads.rst_n
+            pcie_pads.rst_n = Signal()
+            self.pcie_phy = S7PCIEPHY(platform, pcie_pads,
                 data_width = 64,
-                bar0_size  = 0x20000)
-            self.add_pcie(phy=self.pcie_phy, ndmas=1)
+                bar0_size  = 0x20000,
+                mode       = "RootPort",
+            )
+            self.add_pcie(phy=self.pcie_phy)
             platform.toolchain.pre_placement_commands.append("reset_property LOC [get_cells -hierarchical -filter {{NAME=~pcie_s7/*gtp_channel.gtpe2_channel_i}}]")
             platform.toolchain.pre_placement_commands.append("set_property LOC GTPE2_CHANNEL_X0Y7 [get_cells -hierarchical -filter {{NAME=~pcie_s7/*gtp_channel.gtpe2_channel_i}}]")
+
+            self.comb += platform.request("pcie_clkreq_n").eq(0)
+
+            # RstN Generation.
+            from litex.gen.genlib.misc import WaitTimer
+            self.rst_n_timer       = WaitTimer(2      * sys_clk_freq) # 2s   period.
+            self.rst_n_timer_pulse = WaitTimer(100e-3 * sys_clk_freq) # 10ms pulse.
+            self.comb += [
+                self.rst_n_timer.wait.eq(       ~self.rst_n_timer.done),
+                self.rst_n_timer_pulse.wait.eq( ~self.rst_n_timer.done),
+                pcie_pads_rst_n.eq(self.rst_n_timer_pulse.done),
+                pcie_pads.rst_n.eq(self.rst_n_timer_pulse.done),
+            ]
+            self.comb += [
+                platform.request("user_led", 1).eq(self.rst_n_timer_pulse.done),
+                platform.request("user_led", 2).eq(self.pcie_phy._link_status.fields.status),
+            ]
+
+            # PCIe.
+            def add_pcie_probe(self):
+                self.pcie_phy.add_ltssm_tracer()
+                analyzer_signals = [
+                    # Rst.
+                    self.pcie_phy.pcie_rst_n,
+
+                    # Link Status.
+                    self.pcie_phy._link_status.fields.rate,
+                    self.pcie_phy._link_status.fields.width,
+                    self.pcie_phy._link_status.fields.ltssm
+                ]
+                self.analyzer = LiteScopeAnalyzer(analyzer_signals,
+                    depth        = 4096,
+                    clock_domain = "sys",
+                    register     = True,
+                    csr_csv      = "analyzer.csv"
+                )
+
+            add_pcie_probe(self)
 
         # PCIe / Ethernet / SATA / Shared-QPLL -----------------------------------------------------
 
