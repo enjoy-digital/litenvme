@@ -258,6 +258,12 @@ class BaseSoC(SoCMini):
             self.pcie_phy._link_status.fields.rate,
             self.pcie_phy._link_status.fields.width,
             self.pcie_phy._link_status.fields.ltssm,
+            self.pcie_phy.cmp_source.valid,
+            self.pcie_phy.cmp_source.ready,
+            self.pcie_phy.cmp_source.last,
+            self.pcie_phy.req_sink.valid,
+            self.pcie_phy.req_sink.ready,
+            self.pcie_phy.req_sink.last,
 
             # CFG Master --------------------------------------------------------------------------
             self.cfgm.start,
