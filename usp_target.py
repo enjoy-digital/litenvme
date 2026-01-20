@@ -221,18 +221,18 @@ class BaseSoC(SoCMini):
             platform.toolchain.pre_placement_commands.append("set_property LOC GTHE4_CHANNEL_X0Y1 [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*gthe4_channel_gen.gen_gthe4_channel_inst[2].GTHE4_CHANNEL_PRIM_INST}}]")
             platform.toolchain.pre_placement_commands.append("set_property LOC GTHE4_CHANNEL_X0Y0 [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*gthe4_channel_gen.gen_gthe4_channel_inst[3].GTHE4_CHANNEL_PRIM_INST}}]")
 
-            # RstN Generation.
+
+            # OneShot Reset.
             from litex.gen.genlib.misc import WaitTimer
-            self.rst_n_timer       = WaitTimer(2      * sys_clk_freq) # 2s   period.
-            self.rst_n_timer_pulse = WaitTimer(100e-3 * sys_clk_freq) # 10ms pulse.
+            self.pcie_rst_timer = WaitTimer(int(100e-3 * sys_clk_freq))  # 100ms.
+            self.comb += self.pcie_rst_timer.wait.eq(1)
             self.comb += [
-                self.rst_n_timer.wait.eq(       ~self.rst_n_timer.done),
-                self.rst_n_timer_pulse.wait.eq( ~self.rst_n_timer.done),
-                pcie_pads_rst_n.eq(self.rst_n_timer_pulse.done),
-                pcie_pads.rst_n.eq(self.rst_n_timer_pulse.done),
+                pcie_pads_rst_n.eq(self.pcie_rst_timer.done),
+                pcie_pads.rst_n.eq(self.pcie_rst_timer.done),
             ]
+
             self.comb += [
-                platform.request("user_led", 1).eq(self.rst_n_timer_pulse.done),
+                #platform.request("user_led", 1).eq(self.rst_n_timer_pulse.done),
                 platform.request("user_led", 2).eq(self.pcie_phy._link_status.fields.status),
                 platform.request("user_led", 3).eq(self.pcie_phy._link_status.fields.phy_down),
             ]
