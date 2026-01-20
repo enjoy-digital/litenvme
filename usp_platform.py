@@ -1,6 +1,6 @@
 from litex.build.generic_platform import *
-from litex.build.xilinx         import XilinxUSPPlatform
-from litex.build.xilinx         import VivadoProgrammer
+from litex.build.xilinx           import XilinxUSPPlatform
+from litex.build.openfpgaloader   import OpenFPGALoader
 
 # IOs ----------------------------------------------------------------------------------------------
 
@@ -68,7 +68,7 @@ class Platform(XilinxUSPPlatform):
         XilinxUSPPlatform.__init__(self, "xcau10p-ffvb676-2-i", _io, toolchain=toolchain)
 
     def create_programmer(self):
-        return VivadoProgrammer()
+        return OpenFPGALoader(fpga_part="xcau10p-ffvb676", cable="digilent_hs2")
 
     def do_finalize(self, fragment):
         XilinxUSPPlatform.do_finalize(self, fragment)
