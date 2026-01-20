@@ -26,8 +26,6 @@ class _CRG(LiteXModule):
     def __init__(self, platform, sys_clk_freq):
         self.rst       = Signal()
         self.cd_sys    = ClockDomain()
-        self.cd_sys4x  = ClockDomain()
-        self.cd_idelay = ClockDomain()
 
         # Clk.
         clk200 = platform.request("clk200")
@@ -42,7 +40,7 @@ class _CRG(LiteXModule):
 
 # BaseSoC ------------------------------------------------------------------------------------------
 
-class BaseSoC(SoCCore):
+class BaseSoC(SoCMini):
     def __init__(self, sys_clk_freq=int(125e6), with_led_chaser=True, **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = Platform()
@@ -51,8 +49,7 @@ class BaseSoC(SoCCore):
         self.crg = _CRG(platform, sys_clk_freq)
 
         # SoCCore ----------------------------------------------------------------------------------
-        kwargs["uart_name"] = "stub"
-        SoCCore.__init__(self, platform, sys_clk_freq, ident="LiteNVME Test SoC.",**kwargs)
+        SoCMini.__init__(self, platform, sys_clk_freq, ident="LiteNVME Test SoC.", ident_version=True)
 
         # UARTBone ---------------------------------------------------------------------------------
         self.add_uartbone()
