@@ -42,8 +42,12 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
         # Internal ---------------------------------------------------------------------------------
         timer = Signal(max=timeout)
 
+        self.timer_dbg = Signal(16)
+
+        self.comb += self.timer_dbg.eq(timer[:16])
+
         # Completion match (LitePCIe completion stream layout).
-        cpl_match = Signal()
+        self.cpl_match = cpl_match = Signal()
         self.comb += [
             cpl_match.eq(cmp_source.valid &
                          (cmp_source.tag    == tag) &
@@ -238,21 +242,71 @@ class BaseSoC(SoCMini):
     # PCIe.
     def add_pcie_probe(self):
         self.pcie_phy.add_ltssm_tracer()
-        analyzer_signals = [
-            # Rst.
-            self.pcie_phy.pcie_rst_n,
 
-            # Link Status.
+        endpoint   = self.pcie_endpoint
+        cfg_sink   = endpoint.req_packetizer.cfg_sink
+        cmp_source = endpoint.cmp_depacketizer.cmp_source
+
+        cmp_source_dat = Signal(32)
+        self.comb += cmp_source_dat.eq(cmp_source.dat[:32])
+
+        analyzer_signals = [
+            # Reset / Link ------------------------------------------------------------------------
+            self.pcie_phy.pcie_rst_n,
+            self.pcie_phy._link_status.fields.status,
+            self.pcie_phy._link_status.fields.phy_down,
             self.pcie_phy._link_status.fields.rate,
             self.pcie_phy._link_status.fields.width,
-            self.pcie_phy._link_status.fields.ltssm
+            self.pcie_phy._link_status.fields.ltssm,
+
+            # CFG Master --------------------------------------------------------------------------
+            self.cfgm.start,
+            self.cfgm.done,
+            self.cfgm.err,
+            self.cfgm.fsm,
+            self.cfgm.cpl_match,
+            self.cfgm.timer_dbg,
+            self.cfgm.bus,
+            self.cfgm.device,
+            self.cfgm.function,
+            self.cfgm.reg,
+            self.cfgm.ext_reg,
+
+            # CFG Request Stream (cfg_sink) -------------------------------------------------------
+            cfg_sink.valid,
+            cfg_sink.ready,
+            cfg_sink.last,
+            cfg_sink.req_id,
+            cfg_sink.we,
+            cfg_sink.bus_number,
+            cfg_sink.device_no,
+            cfg_sink.func,
+            cfg_sink.ext_reg,
+            cfg_sink.register_no,
+            cfg_sink.tag,
+
+            # Completion Stream (cmp_source) ------------------------------------------------------
+            cmp_source.valid,
+            cmp_source.ready,
+            cmp_source.first,
+            cmp_source.last,
+            cmp_source.err,
+            cmp_source.tag,
+            cmp_source.req_id,
+            cmp_source.adr,
+            cmp_source.len,
+            cmp_source.end,
+            #cmp_source.dat[:32],
+            cmp_source_dat,
         ]
+
         self.analyzer = LiteScopeAnalyzer(analyzer_signals,
-            depth        = 4096,
+            depth        = 2048,
             clock_domain = "sys",
             register     = True,
             csr_csv      = "analyzer.csv"
         )
+
 
 # Build --------------------------------------------------------------------------------------------
 
