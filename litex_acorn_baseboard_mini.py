@@ -137,10 +137,11 @@ class BaseSoC(SoCCore):
                 mode       = "RootPort",
             )
             self.add_pcie(phy=self.pcie_phy)
+            self.pcie_phy.add_ltssm_tracer()
             platform.toolchain.pre_placement_commands.append("reset_property LOC [get_cells -hierarchical -filter {{NAME=~pcie_s7/*gtp_channel.gtpe2_channel_i}}]")
             platform.toolchain.pre_placement_commands.append("set_property LOC GTPE2_CHANNEL_X0Y7 [get_cells -hierarchical -filter {{NAME=~pcie_s7/*gtp_channel.gtpe2_channel_i}}]")
 
-            self.comb += platform.request("pcie_clkreq_n").eq(0)
+            #self.comb += platform.request("pcie_clkreq_n").eq(0)
 
             # RstN Generation.
             from litex.gen.genlib.misc import WaitTimer
