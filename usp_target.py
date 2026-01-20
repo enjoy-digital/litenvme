@@ -73,6 +73,8 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
         )
         fsm.act("SEND",
             cfg_sink.valid.eq(1),
+            cfg_sink.first.eq(1),
+            cfg_sink.last.eq(1),
 
             # High-level CFG request fields (packetizer will build TLP header).
             cfg_sink.req_id.eq(requester_id),
@@ -264,6 +266,18 @@ class BaseSoC(SoCMini):
             self.pcie_phy.req_sink.valid,
             self.pcie_phy.req_sink.ready,
             self.pcie_phy.req_sink.last,
+
+            # Endpoint.
+            self.pcie_endpoint.req_packetizer.tlp_raw.valid,
+            self.pcie_endpoint.req_packetizer.tlp_raw.ready,
+            self.pcie_endpoint.req_packetizer.header_inserter.sink.valid,
+            self.pcie_endpoint.req_packetizer.header_inserter.sink.ready,
+            self.pcie_endpoint.req_packetizer.header_inserter.sink.first,
+            self.pcie_endpoint.req_packetizer.header_inserter.sink.last,
+            self.pcie_endpoint.req_packetizer.header_inserter.source.valid,
+            self.pcie_endpoint.req_packetizer.header_inserter.source.ready,
+            self.pcie_endpoint.req_packetizer.header_inserter.source.first,
+            self.pcie_endpoint.req_packetizer.header_inserter.source.last,
 
             # CFG Master --------------------------------------------------------------------------
             self.cfgm.start,
