@@ -29,6 +29,8 @@ from liteeth.phy.rmii import LiteEthPHYRMII
 from litepcie.phy.s7pciephy import S7PCIEPHY
 from litepcie.software import generate_litepcie_software
 
+from litescope import LiteScopeAnalyzer
+
 # CRG ----------------------------------------------------------------------------------------------
 
 class _CRG(LiteXModule):
@@ -97,10 +99,51 @@ class BaseSoC(SoCCore):
 
         # PCIe -------------------------------------------------------------------------------------
         if with_pcie:
-            self.pcie_phy = S7PCIEPHY(platform, platform.request("pcie_x4"),
+            pcie_pads = platform.request("pcie_x4")
+            pcie_pads_rst_n = pcie_pads.rst_n
+            pcie_pads.rst_n = Signal()
+            self.pcie_phy = S7PCIEPHY(platform, pcie_pads,
                 data_width = 128,
-                bar0_size  = 0x20000)
-            self.add_pcie(phy=self.pcie_phy, ndmas=1)
+                bar0_size  = 0x20000,
+                mode       = "RootPort"
+            )
+            self.add_pcie(phy=self.pcie_phy)
+
+            # RstN Generation.
+            from litex.gen.genlib.misc import WaitTimer
+            self.rst_n_timer       = WaitTimer(2      * sys_clk_freq) # 2s   period.
+            self.rst_n_timer_pulse = WaitTimer(100e-3 * sys_clk_freq) # 10ms pulse.
+            self.comb += [
+                self.rst_n_timer.wait.eq(       ~self.rst_n_timer.done),
+                self.rst_n_timer_pulse.wait.eq( ~self.rst_n_timer.done),
+                pcie_pads_rst_n.eq(self.rst_n_timer_pulse.done),
+                pcie_pads.rst_n.eq(self.rst_n_timer_pulse.done),
+            ]
+            self.comb += [
+                platform.request("user_led", 1).eq(self.rst_n_timer_pulse.done),
+                platform.request("user_led", 2).eq(self.pcie_phy._link_status.fields.status),
+            ]
+
+            # PCIe.
+            def add_pcie_probe(self):
+                self.pcie_phy.add_ltssm_tracer()
+                analyzer_signals = [
+                    # Rst.
+                    self.pcie_phy.pcie_rst_n,
+
+                    # Link Status.
+                    self.pcie_phy._link_status.fields.rate,
+                    self.pcie_phy._link_status.fields.width,
+                    self.pcie_phy._link_status.fields.ltssm
+                ]
+                self.analyzer = LiteScopeAnalyzer(analyzer_signals,
+                    depth        = 4096,
+                    clock_domain = "sys",
+                    register     = True,
+                    csr_csv      = "analyzer.csv"
+                )
+
+            add_pcie_probe(self)
 
         # Leds -------------------------------------------------------------------------------------
         if with_led_chaser:
@@ -146,7 +189,7 @@ def main():
         generate_litepcie_software(soc, os.path.join(builder.output_dir, "driver"))
 
     if args.load:
-        prog = soc.platform.create_programmer()
+        prog = soc.platform.create_programmer(programmer="openfpgaloader")
         prog.load_bitstream(builder.get_bitstream_filename(mode="sram"))
 
 if __name__ == "__main__":
