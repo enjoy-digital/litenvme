@@ -33,6 +33,7 @@ def cfg_rd0(bus, b, d, f, reg_dword, ext=0, timeout_ms=100):
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
         stat = bus.regs.pcie_cfgm_cfg_stat.read()
+        print(stat)
         done = (stat >> 0) & 1
         err  = (stat >> 1) & 1
         if done:

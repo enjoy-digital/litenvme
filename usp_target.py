@@ -59,12 +59,12 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
             cfg_sink.valid.eq(0),
             cfg_sink.last.eq(1),
             cmp_source.ready.eq(0),
-            self.done.eq(0),
         ]
 
         # FSM --------------------------------------------------------------------------------------
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
+            self.done.eq(1),
             NextValue(self.err,  0),
             NextValue(timer,     0),
             If(self.start,
