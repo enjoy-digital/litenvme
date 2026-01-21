@@ -21,7 +21,7 @@ from litescope import LiteScopeAnalyzer
 
 # LitePCIe CFG Master ------------------------------------------------------------------------------
 
-class LitePCIeCFGMaster(LiteXModule, AutoCSR):
+class LitePCIeCFGMaster(LiteXModule):
     def __init__(self, cfg_sink, cmp_source, requester_id=0x0000, tag=0x42, timeout=2**20, with_csr=False):
         # User Interface ---------------------------------------------------------------------------
         self.start    = Signal()
@@ -79,7 +79,7 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
             cfg_sink.valid.eq(0),
             cfg_sink.first.eq(0),
             cfg_sink.last.eq(0),
-            cmp_source.ready.eq(0),
+            cmp_source.ready.eq(1),
         ]
 
         # FSM --------------------------------------------------------------------------------------
@@ -225,14 +225,15 @@ class LitePCIeMEMMaster(LiteXModule):
 
         # Completion match -------------------------------------------------------------------------
         self.cpl_match = cpl_match = Signal()
-        self.comb += cpl_match.eq(cmp_source.valid & (cmp_source.tag == tag))
+        #self.comb += cpl_match.eq(cmp_source.valid & (cmp_source.tag == tag))
+        self.comb += cpl_match.eq(cmp_source.valid)
 
         # Defaults ---------------------------------------------------------------------------------
         self.comb += [
             req_sink.valid.eq(0),
             req_sink.first.eq(0),
             req_sink.last.eq(0),
-            cmp_source.ready.eq(0),
+            cmp_source.ready.eq(1),
         ]
 
         # FSM --------------------------------------------------------------------------------------
@@ -545,6 +546,55 @@ class BaseSoC(SoCMini):
             self.mem_port.sink.len,
             self.mem_port.sink.end,
         ]
+
+#        dep = self.pcie_endpoint.cmp_depacketizer
+#
+#        analyzer_signals = [
+#            # Depacketizer input (from PHY -> depacketizer).
+#            dep.sink.valid,
+#            dep.sink.ready,
+#            dep.sink.last,
+#
+#            # Header extracter I/O.
+#            dep.header_extracter.sink.valid,
+#            dep.header_extracter.sink.ready,
+#            dep.header_extracter.sink.last,
+#            dep.header_extracter.source.valid,
+#            dep.header_extracter.source.ready,
+#            dep.header_extracter.source.first,
+#            dep.header_extracter.source.last,
+#
+#            # Dispatch sink (common decoded stream).
+#            dep.dispatch_sink.valid,
+#            dep.dispatch_sink.ready,
+#            dep.dispatch_sink.first,
+#            dep.dispatch_sink.last,
+#            dep.dispatch_sink.fmt,
+#            dep.dispatch_sink.type,
+#
+#            # Dispatcher select (which output we’re routing to).
+#            dep.dispatcher.sel,
+#
+#            # Completion dispatch source (before tlp_cmp).
+#            dep.dispatch_sources["COMPLETION"].valid,
+#            dep.dispatch_sources["COMPLETION"].ready,
+#            dep.dispatch_sources["COMPLETION"].first,
+#            dep.dispatch_sources["COMPLETION"].last,
+#
+#            # tlp_cmp endpoint (after completion header decode).
+#            dep.tlp_cmp.valid,
+#            dep.tlp_cmp.ready,
+#            dep.tlp_cmp.first,
+#            dep.tlp_cmp.last,
+#            dep.tlp_cmp.tag,
+#
+#            # Final completion stream exposed by depacketizer.
+#            dep.cmp_source.valid,
+#            dep.cmp_source.ready,
+#            dep.cmp_source.first,
+#            dep.cmp_source.last,
+#            dep.cmp_source.tag,
+#        ]
 
         self.analyzer = LiteScopeAnalyzer(analyzer_signals,
             depth        = 2048,
