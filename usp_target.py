@@ -25,11 +25,13 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
     def __init__(self, cfg_sink, cmp_source, requester_id=0x0000, tag=0x42, timeout=2**20, with_csr=False):
         # User Interface ---------------------------------------------------------------------------
         self.start    = Signal()
+        self.we       = Signal()     # 0: Read / 1: Write.
+        self.wdata    = Signal(32)   # Write data (DWORD).
         self.bus      = Signal(8)
         self.device   = Signal(5)
         self.function = Signal(3)
-        self.reg      = Signal(6)  # DWORD index (offset/4).
-        self.ext_reg  = Signal(3)  # Extended register (per your layout, 3-bit).
+        self.reg      = Signal(6)    # DWORD index (offset/4).
+        self.ext_reg  = Signal(3)    # Extended register.
 
         self.done     = Signal()
         self.err      = Signal()
@@ -41,9 +43,7 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
 
         # Internal ---------------------------------------------------------------------------------
         timer = Signal(max=timeout)
-
         self.timer_dbg = Signal(16)
-
         self.comb += self.timer_dbg.eq(timer[:16])
 
         # Completion match (LitePCIe completion stream layout).
@@ -54,20 +54,39 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
                          (cmp_source.req_id == requester_id)),
         ]
 
+        # Start edge (launch once per pulse) -------------------------------------------------------
+        start_d     = Signal()
+        start_pulse = Signal()
+        self.sync += start_d.eq(self.start)
+        self.comb += start_pulse.eq(self.start & ~start_d)
+
+        # Sticky status ----------------------------------------------------------------------------
+        done_r = Signal()
+        err_r  = Signal()
+
+        self.comb += [
+            self.done.eq(done_r),
+            self.err.eq(err_r),
+        ]
+
+        self.sync += If(start_pulse,
+            done_r.eq(0),
+            err_r.eq(0),
+        )
+
         # Defaults.
         self.comb += [
             cfg_sink.valid.eq(0),
-            cfg_sink.last.eq(1),
+            cfg_sink.first.eq(0),
+            cfg_sink.last.eq(0),
             cmp_source.ready.eq(0),
         ]
 
         # FSM --------------------------------------------------------------------------------------
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
-            self.done.eq(1),
-            NextValue(self.err,  0),
-            NextValue(timer,     0),
-            If(self.start,
+            NextValue(timer, 0),
+            If(start_pulse,
                 NextState("SEND")
             )
         )
@@ -78,7 +97,7 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
 
             # High-level CFG request fields (packetizer will build TLP header).
             cfg_sink.req_id.eq(requester_id),
-            cfg_sink.we.eq(0),  # Read.
+            cfg_sink.we.eq(self.we),
             cfg_sink.bus_number.eq(self.bus),
             cfg_sink.device_no.eq(self.device),
             cfg_sink.func.eq(self.function),
@@ -86,8 +105,8 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
             cfg_sink.register_no.eq(self.reg),
             cfg_sink.tag.eq(tag),
 
-            # No data for reads.
-            cfg_sink.dat.eq(0),
+            # Data (used for writes, ignored for reads).
+            cfg_sink.dat.eq(Replicate(self.wdata, len(cfg_sink.dat)//32)),
 
             # Route: keep 0 for now (single-user).
             cfg_sink.channel.eq(0),
@@ -102,31 +121,37 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
 
             If(cpl_match,
                 NextValue(self.rdata, cmp_source.dat[:32]),
-                If(cmp_source.err,
-                    NextValue(self.err, 1)
-                ),
-                NextState("DONE")
+                NextState("LATCH")
             ).Elif(timer == (timeout - 1),
-                NextValue(self.err, 1),
-                NextState("DONE")
+                NextState("TIMEOUT")
             )
         )
-        fsm.act("DONE",
-            self.done.eq(1),
-            If(~self.start,
-                NextState("IDLE")
-            )
+        fsm.act("LATCH",
+            NextValue(done_r, 1),
+            If(cmp_source.err,
+                NextValue(err_r, 1)
+            ),
+            NextState("IDLE")
+        )
+        fsm.act("TIMEOUT",
+            NextValue(done_r, 1),
+            NextValue(err_r,  1),
+            NextState("IDLE")
         )
 
         # CSR Wiring -------------------------------------------------------------------------------
         if with_csr:
             self.comb += [
                 self.start.eq(self._cfg_ctrl.fields.start),
+                self.we.eq(self._cfg_ctrl.fields.we),
+
                 self.bus.eq(self._cfg_bdf.fields.bus),
                 self.device.eq(self._cfg_bdf.fields.dev),
                 self.function.eq(self._cfg_bdf.fields.fn),
                 self.reg.eq(self._cfg_bdf.fields.reg),
                 self.ext_reg.eq(self._cfg_bdf.fields.ext),
+
+                self.wdata.eq(self._cfg_wdata.storage),
 
                 self._cfg_stat.fields.done.eq(self.done),
                 self._cfg_stat.fields.err.eq(self.err),
@@ -136,6 +161,7 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
     def add_csr(self):
         self._cfg_ctrl = CSRStorage(fields=[
             CSRField("start", size=1, offset=0),
+            CSRField("we",    size=1, offset=1),  # 0: Read / 1: Write.
         ])
         self._cfg_bdf = CSRStorage(fields=[
             CSRField("bus", size=8,  offset=0),
@@ -144,6 +170,7 @@ class LitePCIeCFGMaster(LiteXModule, AutoCSR):
             CSRField("reg", size=6,  offset=16),  # DWORD index.
             CSRField("ext", size=3,  offset=22),  # Extended reg.
         ])
+        self._cfg_wdata = CSRStorage(32)
         self._cfg_stat = CSRStatus(fields=[
             CSRField("done", size=1, offset=0),
             CSRField("err",  size=1, offset=1),
