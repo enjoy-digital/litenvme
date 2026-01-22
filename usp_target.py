@@ -388,7 +388,7 @@ class BaseSoC(SoCMini):
             pcie_pads_rst_n = pcie_pads.rst_n
             pcie_pads.rst_n = Signal()
             self.pcie_phy = USPPCIEPHY(platform, pcie_pads,
-                speed      = "gen3",
+                speed      = "gen2",
                 data_width = 128,
                 ip_name    = "pcie4c_uscale_plus",
                 bar0_size  = 0x20000,
