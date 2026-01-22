@@ -43,3 +43,71 @@ litescope_cli -r usppciephy_req_sink_valid
 
 # Show what is needed next (queues/admin cmds):
 ./test_nvme.py --next-steps
+
+
+# ---------------------------------------------------------------------
+# 0) Usual bring-up sequence (one-time)
+# ---------------------------------------------------------------------
+./usp_target.py --csr-csv=csr.csv --build --load
+litex_server --uart --uart-port=/dev/ttyUSB0
+
+# BAR0 sizing/assignment + enable MEM/BME (using your existing scripts)
+./test_cfg.py --wait-link --bar0-assign --bar0-base 0xe0000000
+./test_cfg.py --wait-link --enable-mem --enable-bme --disable-intx
+
+
+# ---------------------------------------------------------------------
+# 1) Basic NVMe info (CAP/VS/CC/CSTS/AQA/ASQ/ACQ)
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --info
+
+
+# ---------------------------------------------------------------------
+# 2) Default “useful” run (if your script defaults to info)
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link
+
+
+# ---------------------------------------------------------------------
+# 3) MMIO checks that still don’t need DMA
+# (INTMS/INTMC, AQA/ASQ/ACQ write/readback while CC.EN=0)
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --mmio-check
+
+
+# ---------------------------------------------------------------------
+# 4) Dump first N bytes of BAR0 register space
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --dump 0x100
+./test_nvme.py --wait-link --dump 0x400
+
+
+# ---------------------------------------------------------------------
+# 5) Doorbell read sanity (read-only, does not ring)
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --doorbells
+./test_nvme.py --wait-link --doorbells --max-q 16
+
+
+# ---------------------------------------------------------------------
+# 6) Force-disable controller (CC.EN=0) and wait CSTS.RDY=0
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --disable
+
+
+# ---------------------------------------------------------------------
+# 7) Override BAR0 manually (skip BAR discovery from config space)
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --bar0 0xe0000000 --info --mmio-check
+
+
+# ---------------------------------------------------------------------
+# 8) Print “next steps” (queues/DMA required)
+# ---------------------------------------------------------------------
+./test_nvme.py --next-steps
+
+
+# ---------------------------------------------------------------------
+# 9) Tune timeouts
+# ---------------------------------------------------------------------
+./test_nvme.py --wait-link --timeout-ms 500 --cfg-timeout-ms 200 --mmio-check
