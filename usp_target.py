@@ -431,10 +431,9 @@ class BaseSoC(SoCMini):
                 platform.request("user_led", 3).eq(self.pcie_phy._link_status.fields.phy_down),
             ]
 
-            endpoint = self.pcie_endpoint
+            # CFG Master ---------------------------------------------------------------------------
 
-            # CFG Master ----------------------------------------------------------------------------
-            self.cfg_port = cfg_port = endpoint.crossbar.get_master_port()
+            self.cfg_port = cfg_port = self.pcie_endpoint.crossbar.get_master_port()
 
             requester_id = 0x0000
             if hasattr(self.pcie_phy, "requester_id"):
@@ -448,12 +447,12 @@ class BaseSoC(SoCMini):
             )
             self.add_module(name="pcie_cfgm", module=self.cfgm)
 
-            # MEM Master ----------------------------------------------------------------------------
-            self.mem_port = mem_port = endpoint.crossbar.get_master_port()
+            # MEM Master ---------------------------------------------------------------------------
+
+            self.mem_port = mem_port = self.pcie_endpoint.crossbar.get_master_port()
             self.mem = LitePCIeMEMMaster(
                 port     = mem_port,
-                tag      = 0x0,
-                #tag      = 0x44,
+                tag      = 0x44,
                 with_csr = True,
             )
             self.add_module(name="pcie_mem", module=self.mem)
