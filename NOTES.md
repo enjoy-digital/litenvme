@@ -30,3 +30,16 @@ litescope_cli
 ./test_cfg.py --dump-all
 litescope_cli -r usppciephy_req_sink_valid
 ./test_bar0.py --addr 0xe0000000 --read
+
+
+# Basic decode of NVMe controller regs:
+./test_nvme.py --wait-link --info
+
+# Dump first 0x100 bytes:
+./test_nvme.py --dump 0x100
+
+# Disable controller (clear CC.EN, wait RDY=0):
+./test_nvme.py --info --disable
+
+# Show what is needed next (queues/admin cmds):
+./test_nvme.py --next-steps
