@@ -16,6 +16,7 @@ from litex.soc.cores.clock import USMMCM
 from litex.soc.cores.led   import LedChaser
 
 from litepcie.phy.usppciephy import USPPCIEPHY
+from litepcie.core.endpoint  import LitePCIeEndpoint
 
 from litescope import LiteScopeAnalyzer
 
@@ -394,7 +395,19 @@ class BaseSoC(SoCMini):
                 bar0_size  = 0x20000,
                 mode       = "RootPort",
             )
-            self.add_pcie(phy=self.pcie_phy)
+
+            # PCIe Endpoint (FIXME: Should be named Root here...) ----------------------------------
+            self.pcie_endpoint = LitePCIeEndpoint(
+                phy                  = self.pcie_phy,
+                max_pending_requests = 8,
+                endianness           = self.pcie_phy.endianness,
+                address_width        = 64,
+                with_configuration   = True,
+                with_ptm             = False,
+            )
+
+            # Timing constraints (kept from SoCCore.add_pcie).
+            self.platform.add_false_path_constraints(self.crg.cd_sys.clk, self.pcie_phy.cd_pcie.clk)
 
             # Set manual locations to avoid Vivado to remap lanes.
             platform.toolchain.pre_placement_commands.append("reset_property LOC [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*GTHE4_CHANNEL_PRIM_INST}}]")
