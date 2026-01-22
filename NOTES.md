@@ -24,6 +24,9 @@ litescope_cli
 ./test_bar0.py --addr 0xe0000014 --write 0x00000000
 
 
+./test_cfg.py --dump-all
 ./test_cfg.py --wait-link --enable-mem --enable-bme --disable-intx
 ./test_cfg.py --wait-link --bar0-assign --bar0-base 0xe0000000
+./test_cfg.py --dump-all
 litescope_cli -r usppciephy_req_sink_valid
+./test_bar0.py --addr 0xe0000000 --read

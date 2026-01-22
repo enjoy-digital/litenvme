@@ -16,31 +16,31 @@ def cfg_bdf_pack(bus, dev, fn, reg, ext=0):
     return v
 
 def cfg_rd0(bus, b, d, f, reg_dword, ext=0, timeout_ms=100):
-    bus.regs.pcie_cfgm_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
-    bus.regs.pcie_cfgm_cfg_ctrl.write(1)
-    bus.regs.pcie_cfgm_cfg_ctrl.write(0)
+    bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
+    bus.regs.cfg_cfg_ctrl.write(1)
+    bus.regs.cfg_cfg_ctrl.write(0)
 
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
-        stat = bus.regs.pcie_cfgm_cfg_stat.read()
+        stat = bus.regs.cfg_cfg_stat.read()
         done = (stat >> 0) & 1
         err  = (stat >> 1) & 1
         if done:
             if err:
                 raise RuntimeError("CFG read failed (err=1).")
-            return bus.regs.pcie_cfgm_cfg_rdata.read()
+            return bus.regs.cfg_cfg_rdata.read()
         if time.time() > deadline:
             raise TimeoutError("CFG read timeout (done=0).")
 
 def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100):
-    bus.regs.pcie_cfgm_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
-    bus.regs.pcie_cfgm_cfg_wdata.write(wdata & 0xffffffff)
-    bus.regs.pcie_cfgm_cfg_ctrl.write(1 | (1<<1))  # start=1, we=1
-    bus.regs.pcie_cfgm_cfg_ctrl.write(0)
+    bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
+    bus.regs.cfg_cfg_wdata.write(wdata & 0xffffffff)
+    bus.regs.cfg_cfg_ctrl.write(1 | (1<<1))  # start=1, we=1
+    bus.regs.cfg_cfg_ctrl.write(0)
 
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
-        stat = bus.regs.pcie_cfgm_cfg_stat.read()
+        stat = bus.regs.cfg_cfg_stat.read()
         done = (stat >> 0) & 1
         err  = (stat >> 1) & 1
         if done:

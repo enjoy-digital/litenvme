@@ -8,8 +8,8 @@ from litex import RemoteClient
 # Helpers ------------------------------------------------------------------------------------------
 
 def mem_set_addr(bus, addr):
-    bus.regs.pcie_mem_mem_adr_l.write(addr & 0xffffffff)
-    bus.regs.pcie_mem_mem_adr_h.write((addr >> 32) & 0xffffffff)
+    bus.regs.mmio_mem_adr_l.write(addr & 0xffffffff)
+    bus.regs.mmio_mem_adr_h.write((addr >> 32) & 0xffffffff)
 
 def mem_start(bus, we, wsel=0xf, length=1):
     # ctrl fields:
@@ -22,13 +22,13 @@ def mem_start(bus, we, wsel=0xf, length=1):
     ctrl |= (1 if we else 0) << 1
     ctrl |= (wsel & 0xf) << 4
     ctrl |= (length & 0x3ff) << 8
-    bus.regs.pcie_mem_mem_ctrl.write(ctrl)
-    bus.regs.pcie_mem_mem_ctrl.write(0)
+    bus.regs.mmio_mem_ctrl.write(ctrl)
+    bus.regs.mmio_mem_ctrl.write(0)
 
 def mem_wait_done(bus, timeout_ms=200):
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
-        stat = bus.regs.pcie_mem_mem_stat.read()
+        stat = bus.regs.mmio_mem_stat.read()
         done = (stat >> 0) & 1
         err  = (stat >> 1) & 1
         if done:
@@ -42,11 +42,11 @@ def mem_rd32(bus, addr, timeout_ms=200):
     mem_set_addr(bus, addr)
     mem_start(bus, we=0, wsel=0xf, length=1)
     mem_wait_done(bus, timeout_ms=timeout_ms)
-    return bus.regs.pcie_mem_mem_rdata.read()
+    return bus.regs.mmio_mem_rdata.read()
 
 def mem_wr32(bus, addr, data, wsel=0xf, timeout_ms=200):
     mem_set_addr(bus, addr)
-    bus.regs.pcie_mem_mem_wdata.write(data & 0xffffffff)
+    bus.regs.mmio_mem_wdata.write(data & 0xffffffff)
     mem_start(bus, we=1, wsel=wsel, length=1)
     mem_wait_done(bus, timeout_ms=timeout_ms)
 
