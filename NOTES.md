@@ -111,3 +111,25 @@ litex_server --uart --uart-port=/dev/ttyUSB0
 # 9) Tune timeouts
 # ---------------------------------------------------------------------
 ./test_nvme.py --wait-link --timeout-ms 500 --cfg-timeout-ms 200 --mmio-check
+
+
+
+
+# Build/load bitstream with responder + analyzer
+./usp_target.py --build --load
+
+# Server
+litex_server --uart --uart-port=/dev/ttyUSB0
+
+# Bring-up
+./test_cfg.py  --wait-link --enable-mem --enable-bme --disable-intx
+./test_cfg.py  --wait-link --bar0-assign --bar0-base 0xe0000000
+
+# Arm LiteScope (your usual flow), then:
+./test_nvme.py --wait-link --info
+./test_nvme.py --wait-link --identify \
+  --hostmem-base 0x10000000 \
+  --asq-addr      0x10000000 \
+  --acq-addr      0x10001000 \
+  --id-buf        0x10002000 \
+  --cid 1

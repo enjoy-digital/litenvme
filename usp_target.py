@@ -21,6 +21,7 @@ from litescope import LiteScopeAnalyzer
 
 from gateware.cfg import LiteNVMePCIeCfgAccessor
 from gateware.mem import LiteNVMePCIeMmioAccessor
+from gateware.hostmem import LiteNVMeHostMemResponder
 
 
 # CRG ----------------------------------------------------------------------------------------------
@@ -127,6 +128,25 @@ class BaseSoC(SoCMini):
         )
         self.add_module(name="pcie_mmio", module=self.mmio)
 
+        # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
+
+        hostmem_base = 0x10000000
+        hostmem_size = 0x20000  # 128KB
+
+        def hostmem_decoder(a):
+            return (a >= hostmem_base) & (a < (hostmem_base + hostmem_size))
+
+        self.hostmem_port = endpoint.crossbar.get_slave_port(address_decoder=hostmem_decoder)
+
+        self.hostmem = LiteNVMeHostMemResponder(
+            port       = self.hostmem_port,
+            base       = hostmem_base,
+            size       = hostmem_size,
+            data_width = self.pcie_phy.data_width,
+            with_csr   = True,
+        )
+
+
     # LiteScope Probes (Debug) ---------------------------------------------------------------------
 
     def add_pcie_probe(self):
@@ -209,6 +229,151 @@ class BaseSoC(SoCMini):
             csr_csv      = "analyzer.csv",
         )
 
+    # LiteScope Probes (Debug) ---------------------------------------------------------------------
+
+    def add_pcie_probe_identify(self):
+        # What we want to see for Identify bring-up:
+        # - RootPort -> NVMe MMIO (master port): writes to CC/AQA/ASQ/ACQ + doorbells, and reads of BAR0 regs.
+        # - NVMe -> RootPort DMA (hostmem slave port): MemRd (ASQ fetch) + MemWr (ACQ + Identify buffer).
+        # - Raw PHY activity to correlate.
+        #
+        # Notes:
+        # - Field names can vary a bit across LitePCIe versions. The "activity only" probes are always safe.
+        # - If some fields don't exist in your tree, just delete those lines; the structure below is the intended set.
+
+        cfg_req = self.cfg_port.source
+        cfg_cmp = self.cfg_port.sink
+        mem_req = self.mem_port.source
+        mem_cmp = self.mem_port.sink
+
+        hm_req  = self.hostmem_port.sink    # NVMe Requests arriving to our hostmem responder (MemRd/MemWr).
+        hm_cmp  = self.hostmem_port.source  # Completions we generate back to NVMe for MemRd.
+
+        analyzer_signals = [
+            # -----------------------------------------------------------------------------------------
+            # Clocks / Reset / Link
+            # -----------------------------------------------------------------------------------------
+            self.pcie_phy.pcie_rst_n,
+            self.pcie_phy._link_status.fields.status,
+            self.pcie_phy._link_status.fields.phy_down,
+            self.pcie_phy._link_status.fields.rate,
+            self.pcie_phy._link_status.fields.width,
+            self.pcie_phy._link_status.fields.ltssm,
+
+            # -----------------------------------------------------------------------------------------
+            # Raw PHY streams (coarse activity)
+            #   - req_sink: TLPs we transmit toward the NVMe (MMIO reads/writes, cfg requests).
+            #   - cmp_source: TLPs we receive back from NVMe (completions for our reads).
+            # -----------------------------------------------------------------------------------------
+            self.pcie_phy.req_sink.valid,
+            self.pcie_phy.req_sink.ready,
+            self.pcie_phy.req_sink.last,
+            self.pcie_phy.cmp_source.valid,
+            self.pcie_phy.cmp_source.ready,
+            self.pcie_phy.cmp_source.last,
+
+            # -----------------------------------------------------------------------------------------
+            # CFG master port (RootPort initiated config cycles)
+            # -----------------------------------------------------------------------------------------
+            cfg_req.valid,
+            cfg_req.ready,
+            cfg_req.first,
+            cfg_req.last,
+            cfg_req.is_cfg,
+            cfg_req.we,
+            cfg_req.tag,
+            cfg_req.channel,
+            cfg_req.bus_number,
+            cfg_req.device_no,
+            cfg_req.func,
+            cfg_req.ext_reg,
+            cfg_req.register_no,
+
+            cfg_cmp.valid,
+            cfg_cmp.ready,
+            cfg_cmp.first,
+            cfg_cmp.last,
+            cfg_cmp.err,
+            cfg_cmp.tag,
+            cfg_cmp.len,
+            cfg_cmp.end,
+
+            # -----------------------------------------------------------------------------------------
+            # MEM/MMIO master port (RootPort initiated MemRd/MemWr to NVMe BAR0)
+            #   This is where you should see:
+            #   - writes to AQA/ASQ/ACQ/CC
+            #   - doorbell writes (BAR0+0x1000+...)
+            #   - reads of CAP/VS/etc
+            # -----------------------------------------------------------------------------------------
+            mem_req.valid,
+            mem_req.ready,
+            mem_req.first,
+            mem_req.last,
+            mem_req.we,
+            mem_req.tag,
+            mem_req.adr,
+            mem_req.len,
+            mem_req.channel,
+
+            mem_cmp.valid,
+            mem_cmp.ready,
+            mem_cmp.first,
+            mem_cmp.last,
+            mem_cmp.err,
+            mem_cmp.tag,
+            mem_cmp.len,
+            mem_cmp.end,
+
+            # -----------------------------------------------------------------------------------------
+            # HOSTMEM slave port (NVMe initiated DMA toward host memory window)
+            #   This is the key for Identify:
+            #   - NVMe MemRd: fetch ASQ entry from hostmem -> you'll see hm_req.we=0 + hm_cmp traffic.
+            #   - NVMe MemWr: write ACQ entry + 4KB Identify buffer -> you'll see hm_req.we=1 + payload beats.
+            # -----------------------------------------------------------------------------------------
+            hm_req.valid,
+            hm_req.ready,
+            hm_req.first,
+            hm_req.last,
+            hm_req.we,
+            hm_req.adr,
+            hm_req.len,
+            hm_req.channel,
+
+            # Optional but very useful if present in your LitePCIe port definition:
+            # (remove if your signals don't exist)
+            hm_req.tag if hasattr(hm_req, "tag") else Signal(),
+            hm_req.be  if hasattr(hm_req, "be")  else Signal(),
+
+            # Payload visibility (for MemWr data into hostmem).
+            # Name can be "dat" or "data" depending on LitePCIe version.
+            #(hm_req.dat  if hasattr(hm_req, "dat")  else (hm_req.data if hasattr(hm_req, "data") else Signal())),
+
+            # HOSTMEM completions (for NVMe MemRd).
+            hm_cmp.valid,
+            hm_cmp.ready,
+            hm_cmp.first,
+            hm_cmp.last,
+            hm_cmp.err  if hasattr(hm_cmp, "err") else Signal(),
+            hm_cmp.tag  if hasattr(hm_cmp, "tag") else Signal(),
+            hm_cmp.len  if hasattr(hm_cmp, "len") else Signal(),
+            hm_cmp.end  if hasattr(hm_cmp, "end") else Signal(),
+            #(hm_cmp.dat  if hasattr(hm_cmp, "dat")  else (hm_cmp.data if hasattr(hm_cmp, "data") else Signal())),
+
+            # -----------------------------------------------------------------------------------------
+            # Hostmem responder internals (super handy to confirm writes/reads happen)
+            # -----------------------------------------------------------------------------------------
+            self.hostmem._dma_wr_count.status,
+            self.hostmem._dma_rd_count.status,
+        ]
+
+        self.analyzer = LiteScopeAnalyzer(
+            analyzer_signals,
+            depth        = 2048,   # Identify is 4KB; deeper helps see the whole MemWr burst.
+            clock_domain = "sys",
+            register     = True,
+            csr_csv      = "analyzer.csv",
+        )
+
 
 # Build --------------------------------------------------------------------------------------------
 
@@ -219,7 +384,8 @@ def main():
     args = parser.parse_args()
 
     soc = BaseSoC(sys_clk_freq=args.sys_clk_freq, **parser.soc_argdict)
-    soc.add_pcie_probe()
+    #soc.add_pcie_probe()
+    soc.add_pcie_probe_identify()
 
     builder = Builder(soc, **parser.builder_argdict)
     if args.build:

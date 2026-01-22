@@ -13,12 +13,6 @@ def _bit(v, n):
 def _bits(v, lo, hi):
     return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
 
-def _setbit(v, n, x):
-    if x:
-        return v | (1 << n)
-    else:
-        return v & ~(1 << n)
-
 def wait_link_up(bus, timeout_s=5.0):
     deadline = time.time() + timeout_s
     while True:
@@ -29,6 +23,33 @@ def wait_link_up(bus, timeout_s=5.0):
         if time.time() > deadline:
             return False
         time.sleep(0.05)
+
+# HostMem CSR helpers -----------------------------------------------------------------------------
+
+def hostmem_set_adr(bus, dword_adr):
+    bus.regs.hostmem_csr_adr.write(dword_adr & 0xffffffff)
+
+def hostmem_wr32(bus, addr, data, base=0x10000000):
+    # addr is absolute byte address in the hostmem window.
+    dword = (addr - base) >> 2
+    hostmem_set_adr(bus, dword)
+    bus.regs.hostmem_csr_wdata.write(data & 0xffffffff)
+    bus.regs.hostmem_csr_we.write(1)
+    bus.regs.hostmem_csr_we.write(0)
+
+def hostmem_rd32(bus, addr, base=0x10000000):
+    dword = (addr - base) >> 2
+    hostmem_set_adr(bus, dword)
+    return bus.regs.hostmem_csr_rdata.read()
+
+def hostmem_fill(bus, addr, length, value=0, base=0x10000000):
+    for off in range(0, length, 4):
+        hostmem_wr32(bus, addr + off, value, base=base)
+
+def hostmem_dump(bus, addr, length, base=0x10000000):
+    for off in range(0, length, 4):
+        v = hostmem_rd32(bus, addr + off, base=base)
+        print(f"0x{off:04x}: 0x{v:08x}")
 
 # CFG helpers --------------------------------------------------------------------------------------
 
@@ -114,7 +135,7 @@ def cfg_check_command(bus, b, d, f, timeout_ms=100):
     if cd["mem"] == 0:
         print("WARN: Command.MEM=0 (MMIO may be blocked).")
     if cd["bme"] == 0:
-        print("NOTE: Command.BME=0 (DMA will be blocked later; MMIO can still work).")
+        print("NOTE: Command.BME=0 (DMA will be blocked; Identify needs BME=1).")
 
     return {"cmd": cmd, "sts": sts, "bits": cd}
 
@@ -241,6 +262,27 @@ def cap_to_ms(to_field):
 def doorbell_stride_bytes(dstrd):
     return (1 << int(dstrd)) * 4
 
+# NVMe CC helpers ----------------------------------------------------------------------------------
+
+def cc_make_en(iocqes=4, iosqes=6, mps=0, css=0, ams=0, shn=0):
+    # iocqes: 16B CQ entry => 4 (2^4)
+    # iosqes: 64B SQ entry => 6 (2^6)
+    cc  = 0
+    cc |= (1      & 0x1) << 0    # EN
+    cc |= (css    & 0x7) << 4    # CSS
+    cc |= (mps    & 0xf) << 7    # MPS
+    cc |= (ams    & 0x7) << 11   # AMS
+    cc |= (shn    & 0x3) << 14   # SHN
+    cc |= (iosqes & 0xf) << 16   # IOSQES
+    cc |= (iocqes & 0xf) << 20   # IOCQES
+    return cc
+
+def nvme_db_addr(bar0, cap, qid, is_cq=False):
+    capd   = cap_decode(cap)
+    stride = doorbell_stride_bytes(capd["dstrd"])
+    off = NVME_DOORBELL_BASE + (qid*2 + (1 if is_cq else 0)) * stride
+    return bar0 + off
+
 # NVMe actions -------------------------------------------------------------------------------------
 
 def nvme_read_core(bus, bar0, timeout_ms=200):
@@ -316,34 +358,19 @@ def nvme_disable(bus, bar0, cap=None, timeout_ms=200):
     if err:
         print("WARN: read CC returned err=1.")
     if cc_en(cc) == 0:
-        print("CC.EN already 0.")
         return True
 
     new_cc = cc & ~0x1
-    print(f"Write CC.EN=0: CC 0x{cc:08x} -> 0x{new_cc:08x}")
-    werr = mmio_wr32(bus, bar0 + NVME_CC, new_cc, timeout_ms=timeout_ms)
-    if werr:
-        print("WARN: write CC returned err=1.")
+    mmio_wr32(bus, bar0 + NVME_CC, new_cc, timeout_ms=timeout_ms)
 
-    # Prefer CAP.TO for waiting.
     to_ms = 2000
     if cap is not None:
-        capd  = cap_decode(cap)
-        to_ms = max(500, cap_to_ms(capd["to"]))
-    ok = nvme_wait_rdy(bus, bar0, want_rdy=False, timeout_ms=to_ms)
-
-    if ok:
-        print("CSTS.RDY -> 0")
-    else:
-        print("Timeout waiting for CSTS.RDY -> 0")
+        to_ms = max(500, cap_to_ms(cap_decode(cap)["to"]))
+    ok = nvme_wait_rdy(bus, bar0, want_rdy=False, timeout_ms=to_ms, poll_s=0.001)
     return ok
 
 def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
-    # Safe read-only checks + a few "write/readback while EN=0" checks.
-    # IMPORTANT: INTMS/INTMC are often not reliably R/W-testable. Treat as best-effort.
     print("MMIO sanity:")
-
-    ok = True
 
     cap, e0 = mmio_rd64(bus, bar0 + NVME_CAP,  timeout_ms=timeout_ms)
     vs,  e1 = mmio_rd32(bus, bar0 + NVME_VS,   timeout_ms=timeout_ms)
@@ -360,7 +387,7 @@ def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
         print("  WARN: CC.EN=1, skipping write/readback tests (disable first).")
         return True
 
-    # INTMS/INTMC: best-effort set/clear bit0; never fail the check on err/mismatch.
+    # INTMS/INTMC: best-effort only.
     intms0, er0 = mmio_rd32(bus, bar0 + NVME_INTMS, timeout_ms=timeout_ms)
     if er0:
         print("  WARN: read INTMS returned err=1 (not fatal).")
@@ -380,16 +407,15 @@ def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
             else:
                 print("  WARN: INTMS bit0 set/clear not visible (posted/RO/impl-defined).")
 
-        # Restore original mask (best effort).
         mmio_wr32(bus, bar0 + NVME_INTMS, intms0, timeout_ms=timeout_ms)
 
-    # AQA/ASQ/ACQ: also best-effort (some devices may not reflect readback as normal storage).
+    # AQA/ASQ/ACQ: best-effort.
     aqa0, ea0 = mmio_rd32(bus, bar0 + NVME_AQA, timeout_ms=timeout_ms)
     asq0, ea1 = mmio_rd64(bus, bar0 + NVME_ASQ, timeout_ms=timeout_ms)
     acq0, ea2 = mmio_rd64(bus, bar0 + NVME_ACQ, timeout_ms=timeout_ms)
     if ea0 | ea1 | ea2:
         print("  WARN: read AQA/ASQ/ACQ returned err=1 (not fatal).")
-        return ok
+        return True
 
     aqa_t = aqa0 ^ 0x00010001
     asq_t = (asq0 ^ 0x0000000000001000) & ~0xfff
@@ -402,14 +428,13 @@ def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
     r1, rr1 = mmio_rd64(bus, bar0 + NVME_ASQ, timeout_ms=timeout_ms)
     r2, rr2 = mmio_rd64(bus, bar0 + NVME_ACQ, timeout_ms=timeout_ms)
 
-    # Restore (best effort).
     mmio_wr32(bus, bar0 + NVME_AQA, aqa0, timeout_ms=timeout_ms)
     mmio_wr64(bus, bar0 + NVME_ASQ, asq0, timeout_ms=timeout_ms)
     mmio_wr64(bus, bar0 + NVME_ACQ, acq0, timeout_ms=timeout_ms)
 
     if w0 | w1 | w2 | rr0 | rr1 | rr2:
         print("  WARN: AQA/ASQ/ACQ write/readback returned err=1 (not fatal).")
-        return ok
+        return True
 
     ok_aqa = (r0 == aqa_t)
     ok_asq = (r1 == asq_t)
@@ -420,11 +445,9 @@ def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
     else:
         print("  WARN: AQA/ASQ/ACQ write/readback not visible (impl-defined).")
 
-    return ok
+    return True
 
 def nvme_check_doorbells(bus, bar0, cap, timeout_ms=200, max_q=4):
-    # Doorbells are MMIO, but using them without real queues is undefined.
-    # Still: verify that reads don't error and that stride math is consistent.
     capd   = cap_decode(cap)
     stride = doorbell_stride_bytes(capd["dstrd"])
 
@@ -441,20 +464,89 @@ def nvme_check_doorbells(bus, bar0, cap, timeout_ms=200, max_q=4):
         s1 = "" if e1 == 0 else " (err=1)"
         print(f"  Q{qid}: SQD@0x{sq_off:04x}=0x{sq:08x}{s0}  CQD@0x{cq_off:04x}=0x{cq:08x}{s1}")
 
-def nvme_next_steps(bus, bar0, cap):
-    capd = cap_decode(cap)
-    stride = doorbell_stride_bytes(capd["dstrd"])
-    print("Next steps to actually enable + run admin cmds require queues + DMA:")
-    print("  - Provide a host-memory target reachable by the NVMe device (PCIe MemRd/MemWr).")
-    print("  - Place ASQ/ACQ in that memory, program AQA/ASQ/ACQ.")
-    print("  - Program CC (IOSQES/IOCQES/MPS/CSS/AMS) then set CC.EN=1.")
-    print(f"  - Doorbells start at BAR0+0x{NVME_DOORBELL_BASE:x}, stride={stride} bytes.")
-    print("For now: MMIO reads + CC.EN disable + (best-effort) INTMS/INTMC + AQA/ASQ/ACQ checks are safe.")
+# Admin init + doorbells ---------------------------------------------------------------------------
+
+def nvme_admin_init(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, timeout_ms=200):
+    # AQA: ASQS (bits 11:0) and ACQS (bits 27:16), values are (N-1).
+    assert q_entries >= 2
+    aqa = ((q_entries - 1) & 0xfff) | (((q_entries - 1) & 0xfff) << 16)
+
+    # Disable first (best-effort).
+    nvme_disable(bus, bar0, cap=cap, timeout_ms=timeout_ms)
+
+    e0 = mmio_wr32(bus, bar0 + NVME_AQA, aqa, timeout_ms=timeout_ms)
+    e1 = mmio_wr64(bus, bar0 + NVME_ASQ, asq_addr, timeout_ms=timeout_ms)
+    e2 = mmio_wr64(bus, bar0 + NVME_ACQ, acq_addr, timeout_ms=timeout_ms)
+    if e0 | e1 | e2:
+        print("WARN: writing AQA/ASQ/ACQ had err=1 (posted/UR/CA).")
+
+    cc = cc_make_en(iocqes=4, iosqes=6, mps=0, css=0, ams=0)
+    e3 = mmio_wr32(bus, bar0 + NVME_CC, cc, timeout_ms=timeout_ms)
+    if e3:
+        print("WARN: writing CC had err=1.")
+
+    to_ms = max(500, cap_to_ms(cap_decode(cap)["to"]))
+    ok = nvme_wait_rdy(bus, bar0, want_rdy=True, timeout_ms=to_ms, poll_s=0.001)
+    return ok
+
+def nvme_ring_admin_sq(bus, bar0, cap, tail, timeout_ms=200):
+    db = nvme_db_addr(bar0, cap, qid=0, is_cq=False)
+    err = mmio_wr32(bus, db, tail & 0xffff, timeout_ms=timeout_ms)
+    if err:
+        print("WARN: SQ0 doorbell write err=1.")
+    return err == 0
+
+# NVMe Admin Identify command ---------------------------------------------------------------------
+
+def nvme_cmd_identify_controller(cid, prp1, nsid=0):
+    # 64-byte NVMe command = 16 dwords.
+    # CDW0: opcode[7:0]=0x06 (Identify), CID[31:16]
+    # PRP1: dwords 6-7
+    # CDW10: CNS[7:0]=1 (Identify Controller)
+    cmd = [0]*16
+    cmd[0]  = (0x06 & 0xff) | ((cid & 0xffff) << 16)
+    cmd[1]  = 0x00000000
+    cmd[2]  = nsid & 0xffffffff
+    cmd[3]  = 0x00000000
+    cmd[4]  = 0x00000000
+    cmd[5]  = 0x00000000
+    cmd[6]  = prp1 & 0xffffffff
+    cmd[7]  = (prp1 >> 32) & 0xffffffff
+    cmd[8]  = 0x00000000
+    cmd[9]  = 0x00000000
+    cmd[10] = 0x00000001  # CNS=1
+    cmd[11] = 0x00000000
+    cmd[12] = 0x00000000
+    cmd[13] = 0x00000000
+    cmd[14] = 0x00000000
+    cmd[15] = 0x00000000
+    return cmd
+
+def hostmem_wr_cmd(bus, asq_base, slot, cmd_dwords, hostmem_base=0x10000000):
+    addr = asq_base + slot*64
+    for i, w in enumerate(cmd_dwords):
+        hostmem_wr32(bus, addr + i*4, w, base=hostmem_base)
+
+def nvme_poll_acq0(bus, acq_base, timeout_s=2.0, hostmem_base=0x10000000):
+    deadline = time.time() + timeout_s
+    last = None
+    while time.time() < deadline:
+        d0 = hostmem_rd32(bus, acq_base + 0x0, base=hostmem_base)
+        d1 = hostmem_rd32(bus, acq_base + 0x4, base=hostmem_base)
+        d2 = hostmem_rd32(bus, acq_base + 0x8, base=hostmem_base)
+        d3 = hostmem_rd32(bus, acq_base + 0xc, base=hostmem_base)
+        cur = (d0, d1, d2, d3)
+        if cur != last:
+            last = cur
+        if (d0 | d1 | d2 | d3) != 0:
+            return cur
+        time.sleep(0.01)
+    return last
 
 # Main ---------------------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="LiteNVMe progressive tester (MMIO-first, CSR-driven).")
+    parser = argparse.ArgumentParser(description="LiteNVMe progressive tester (MMIO-first, CSR-driven) + Identify via BRAM hostmem.")
     parser.add_argument("--csr-csv",   default="csr.csv", help="CSR configuration file.")
     parser.add_argument("--port",      default="1234",    help="Host bind port.")
     parser.add_argument("--wait-link", action="store_true", help="Wait for PCIe link up before MMIO/CFG.")
@@ -475,7 +567,14 @@ def main():
     parser.add_argument("--mmio-check",  action="store_true", help="Run safe MMIO tests that do not require DMA.")
     parser.add_argument("--doorbells",   action="store_true", help="Read a few SQ/CQ doorbells (read-only sanity).")
     parser.add_argument("--max-q",       default="4", help="Max queue id to probe for --doorbells.")
-    parser.add_argument("--next-steps",  action="store_true", help="Print what is required for queues/admin commands.")
+
+    parser.add_argument("--identify", action="store_true", help="Send Admin Identify (controller) via BRAM hostmem.")
+    parser.add_argument("--hostmem-base", default="0x10000000", help="Hostmem window base (must match gateware).")
+    parser.add_argument("--asq-addr", default="0x10000000", help="ASQ base (4K aligned).")
+    parser.add_argument("--acq-addr", default="0x10001000", help="ACQ base (4K aligned).")
+    parser.add_argument("--id-buf",   default="0x10002000", help="Identify buffer (4K aligned).")
+    parser.add_argument("--cid",      default="1", help="Command ID.")
+    parser.add_argument("--q-entries", default="2", help="Admin queue entries (>=2).")
 
     args = parser.parse_args()
 
@@ -495,15 +594,12 @@ def main():
             raise RuntimeError("PCIe link did not come up.")
         print("Link up.")
 
-    # Default behavior if nothing requested.
-    if not (args.info or args.dump or args.disable or args.mmio_check or args.doorbells or args.next_steps):
+    if not (args.info or args.dump or args.disable or args.mmio_check or args.doorbells or args.identify):
         args.info = True
         args.mmio_check = True
 
-    # Print CFG CMD/STS (helps diagnose MEM/BME).
     cfg_check_command(bus, b, d, f, timeout_ms=cfg_timeout_ms)
 
-    # BAR0.
     if args.bar0 is not None:
         bar0 = int(args.bar0, 0)
     else:
@@ -513,42 +609,69 @@ def main():
     if bar0 == 0:
         raise RuntimeError("BAR0 base is 0. Assign BAR0 in config space before running MMIO tests.")
 
-    # Info (also gives CAP for timeout / doorbells / next-steps).
     info = None
-    if args.info or args.disable or args.mmio_check or args.doorbells or args.next_steps:
+    if args.info or args.disable or args.mmio_check or args.doorbells or args.identify:
         info = nvme_read_core(bus, bar0, timeout_ms=timeout_ms)
 
-    # Dump.
     if args.dump is not None:
         length = int(args.dump, 0)
         nvme_dump_regs(bus, bar0, length=length, stride=4, timeout_ms=timeout_ms)
 
-    # Disable.
     if args.disable:
         cap = None if info is None else info["cap"]
-        if not nvme_disable(bus, bar0, cap=cap, timeout_ms=timeout_ms):
-            raise RuntimeError("Disable failed (CSTS.RDY did not go 0).")
+        ok = nvme_disable(bus, bar0, cap=cap, timeout_ms=timeout_ms)
+        print(f"Disable: {'OK' if ok else 'FAIL'}")
 
-    # MMIO checks (no DMA).
     if args.mmio_check:
         ok = nvme_check_mmio_basics(bus, bar0, timeout_ms=timeout_ms)
-        if ok:
-            print("MMIO checks: OK")
-        else:
-            print("MMIO checks: FAIL")
+        print("MMIO checks: " + ("OK" if ok else "FAIL"))
 
-    # Doorbells (read-only sanity).
     if args.doorbells:
         if info is None:
             info = nvme_read_core(bus, bar0, timeout_ms=timeout_ms)
         nvme_check_doorbells(bus, bar0, cap=info["cap"], timeout_ms=timeout_ms, max_q=max_q)
 
-    # Next steps.
-    if args.next_steps:
+    if args.identify:
         if info is None:
             info = nvme_read_core(bus, bar0, timeout_ms=timeout_ms)
-        nvme_next_steps(bus, bar0, cap=info["cap"])
+
+        hostmem_base = int(args.hostmem_base, 0)
+        asq_addr     = int(args.asq_addr, 0)
+        acq_addr     = int(args.acq_addr, 0)
+        id_buf       = int(args.id_buf, 0)
+        cid          = int(args.cid, 0)
+        q_entries    = int(args.q_entries, 0)
+
+        # Clear ACQ[0] + some of Identify buffer for visibility.
+        hostmem_fill(bus, acq_addr, 16, value=0, base=hostmem_base)
+        hostmem_fill(bus, id_buf,  0x100, value=0, base=hostmem_base)
+
+        # Init admin queues + enable.
+        ok = nvme_admin_init(bus, bar0, info["cap"], asq_addr, acq_addr, q_entries=q_entries, timeout_ms=timeout_ms)
+
+        csts, _ = mmio_rd32(bus, bar0 + NVME_CSTS, timeout_ms=timeout_ms)
+        print(f"Admin init: RDY={'1' if csts_rdy(csts) else '0'} CFS={csts_cfs(csts)} (poll_ok={'1' if ok else '0'})")
+
+        # Program Identify command in ASQ[0].
+        cmd = nvme_cmd_identify_controller(cid=cid, prp1=id_buf, nsid=0)
+        hostmem_wr_cmd(bus, asq_base=asq_addr, slot=0, cmd_dwords=cmd, hostmem_base=hostmem_base)
+        print("ASQ[0] programmed (Identify Controller).")
+
+        # Ring SQ0 tail = 1.
+        nvme_ring_admin_sq(bus, bar0, info["cap"], tail=1, timeout_ms=timeout_ms)
+        print("SQ0 doorbell rung (tail=1).")
+
+        # Poll CQE0 (NVMe should MemWr it).
+        cpl = nvme_poll_acq0(bus, acq_base=acq_addr, timeout_s=2.0, hostmem_base=hostmem_base)
+        print("ACQ[0] raw:")
+        if cpl is None:
+            print("  (no completion observed)")
+        else:
+            print(f"  {cpl[0]:08x} {cpl[1]:08x} {cpl[2]:08x} {cpl[3]:08x}")
+
+        # Dump first 0x100 bytes of Identify buffer (NVMe writes 4096B).
+        print("Identify buffer (first 0x100):")
+        hostmem_dump(bus, addr=id_buf, length=0x100, base=hostmem_base)
 
 if __name__ == "__main__":
     main()
-
