@@ -1,11 +1,6 @@
-./litex_acorn_baseboard_mini.py --cpu-type=None --uart-name=uartbone --integrated-main-ram-size=0x100 --csr-csv=csr.csv --with-pcie --build --load
-litex_server --uart-port=/dev/ttyUSB2
+./usp_target.py --csr-csv=csr.csv --build --load
+litex_server --uart --uart-port=/dev/ttyUSB0
 litescope_cli
-./test_ltssm_tracer.py
-
-./kosagi_netv2.py --cpu-type=None --uart-name=uartbone --integrated-main-ram-size=0x100 --csr-csv=csr.csv --with-pcie --build --load
-
-
 
 # Inspect config space:
 ./test_cfg.py --wait-link --dump-all --caps
@@ -27,3 +22,8 @@ litescope_cli
 
 # Write to NVMe CC register (offset 0x14) for example:
 ./test_bar0.py --addr 0xe0000014 --write 0x00000000
+
+
+./test_cfg.py --wait-link --enable-mem --enable-bme --disable-intx
+./test_cfg.py --wait-link --bar0-assign --bar0-base 0xe0000000
+litescope_cli -r usppciephy_req_sink_valid
