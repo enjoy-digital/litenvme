@@ -22,7 +22,10 @@ from litescope import LiteScopeAnalyzer
 # LitePCIe CFG Master ------------------------------------------------------------------------------
 
 class LitePCIeCFGMaster(LiteXModule):
-    def __init__(self, cfg_sink, cmp_source, requester_id=0x0000, tag=0x42, timeout=2**20, with_csr=False):
+    def __init__(self, port, requester_id=0x0000, tag=0x42, timeout=2**20, with_csr=False):
+        req_sink   = port.source
+        cmp_source = port.sink
+
         # User Interface ---------------------------------------------------------------------------
         self.start    = Signal()
         self.we       = Signal()     # 0: Read / 1: Write.
@@ -49,9 +52,10 @@ class LitePCIeCFGMaster(LiteXModule):
         # Completion match (LitePCIe completion stream layout).
         self.cpl_match = cpl_match = Signal()
         self.comb += [
-            cpl_match.eq(cmp_source.valid &
-                         (cmp_source.tag    == tag) &
-                         (cmp_source.req_id == requester_id)),
+            #cpl_match.eq(cmp_source.valid &
+            #             (cmp_source.tag    == tag) &
+            #             (cmp_source.req_id == requester_id)),
+            cpl_match.eq(cmp_source.valid),
         ]
 
         # Start edge (launch once per pulse) -------------------------------------------------------
@@ -76,10 +80,10 @@ class LitePCIeCFGMaster(LiteXModule):
 
         # Defaults.
         self.comb += [
-            cfg_sink.valid.eq(0),
-            cfg_sink.first.eq(0),
-            cfg_sink.last.eq(0),
-            cmp_source.ready.eq(1),
+            req_sink.valid.eq(0),
+            req_sink.first.eq(0),
+            req_sink.last.eq(0),
+            cmp_source.ready.eq(0),
         ]
 
         # FSM --------------------------------------------------------------------------------------
@@ -91,26 +95,32 @@ class LitePCIeCFGMaster(LiteXModule):
             )
         )
         fsm.act("SEND",
-            cfg_sink.valid.eq(1),
-            cfg_sink.first.eq(1),
-            cfg_sink.last.eq(1),
+            req_sink.valid.eq(1),
+            req_sink.first.eq(1),
+            req_sink.last.eq(1),
 
-            # High-level CFG request fields (packetizer will build TLP header).
-            cfg_sink.req_id.eq(requester_id),
-            cfg_sink.we.eq(self.we),
-            cfg_sink.bus_number.eq(self.bus),
-            cfg_sink.device_no.eq(self.device),
-            cfg_sink.func.eq(self.function),
-            cfg_sink.ext_reg.eq(self.ext_reg),
-            cfg_sink.register_no.eq(self.reg),
-            cfg_sink.tag.eq(tag),
+            # Shared REQUEST layout fields.
+            req_sink.req_id.eq(requester_id),
+            req_sink.we.eq(self.we),
+            req_sink.adr.eq(0),   # Unused for CFG but must be driven.
+            req_sink.len.eq(1),   # CFG is 1DW.
+            req_sink.tag.eq(tag),
 
             # Data (used for writes, ignored for reads).
-            cfg_sink.dat.eq(Replicate(self.wdata, len(cfg_sink.dat)//32)),
+            req_sink.dat.eq(Replicate(self.wdata, len(req_sink.dat)//32)),
 
-            cfg_sink.channel.eq(0),
+            # Route.
+            req_sink.channel.eq(port.channel),
 
-            If(cfg_sink.ready,
+            # CFG-over-REQUEST fields (present only when CONFIGURATION is enabled in layout).
+            req_sink.is_cfg.eq(1),
+            req_sink.bus_number.eq(self.bus),
+            req_sink.device_no.eq(self.device),
+            req_sink.func.eq(self.function),
+            req_sink.ext_reg.eq(self.ext_reg),
+            req_sink.register_no.eq(self.reg),
+
+            If(req_sink.ready,
                 NextState("WAIT")
             )
         )
@@ -232,7 +242,7 @@ class LitePCIeMEMMaster(LiteXModule):
             req_sink.valid.eq(0),
             req_sink.first.eq(0),
             req_sink.last.eq(0),
-            cmp_source.ready.eq(1),
+            cmp_source.ready.eq(0),
         ]
 
         # FSM --------------------------------------------------------------------------------------
@@ -408,19 +418,17 @@ class BaseSoC(SoCMini):
                 platform.request("user_led", 3).eq(self.pcie_phy._link_status.fields.phy_down),
             ]
 
+            endpoint = self.pcie_endpoint
 
             # CFG Master ----------------------------------------------------------------------------
-            endpoint   = self.pcie_endpoint
-            cfg_sink   = endpoint.req_packetizer.cfg_sink
-            cmp_source = endpoint.cmp_depacketizer.cmp_source
+            self.cfg_port = cfg_port = endpoint.crossbar.get_master_port()
 
             requester_id = 0x0000
             if hasattr(self.pcie_phy, "requester_id"):
                 requester_id = self.pcie_phy.requester_id
 
             self.cfgm = LitePCIeCFGMaster(
-                cfg_sink     = cfg_sink,
-                cmp_source   = cmp_source,
+                port         = cfg_port,
                 requester_id = requester_id,
                 tag          = 0x42,
                 with_csr     = True,
@@ -444,12 +452,13 @@ class BaseSoC(SoCMini):
     def add_pcie_probe(self):
         #self.pcie_phy.add_ltssm_tracer()
 
-        endpoint   = self.pcie_endpoint
-        cfg_sink   = endpoint.req_packetizer.cfg_sink
-        cmp_source = endpoint.cmp_depacketizer.cmp_source
+        endpoint = self.pcie_endpoint
 
-        cmp_source_dat = Signal(32)
-        self.comb += cmp_source_dat.eq(cmp_source.dat[:32])
+        # CFG via crossbar port.
+        cfg_req = self.cfg_port.source
+        cfg_cmp = self.cfg_port.sink
+        cfg_cmp_dat = Signal(32)
+        self.comb += cfg_cmp_dat.eq(cfg_cmp.dat[:32])
 
         analyzer_signals = [
             # Reset / Link ------------------------------------------------------------------------
@@ -467,16 +476,16 @@ class BaseSoC(SoCMini):
             self.pcie_phy.req_sink.last,
 
             # Endpoint.
-            self.pcie_endpoint.req_packetizer.tlp_raw.valid,
-            self.pcie_endpoint.req_packetizer.tlp_raw.ready,
-            self.pcie_endpoint.req_packetizer.header_inserter.sink.valid,
-            self.pcie_endpoint.req_packetizer.header_inserter.sink.ready,
-            self.pcie_endpoint.req_packetizer.header_inserter.sink.first,
-            self.pcie_endpoint.req_packetizer.header_inserter.sink.last,
-            self.pcie_endpoint.req_packetizer.header_inserter.source.valid,
-            self.pcie_endpoint.req_packetizer.header_inserter.source.ready,
-            self.pcie_endpoint.req_packetizer.header_inserter.source.first,
-            self.pcie_endpoint.req_packetizer.header_inserter.source.last,
+#            endpoint.req_packetizer.tlp_raw.valid,
+#            endpoint.req_packetizer.tlp_raw.ready,
+#            endpoint.req_packetizer.header_inserter.sink.valid,
+#            endpoint.req_packetizer.header_inserter.sink.ready,
+#            endpoint.req_packetizer.header_inserter.sink.first,
+#            endpoint.req_packetizer.header_inserter.sink.last,
+#            endpoint.req_packetizer.header_inserter.source.valid,
+#            endpoint.req_packetizer.header_inserter.source.ready,
+#            endpoint.req_packetizer.header_inserter.source.first,
+#            endpoint.req_packetizer.header_inserter.source.last,
 
             # CFG Master --------------------------------------------------------------------------
             self.cfgm.start,
@@ -491,32 +500,33 @@ class BaseSoC(SoCMini):
             self.cfgm.reg,
             self.cfgm.ext_reg,
 
-#            # CFG Request Stream (cfg_sink) -------------------------------------------------------
-#            cfg_sink.valid,
-#            cfg_sink.ready,
-#            cfg_sink.last,
-#            cfg_sink.req_id,
-#            cfg_sink.we,
-#            cfg_sink.bus_number,
-#            cfg_sink.device_no,
-#            cfg_sink.func,
-#            cfg_sink.ext_reg,
-#            cfg_sink.register_no,
-#            cfg_sink.tag,
-#
-#            # Completion Stream (cmp_source) ------------------------------------------------------
-#            cmp_source.valid,
-#            cmp_source.ready,
-#            cmp_source.first,
-#            cmp_source.last,
-#            cmp_source.err,
-#            cmp_source.tag,
-#            cmp_source.req_id,
-#            cmp_source.adr,
-#            cmp_source.len,
-#            cmp_source.end,
-#            #cmp_source.dat[:32],
-#            cmp_source_dat,
+            # CFG Request Stream (via crossbar port) ----------------------------------------------
+            cfg_req.valid,
+            cfg_req.ready,
+            cfg_req.first,
+            cfg_req.last,
+            cfg_req.is_cfg,
+            cfg_req.we,
+            cfg_req.req_id,
+            cfg_req.tag,
+            cfg_req.channel,
+            cfg_req.bus_number,
+            cfg_req.device_no,
+            cfg_req.func,
+            cfg_req.ext_reg,
+            cfg_req.register_no,
+
+            # CFG Completion Stream (via crossbar port) -------------------------------------------
+            cfg_cmp.valid,
+            cfg_cmp.ready,
+            cfg_cmp.first,
+            cfg_cmp.last,
+            cfg_cmp.err,
+            cfg_cmp.tag,
+            cfg_cmp.req_id,
+            cfg_cmp.len,
+            cfg_cmp.end,
+            cfg_cmp_dat,
 
             # MEM.
             self.mem.fsm,
@@ -546,7 +556,7 @@ class BaseSoC(SoCMini):
             self.mem_port.sink.end,
         ]
 
-        dep = self.pcie_endpoint.cmp_depacketizer
+        dep = endpoint.cmp_depacketizer
 
         analyzer_signals += [
             # Depacketizer input (from PHY -> depacketizer).

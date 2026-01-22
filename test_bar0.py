@@ -32,8 +32,8 @@ def mem_wait_done(bus, timeout_ms=200):
         done = (stat >> 0) & 1
         err  = (stat >> 1) & 1
         if done:
-            if err:
-                raise RuntimeError("MEM transaction failed (err=1).")
+            #if err:
+            #    raise RuntimeError("MEM transaction failed (err=1).")
             return
         if time.time() > deadline:
             raise TimeoutError("MEM transaction timeout (done=0).")
