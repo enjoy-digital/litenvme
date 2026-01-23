@@ -2,6 +2,7 @@
 
 import argparse
 import time
+import struct
 
 from litex import RemoteClient
 
@@ -24,13 +25,112 @@ def wait_link_up(bus, timeout_s=5.0):
             return False
         time.sleep(0.05)
 
+# NVMe Identify/CQE decoding ----------------------------------------------------------------------
+
+def _dwords_to_bytes_le(dws):
+    return b"".join(struct.pack("<I", x & 0xffffffff) for x in dws)
+
+def _u16(b, off): return struct.unpack_from("<H", b, off)[0]
+def _u32(b, off): return struct.unpack_from("<I", b, off)[0]
+
+def _get_ascii(b, off, n):
+    s = b[off:off+n].decode("ascii", errors="replace")
+    return s.rstrip(" \x00")
+
+def _ver_to_str(ver):
+    mjr = (ver >> 16) & 0xffff
+    mnr = (ver >> 8) & 0xff
+    ter = ver & 0xff
+    return f"{mjr}.{mnr}.{ter}"
+
+def decode_identify_controller_from_dwords(dws):
+    b = _dwords_to_bytes_le(dws)
+
+    # Offsets per NVMe Identify Controller Data Structure.
+    vid   = _u16(b, 0x00)
+    ssvid = _u16(b, 0x02)
+    sn    = _get_ascii(b, 0x04, 20)
+    mn    = _get_ascii(b, 0x18, 40)
+    fr    = _get_ascii(b, 0x40, 8)
+
+    rab  = b[0x48]
+    oui  = b[0x49:0x4c]  # 3 bytes
+    ieee_oui = f"{oui[0]:02x}-{oui[1]:02x}-{oui[2]:02x}"
+
+    cmic   = b[0x4c]
+    mdts   = b[0x4d]
+    cntlid = _u16(b, 0x4e)
+    ver    = _u32(b, 0x50)
+    oaes   = _u32(b, 0x58)
+
+    return {
+        "vid": vid,
+        "ssvid": ssvid,
+        "sn": sn,
+        "mn": mn,
+        "fr": fr,
+        "rab": rab,
+        "ieee_oui": ieee_oui,
+        "cmic": cmic,
+        "mdts": mdts,
+        "cntlid": cntlid,
+        "ver": ver,
+        "ver_str": _ver_to_str(ver),
+        "oaes": oaes,
+    }
+
+def pretty_print_identify_controller(info):
+    print("Identify Controller (decoded):")
+    print(f"  VID      : 0x{info['vid']:04x}")
+    print(f"  SSVID    : 0x{info['ssvid']:04x}")
+    print(f"  SN       : {info['sn']!r}")
+    print(f"  MN       : {info['mn']!r}")
+    print(f"  FR       : {info['fr']!r}")
+    print(f"  VER      : {info['ver_str']} (0x{info['ver']:08x})")
+    print(f"  CNTLID   : 0x{info['cntlid']:04x}")
+    print(f"  IEEE OUI : {info['ieee_oui']}")
+    print(f"  RAB      : {info['rab']}")
+    print(f"  CMIC     : 0x{info['cmic']:02x}")
+    print(f"  MDTS     : {info['mdts']}")
+    print(f"  OAES     : 0x{info['oaes']:08x}")
+
+def decode_cqe(d0, d1, d2, d3):
+    # DW2: SQHD[15:0] | SQID[31:16]
+    sq_head = d2 & 0xffff
+    sq_id   = (d2 >> 16) & 0xffff
+
+    # DW3: CID[15:0] | STS[31:16]
+    cid = d3 & 0xffff
+    sts = (d3 >> 16) & 0xffff
+
+    # STS layout: P[0], SC[8:1], SCT[11:9], M[14], DNR[15]
+    p   = sts & 0x1
+    sc  = (sts >> 1) & 0xff
+    sct = (sts >> 9) & 0x7
+    m   = (sts >> 14) & 0x1
+    dnr = (sts >> 15) & 0x1
+
+    return {
+        "dw0": d0, "dw1": d1, "dw2": d2, "dw3": d3,
+        "sq_head": sq_head, "sq_id": sq_id,
+        "cid": cid,
+        "p": p, "sc": sc, "sct": sct, "m": m, "dnr": dnr,
+    }
+
+def pretty_print_cqe(cqe):
+    print("ACQ[0] decoded CQE:")
+    print(f"  SQ Head : {cqe['sq_head']}")
+    print(f"  SQ ID   : {cqe['sq_id']}")
+    print(f"  CID     : {cqe['cid']}")
+    print(f"  Status  : P={cqe['p']} SCT={cqe['sct']} SC={cqe['sc']} M={cqe['m']} DNR={cqe['dnr']}")
+    print(f"  DW0/DW1 : 0x{cqe['dw0']:08x} 0x{cqe['dw1']:08x}")
+
 # HostMem CSR helpers -----------------------------------------------------------------------------
 
 def hostmem_set_adr(bus, dword_adr):
     bus.regs.hostmem_csr_adr.write(dword_adr & 0xffffffff)
 
 def hostmem_wr32(bus, addr, data, base=0x10000000):
-    # addr is absolute byte address in the hostmem window.
     dword = (addr - base) >> 2
     hostmem_set_adr(bus, dword)
     bus.regs.hostmem_csr_wdata.write(data & 0xffffffff)
@@ -50,6 +150,9 @@ def hostmem_dump(bus, addr, length, base=0x10000000):
     for off in range(0, length, 4):
         v = hostmem_rd32(bus, addr + off, base=base)
         print(f"0x{off:04x}: 0x{v:08x}")
+
+def hostmem_read_dwords(bus, addr, dword_count, base=0x10000000):
+    return [hostmem_rd32(bus, addr + 4*i, base=base) for i in range(dword_count)]
 
 # CFG helpers --------------------------------------------------------------------------------------
 
@@ -93,7 +196,6 @@ def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100):
             raise TimeoutError("CFG write timeout (done=0).")
 
 def discover_bar0(bus, b, d, f, timeout_ms=100):
-    # BAR0: dword 4 (0x10), BAR1: dword 5 (0x14).
     bar0, e0 = cfg_rd0(bus, b, d, f, 4, timeout_ms=timeout_ms)
     if e0:
         raise RuntimeError("CFG read BAR0 failed (err=1).")
@@ -169,7 +271,6 @@ def cfg_set_command(bus, b, d, f, set_mem=True, set_bme=True, timeout_ms=100):
     print(f"CFG CMD updated: 0x{cmd:04x} -> 0x{cmd2:04x}")
     return True
 
-
 # MEM/MMIO helpers ---------------------------------------------------------------------------------
 
 def mem_set_addr(bus, addr):
@@ -177,11 +278,6 @@ def mem_set_addr(bus, addr):
     bus.regs.mmio_mem_adr_h.write((addr >> 32) & 0xffffffff)
 
 def mem_start(bus, we, wsel=0xf, length=1):
-    # ctrl fields:
-    # start bit0
-    # we    bit1
-    # wsel  bits[7:4]
-    # len   bits[17:8]
     ctrl  = 0
     ctrl |= 1 << 0
     ctrl |= (1 if we else 0) << 1
@@ -245,12 +341,11 @@ NVME_DOORBELL_BASE = 0x1000
 # NVMe decoders ------------------------------------------------------------------------------------
 
 def cap_decode(cap):
-    # NVMe CAP (64-bit).
-    mqes   = _bits(cap, 0, 15)      # 0-based.
+    mqes   = _bits(cap, 0, 15)
     cqr    = _bit(cap, 16)
     ams    = _bits(cap, 17, 18)
-    to     = _bits(cap, 24, 31)     # 500ms units.
-    dstrd  = _bits(cap, 32, 35)     # stride = 2^dstrd * 4 bytes.
+    to     = _bits(cap, 24, 31)
+    dstrd  = _bits(cap, 32, 35)
     nssrs  = _bit(cap, 36)
     css    = _bits(cap, 37, 44)
     mpsmin = _bits(cap, 48, 51)
@@ -268,24 +363,16 @@ def cap_decode(cap):
     }
 
 def vs_decode(vs):
-    # VS: major[31:16], minor[15:8], tertiary[7:0]
     return {
         "major": _bits(vs, 16, 31),
         "minor": _bits(vs, 8, 15),
         "ter":   _bits(vs, 0, 7),
     }
 
-def csts_rdy(csts):
-    return _bit(csts, 0)
-
-def csts_cfs(csts):
-    return _bit(csts, 1)
-
-def csts_shst(csts):
-    return _bits(csts, 2, 3)
-
-def cc_en(cc):
-    return _bit(cc, 0)
+def csts_rdy(csts):  return _bit(csts, 0)
+def csts_cfs(csts):  return _bit(csts, 1)
+def csts_shst(csts): return _bits(csts, 2, 3)
+def cc_en(cc):       return _bit(cc, 0)
 
 def cap_to_ms(to_field):
     return int(to_field) * 500
@@ -296,16 +383,14 @@ def doorbell_stride_bytes(dstrd):
 # NVMe CC helpers ----------------------------------------------------------------------------------
 
 def cc_make_en(iocqes=4, iosqes=6, mps=0, css=0, ams=0, shn=0):
-    # iocqes: 16B CQ entry => 4 (2^4)
-    # iosqes: 64B SQ entry => 6 (2^6)
     cc  = 0
-    cc |= (1      & 0x1) << 0    # EN
-    cc |= (css    & 0x7) << 4    # CSS
-    cc |= (mps    & 0xf) << 7    # MPS
-    cc |= (ams    & 0x7) << 11   # AMS
-    cc |= (shn    & 0x3) << 14   # SHN
-    cc |= (iosqes & 0xf) << 16   # IOSQES
-    cc |= (iocqes & 0xf) << 20   # IOCQES
+    cc |= (1      & 0x1) << 0
+    cc |= (css    & 0x7) << 4
+    cc |= (mps    & 0xf) << 7
+    cc |= (ams    & 0x7) << 11
+    cc |= (shn    & 0x3) << 14
+    cc |= (iosqes & 0xf) << 16
+    cc |= (iocqes & 0xf) << 20
     return cc
 
 def nvme_db_addr(bar0, cap, qid, is_cq=False):
@@ -418,64 +503,6 @@ def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
         print("  WARN: CC.EN=1, skipping write/readback tests (disable first).")
         return True
 
-    # INTMS/INTMC: best-effort only.
-    intms0, er0 = mmio_rd32(bus, bar0 + NVME_INTMS, timeout_ms=timeout_ms)
-    if er0:
-        print("  WARN: read INTMS returned err=1 (not fatal).")
-    else:
-        w1 = mmio_wr32(bus, bar0 + NVME_INTMS, 0x1, timeout_ms=timeout_ms)
-        intms1, er1 = mmio_rd32(bus, bar0 + NVME_INTMS, timeout_ms=timeout_ms)
-        w2 = mmio_wr32(bus, bar0 + NVME_INTMC, 0x1, timeout_ms=timeout_ms)
-        intms2, er2 = mmio_rd32(bus, bar0 + NVME_INTMS, timeout_ms=timeout_ms)
-
-        if w1 | er1 | w2 | er2:
-            print("  WARN: write/read INTMS/INTMC returned err=1 (not fatal).")
-        else:
-            ok_set = (intms1 & 0x1) == 0x1
-            ok_clr = (intms2 & 0x1) == 0x0
-            if ok_set and ok_clr:
-                print("  OK: INTMS bit0 set/clear visible.")
-            else:
-                print("  WARN: INTMS bit0 set/clear not visible (posted/RO/impl-defined).")
-
-        mmio_wr32(bus, bar0 + NVME_INTMS, intms0, timeout_ms=timeout_ms)
-
-    # AQA/ASQ/ACQ: best-effort.
-    aqa0, ea0 = mmio_rd32(bus, bar0 + NVME_AQA, timeout_ms=timeout_ms)
-    asq0, ea1 = mmio_rd64(bus, bar0 + NVME_ASQ, timeout_ms=timeout_ms)
-    acq0, ea2 = mmio_rd64(bus, bar0 + NVME_ACQ, timeout_ms=timeout_ms)
-    if ea0 | ea1 | ea2:
-        print("  WARN: read AQA/ASQ/ACQ returned err=1 (not fatal).")
-        return True
-
-    aqa_t = aqa0 ^ 0x00010001
-    asq_t = (asq0 ^ 0x0000000000001000) & ~0xfff
-    acq_t = (acq0 ^ 0x0000000000002000) & ~0xfff
-
-    w0 = mmio_wr32(bus, bar0 + NVME_AQA, aqa_t, timeout_ms=timeout_ms)
-    w1 = mmio_wr64(bus, bar0 + NVME_ASQ, asq_t, timeout_ms=timeout_ms)
-    w2 = mmio_wr64(bus, bar0 + NVME_ACQ, acq_t, timeout_ms=timeout_ms)
-    r0, rr0 = mmio_rd32(bus, bar0 + NVME_AQA, timeout_ms=timeout_ms)
-    r1, rr1 = mmio_rd64(bus, bar0 + NVME_ASQ, timeout_ms=timeout_ms)
-    r2, rr2 = mmio_rd64(bus, bar0 + NVME_ACQ, timeout_ms=timeout_ms)
-
-    mmio_wr32(bus, bar0 + NVME_AQA, aqa0, timeout_ms=timeout_ms)
-    mmio_wr64(bus, bar0 + NVME_ASQ, asq0, timeout_ms=timeout_ms)
-    mmio_wr64(bus, bar0 + NVME_ACQ, acq0, timeout_ms=timeout_ms)
-
-    if w0 | w1 | w2 | rr0 | rr1 | rr2:
-        print("  WARN: AQA/ASQ/ACQ write/readback returned err=1 (not fatal).")
-        return True
-
-    ok_aqa = (r0 == aqa_t)
-    ok_asq = (r1 == asq_t)
-    ok_acq = (r2 == acq_t)
-
-    if ok_aqa and ok_asq and ok_acq:
-        print("  OK: AQA/ASQ/ACQ write/readback visible.")
-    else:
-        print("  WARN: AQA/ASQ/ACQ write/readback not visible (impl-defined).")
-
     return True
 
 def nvme_check_doorbells(bus, bar0, cap, timeout_ms=200, max_q=4):
@@ -498,11 +525,9 @@ def nvme_check_doorbells(bus, bar0, cap, timeout_ms=200, max_q=4):
 # Admin init + doorbells ---------------------------------------------------------------------------
 
 def nvme_admin_init(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, timeout_ms=200):
-    # AQA: ASQS (bits 11:0) and ACQS (bits 27:16), values are (N-1).
     assert q_entries >= 2
     aqa = ((q_entries - 1) & 0xfff) | (((q_entries - 1) & 0xfff) << 16)
 
-    # Disable first (best-effort).
     nvme_disable(bus, bar0, cap=cap, timeout_ms=timeout_ms)
 
     e0 = mmio_wr32(bus, bar0 + NVME_AQA, aqa, timeout_ms=timeout_ms)
@@ -530,10 +555,6 @@ def nvme_ring_admin_sq(bus, bar0, cap, tail, timeout_ms=200):
 # NVMe Admin Identify command ---------------------------------------------------------------------
 
 def nvme_cmd_identify_controller(cid, prp1, nsid=0):
-    # 64-byte NVMe command = 16 dwords.
-    # CDW0: opcode[7:0]=0x06 (Identify), CID[31:16]
-    # PRP1: dwords 6-7
-    # CDW10: CNS[7:0]=1 (Identify Controller)
     cmd = [0]*16
     cmd[0]  = (0x06 & 0xff) | ((cid & 0xffff) << 16)
     cmd[1]  = 0x00000000
@@ -702,10 +723,19 @@ def main():
             print("  (no completion observed)")
         else:
             print(f"  {cpl[0]:08x} {cpl[1]:08x} {cpl[2]:08x} {cpl[3]:08x}")
+            cqe = decode_cqe(cpl[0], cpl[1], cpl[2], cpl[3])
+            pretty_print_cqe(cqe)
 
-        # Dump first 0x100 bytes of Identify buffer (NVMe writes 4096B).
+        # Dump + decode first 0x100 bytes of Identify buffer.
         print("Identify buffer (first 0x100):")
         hostmem_dump(bus, addr=id_buf, length=0x100, base=hostmem_base)
+
+        # Decode Identify Controller from the first 0x100 bytes (needs 0x100/4 = 64 dwords).
+        id_dws = hostmem_read_dwords(bus, addr=id_buf, dword_count=0x100//4, base=hostmem_base)
+        id_info = decode_identify_controller_from_dwords(id_dws)
+        pretty_print_identify_controller(id_info)
+
+    bus.close()
 
 if __name__ == "__main__":
     main()
