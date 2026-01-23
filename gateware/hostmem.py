@@ -1,20 +1,18 @@
 #
 # BRAM-backed host memory target for NVMe (RootPort mode).
 #
-# - Sits on a LitePCIe crossbar SLAVE port (i.e. receives Requests from NVMe).
+# - Sits on a LitePCIe crossbar SLAVE port (receives Requests from NVMe).
 # - Implements a small memory window (base/size).
-# - MemWr: writes into BRAM (1 dword per cycle).
+# - MemWr: writes into BRAM (1 dword per cycle, beat buffered).
 # - MemRd: returns Completion w/ Data from BRAM (1 dword per cycle, packed into beats).
 #
-# Intentionally simple / bring-up oriented.
+# Bring-up oriented: simple, conservative, and avoids any dynamic slicing / NextValue(None).
 #
 
 from migen import *
 from litex.gen import *
-
 from litex.soc.interconnect.csr import *
 
-# LiteNVMeHostMemResponder -------------------------------------------------------------------------
 
 class LiteNVMeHostMemResponder(LiteXModule):
     def __init__(self, port, base=0x10000000, size=0x20000, data_width=128, with_csr=True):
@@ -26,6 +24,9 @@ class LiteNVMeHostMemResponder(LiteXModule):
         beat_bytes  = data_width // 8
         beat_dwords = beat_bytes // 4
 
+        # -----------------------------------------------------------------------------------------
+        # BRAM: 32-bit words.
+        # -----------------------------------------------------------------------------------------
         depth_dwords = size // 4
         mem = Memory(32, depth_dwords)
 
@@ -36,6 +37,7 @@ class LiteNVMeHostMemResponder(LiteXModule):
         dma_wp = mem.get_port(write_capable=True)
         csr_rp = mem.get_port(has_re=True,  mode=READ_FIRST)
         csr_wp = mem.get_port(write_capable=True)
+
         self.specials += mem, dma_rp, dma_wp, csr_rp, csr_wp
 
         # -----------------------------------------------------------------------------------------
@@ -45,10 +47,10 @@ class LiteNVMeHostMemResponder(LiteXModule):
         dma_rd_count = Signal(32)
 
         if with_csr:
-            self._csr_adr   = CSRStorage(32, description="HostMem dword address (index).")
-            self._csr_wdata = CSRStorage(32, description="HostMem write data.")
-            self._csr_we    = CSRStorage(1,  description="HostMem write strobe (pulse).")
-            self._csr_rdata = CSRStatus(32,  description="HostMem read data.")
+            self._csr_adr      = CSRStorage(32, description="HostMem dword address (index).")
+            self._csr_wdata    = CSRStorage(32, description="HostMem write data.")
+            self._csr_we       = CSRStorage(1,  description="HostMem write strobe (pulse).")
+            self._csr_rdata    = CSRStatus(32,  description="HostMem read data.")
             self._dma_wr_count = CSRStatus(32, description="Count of DMA dwords stored.")
             self._dma_rd_count = CSRStatus(32, description="Count of DMA dwords served.")
 
@@ -66,70 +68,102 @@ class LiteNVMeHostMemResponder(LiteXModule):
             ]
 
         # -----------------------------------------------------------------------------------------
-        # Port field helpers (dat vs data, be optional).
+        # Port field helpers (dat vs data, be optional, req_id/cmp_id optional).
         # -----------------------------------------------------------------------------------------
-        req = port.sink
-        cmp = port.source
+        req = port.sink   # incoming Requests from NVMe (MemRd/MemWr)
+        cmp = port.source # outgoing Completions to NVMe (Cpl/CplD)
 
-        def get_dat(ep):
-            if hasattr(ep, "dat"):  return ep.dat
-            if hasattr(ep, "data"): return ep.data
+        def ep_dat(ep):
+            if hasattr(ep, "dat"):
+                return ep.dat
+            if hasattr(ep, "data"):
+                return ep.data
             raise ValueError("Endpoint has no dat/data field.")
 
-        req_dat = get_dat(req)
-        cmp_dat = get_dat(cmp)
+        req_dat = ep_dat(req)
+        cmp_dat = ep_dat(cmp)
 
-        req_be = None
-        if hasattr(req, "be"):
-            req_be = req.be
+        has_be    = hasattr(req, "be")
+        has_tag   = hasattr(req, "tag")
+        has_len   = hasattr(req, "len")
+        has_reqid = hasattr(req, "req_id")
+        has_cmpid = hasattr(cmp, "cmp_id")  # on completion source
+        has_end   = hasattr(cmp, "end")
 
-        # -----------------------------------------------------------------------------------------
-        # Decode window.
-        # -----------------------------------------------------------------------------------------
+        # NOTE: In LitePCIe, request .adr is a byte address (as used by crossbar/bridges).
         in_window = Signal()
         self.comb += in_window.eq((req.adr >= base) & (req.adr < (base + size)))
 
         # -----------------------------------------------------------------------------------------
-        # Internal latches.
+        # Internal latches (captured from request header).
         # -----------------------------------------------------------------------------------------
-        lat_tag = Signal(8)
-        lat_len = Signal(10)   # dwords (LitePCIe usually uses dwords for len)
-        lat_adr = Signal(64)   # byte address
+        lat_tag    = Signal(8)
+        lat_len    = Signal(10)   # dwords
+        lat_adr    = Signal(64)   # byte address
+        lat_req_id = Signal(16)
+        lat_cmp_id = Signal(16)   # completer id (if available)
 
-        # Current BRAM dword index.
-        cur_dw  = Signal(32)
+        # Current BRAM dword index for DMA access.
+        cur_dw = Signal(32)
 
-        # Write path latches.
-        wr_buf     = Signal(data_width)  # one beat captured from req_dat
+        # -----------------------------------------------------------------------------------------
+        # Write path: buffer one beat, then write 1 dword/cycle.
+        # -----------------------------------------------------------------------------------------
+        wr_buf     = Signal(data_width)
+        wr_be_buf  = Signal(beat_bytes) if has_be else None
         wr_sub_idx = Signal(max=beat_dwords)
-        wr_dw_left = Signal(16)
+        wr_dw_left = Signal(16)   # remaining dwords in this write request
 
-        # Read path latches.
-        rd_sub_idx = Signal(max=beat_dwords)
-        rd_dw_left = Signal(16)
-        rd_buf_w   = Array(Signal(32) for _ in range(beat_dwords))
-        rd_buf     = Signal(data_width)
+        # Constant word views of buffered beat (constant slices only).
+        wr_buf_words = Array([wr_buf[32*i:32*(i+1)] for i in range(beat_dwords)])
 
-        # Assemble completion data from words.
-        self.comb += rd_buf.eq(Cat(*rd_buf_w))
+        # -----------------------------------------------------------------------------------------
+        # Read path: read 1 dword/cycle into staging words, then emit a beat completion.
+        # -----------------------------------------------------------------------------------------
+        rd_sub_idx  = Signal(max=beat_dwords)
+        rd_dw_left  = Signal(16)  # remaining dwords to serve for this read request
+        rd_words    = Array([Signal(32) for _ in range(beat_dwords)])
+        rd_buf      = Signal(data_width)
+        self.comb += rd_buf.eq(Cat(*rd_words))
 
+        # Whether current completion beat is the *first* beat of this completion packet.
+        rd_first = Signal(reset=1)
+
+        # -----------------------------------------------------------------------------------------
         # Defaults.
+        # -----------------------------------------------------------------------------------------
         self.comb += [
             req.ready.eq(0),
             cmp.valid.eq(0),
+
             dma_rp.re.eq(0),
             dma_wp.we.eq(0),
         ]
-        if hasattr(cmp, "first"): self.comb += cmp.first.eq(0)
-        if hasattr(cmp, "last"):  self.comb += cmp.last.eq(0)
-        if hasattr(cmp, "end"):   self.comb += cmp.end.eq(0)
-        if hasattr(cmp, "err"):   self.comb += cmp.err.eq(0)
-        if hasattr(cmp, "len"):   self.comb += cmp.len.eq(0)
-        if hasattr(cmp, "tag"):   self.comb += cmp.tag.eq(0)
+        if hasattr(cmp, "first"):
+            self.comb += cmp.first.eq(0)
+        if hasattr(cmp, "last"):
+            self.comb += cmp.last.eq(0)
+        if has_end:
+            self.comb += cmp.end.eq(0)
+        if hasattr(cmp, "err"):
+            self.comb += cmp.err.eq(0)
+        if hasattr(cmp, "len"):
+            self.comb += cmp.len.eq(0)
+        if hasattr(cmp, "tag"):
+            self.comb += cmp.tag.eq(0)
+        if hasattr(cmp, "adr"):
+            self.comb += cmp.adr.eq(0)
+        if has_reqid:
+            # for completion source, req_id is usually present; guard anyway
+            pass
+        if has_cmpid:
+            pass
 
         # -----------------------------------------------------------------------------------------
         # Helpers: BE handling (best-effort).
-        # We only do "write the whole dword if any byte enabled in that dword".
+        # - If BE is per-byte for the beat, accept a dword if any of its 4 bytes are enabled.
+        # - If BE is per-dword, use that bit.
+        # - Otherwise, write.
         # -----------------------------------------------------------------------------------------
         def be_allows_dword(be_sig, sub_dw):
             if be_sig is None:
@@ -144,17 +178,38 @@ class LiteNVMeHostMemResponder(LiteXModule):
                 return be_sig[sub_dw]
             return 1
 
-        # Pre-split write beat into constant slices.
-        wr_words = Array(req_dat[i*32:(i+1)*32] for i in range(beat_dwords))
-        wr_be_dw = []
-        for i in range(beat_dwords):
-            wr_be_dw.append(be_allows_dword(req_be, i))
-
         # -----------------------------------------------------------------------------------------
         # FSM.
         # -----------------------------------------------------------------------------------------
-        fsm = FSM(reset_state="IDLE")
-        self.submodules += fsm
+        self.fsm = fsm = FSM(reset_state="IDLE")
+
+        # Build safe latch statements for IDLE (avoid NextValue(None, ...)).
+        idle_latches = [
+            NextValue(lat_adr, req.adr),
+            NextValue(cur_dw,  (req.adr - base) >> 2),
+        ]
+        if has_tag:
+            idle_latches.append(NextValue(lat_tag, req.tag))
+        else:
+            idle_latches.append(NextValue(lat_tag, 0))
+
+        if has_len:
+            idle_latches.append(NextValue(lat_len, req.len))
+        else:
+            idle_latches.append(NextValue(lat_len, 1))
+
+        if has_reqid:
+            idle_latches.append(NextValue(lat_req_id, req.req_id))
+        else:
+            idle_latches.append(NextValue(lat_req_id, 0))
+
+        # Completion cmp_id: some ports expose it, otherwise keep 0.
+        if has_cmpid:
+            # Many LitePCIe setups want cmp_id = port-side completer_id (Root Port endpoint id).
+            # If you have a better constant for this, wire it in from outside.
+            idle_latches.append(NextValue(lat_cmp_id, 0))
+        else:
+            idle_latches.append(NextValue(lat_cmp_id, 0))
 
         fsm.act("IDLE",
             req.ready.eq(1),
@@ -162,22 +217,18 @@ class LiteNVMeHostMemResponder(LiteXModule):
                 If(~in_window,
                     NextState("DROP")
                 ).Else(
-                    NextValue(lat_adr, req.adr),
-                    NextValue(cur_dw,  (req.adr - base) >> 2),
-
-                    If(hasattr(req, "tag"), NextValue(lat_tag, req.tag)).Else(NextValue(lat_tag, 0)),
-                    If(hasattr(req, "len"), NextValue(lat_len, req.len)).Else(NextValue(lat_len, 1)),
-
+                    *idle_latches,
                     If(req.we,
-                        # MemWr.
-                        NextValue(wr_dw_left,  Mux(hasattr(req, "len"), req.len, 1)),
-                        NextValue(wr_sub_idx,  0),
+                        # MemWr: payload follows on stream (including this beat).
+                        NextValue(wr_dw_left, (req.len if has_len else 1)),
+                        NextValue(wr_sub_idx, 0),
                         NextState("WR_CAPTURE")
                     ).Else(
-                        # MemRd.
-                        NextValue(rd_dw_left,  Mux(hasattr(req, "len"), req.len, 1)),
-                        NextValue(rd_sub_idx,  0),
-                        NextState("RD_CLEARBUF")
+                        # MemRd: serve completion data from BRAM.
+                        NextValue(rd_dw_left, (req.len if has_len else 1)),
+                        NextValue(rd_sub_idx, 0),
+                        NextValue(rd_first, 1),
+                        NextState("RD_CLEAR")
                     )
                 )
             )
@@ -191,40 +242,58 @@ class LiteNVMeHostMemResponder(LiteXModule):
         )
 
         # -----------------------------
-        # MemWr: capture one beat.
+        # MemWr: capture one beat (data + be if present).
         # -----------------------------
+        wr_capture_updates = [NextValue(wr_buf, req_dat), NextValue(wr_sub_idx, 0)]
+        if wr_be_buf is not None:
+            wr_capture_updates.append(NextValue(wr_be_buf, req.be))
+
         fsm.act("WR_CAPTURE",
             req.ready.eq(1),
             If(req.valid & req.ready,
-                NextValue(wr_buf, req_dat),
-                NextValue(wr_sub_idx, 0),
+                *wr_capture_updates,
                 NextState("WR_STORE")
             )
         )
 
         # -----------------------------
-        # MemWr: store captured beat to BRAM, 1 dword per cycle.
+        # MemWr: store buffered beat to BRAM, 1 dword per cycle.
         # -----------------------------
-        fsm.act("WR_STORE",
-            # Select the current dword from wr_buf using a Case (no dynamic slices).
-            Case(wr_sub_idx, {
-                i: [
-                    dma_wp.adr.eq(cur_dw),
-                    dma_wp.dat_w.eq(wr_buf[i*32:(i+1)*32]),
-                    dma_wp.we.eq(wr_be_dw[i]),
-                ]
-                for i in range(beat_dwords)
-            }),
+        wr_we_this = Signal()
+        wr_word    = Signal(32)
 
-            If(dma_wp.we,
+        # Combinational select for current dword within the buffered beat.
+        self.comb += [
+            wr_we_this.eq(1),
+            wr_word.eq(0),
+        ]
+
+        # Compute per-dword enable and word via Case (no dynamic slicing).
+        wr_cases = {}
+        for i in range(beat_dwords):
+            be_src = wr_be_buf if (wr_be_buf is not None) else None
+            wr_cases[i] = [
+                wr_we_this.eq(be_allows_dword(be_src, i)),
+                wr_word.eq(wr_buf_words[i]),
+            ]
+        self.comb += Case(wr_sub_idx, wr_cases)
+
+        fsm.act("WR_STORE",
+            # Perform the write if enabled.
+            dma_wp.adr.eq(cur_dw),
+            dma_wp.dat_w.eq(wr_word),
+            dma_wp.we.eq(wr_we_this),
+
+            If(wr_we_this,
                 NextValue(dma_wr_count, dma_wr_count + 1)
             ),
 
-            NextValue(cur_dw,     cur_dw + 1),
+            # Advance.
+            NextValue(cur_dw, cur_dw + 1),
             NextValue(wr_dw_left, wr_dw_left - 1),
 
             If(wr_dw_left == 1,
-                # Done with this request. We rely on req.last having been consumed in WR_CAPTURE.
+                # Done with request (we have already consumed the beat(s) we needed through WR_CAPTURE).
                 NextState("IDLE")
             ).Else(
                 # Advance within beat; when beat completes, capture next beat.
@@ -238,11 +307,10 @@ class LiteNVMeHostMemResponder(LiteXModule):
         )
 
         # -----------------------------
-        # MemRd: clear rd_buf_w before filling.
+        # MemRd: clear staging words for the next beat.
         # -----------------------------
-        fsm.act("RD_CLEARBUF",
-            # clear all words for safety (constant ops)
-            *[NextValue(rd_buf_w[i], 0) for i in range(beat_dwords)],
+        fsm.act("RD_CLEAR",
+            *[NextValue(rd_words[i], 0) for i in range(beat_dwords)],
             NextValue(rd_sub_idx, 0),
             NextState("RD_READ")
         )
@@ -257,53 +325,54 @@ class LiteNVMeHostMemResponder(LiteXModule):
         )
 
         # -----------------------------
-        # MemRd: latch BRAM read into rd_buf_w[sub] using Case.
+        # MemRd: latch BRAM read into rd_words[sub] using Case.
         # -----------------------------
+        rd_latch_cases = {i: NextValue(rd_words[i], dma_rp.dat_r) for i in range(beat_dwords)}
         fsm.act("RD_LATCH",
-            Case(rd_sub_idx, {
-                i: NextValue(rd_buf_w[i], dma_rp.dat_r)
-                for i in range(beat_dwords)
-            }),
+            Case(rd_sub_idx, rd_latch_cases),
 
             NextValue(dma_rd_count, dma_rd_count + 1),
-            NextValue(cur_dw,     cur_dw + 1),
+            NextValue(cur_dw, cur_dw + 1),
             NextValue(rd_dw_left, rd_dw_left - 1),
 
-            If(rd_dw_left == 1,
-                # last dword -> send partial beat
+            # Decide whether to emit this beat now.
+            If((rd_dw_left == 1) | (rd_sub_idx == (beat_dwords - 1)),
                 NextState("CPLD")
             ).Else(
-                If(rd_sub_idx == (beat_dwords - 1),
-                    NextState("CPLD")
-                ).Else(
-                    NextValue(rd_sub_idx, rd_sub_idx + 1),
-                    NextState("RD_READ")
-                )
+                NextValue(rd_sub_idx, rd_sub_idx + 1),
+                NextState("RD_READ")
             )
         )
 
         # -----------------------------
-        # Completion with Data: send one beat.
+        # Completion with Data: emit one beat.
+        # We emit a *single completion packet* across one or more beats:
+        # - first asserted on first beat only
+        # - last asserted on final beat only
+        # - len is total dwords for the request (lat_len)
+        # - adr is lower address within the request (LitePCIe packetizer can ignore/override)
         # -----------------------------
         fsm.act("CPLD",
             cmp.valid.eq(1),
             cmp_dat.eq(rd_buf),
 
-            If(hasattr(cmp, "first"), cmp.first.eq(1)),
-            If(hasattr(cmp, "last"),  cmp.last.eq(1)),
-            If(hasattr(cmp, "end"),   cmp.end.eq(1)),
-            If(hasattr(cmp, "tag"),   cmp.tag.eq(lat_tag)),
-            If(hasattr(cmp, "len"),   cmp.len.eq(lat_len)),
-            If(hasattr(cmp, "err"),   cmp.err.eq(0)),
+            # first/last framing across beats.
+            If(hasattr(cmp, "first"), cmp.first.eq(rd_first)),
+            If(hasattr(cmp, "last"),  cmp.last.eq(rd_dw_left == 0)),  # after decrement in RD_LATCH
+            If(has_end,               cmp.end.eq(1)),                 # conservative: single completion segment
+
+            # propagate tag/len/id fields where present.
+            If(has_tag,   cmp.tag.eq(lat_tag)),
+            If(has_len,   cmp.len.eq(lat_len)),
+            If(has_reqid and hasattr(cmp, "req_id"), cmp.req_id.eq(lat_req_id)),
+            If(has_cmpid, cmp.cmp_id.eq(lat_cmp_id)),
 
             If(cmp.valid & cmp.ready,
-                # Prepare next beat if remaining.
-                *[NextValue(rd_buf_w[i], 0) for i in range(beat_dwords)],
-                NextValue(rd_sub_idx, 0),
+                NextValue(rd_first, 0),
                 If(rd_dw_left == 0,
                     NextState("IDLE")
                 ).Else(
-                    NextState("RD_READ")
+                    NextState("RD_CLEAR")
                 )
             )
         )

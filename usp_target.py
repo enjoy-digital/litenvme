@@ -459,16 +459,18 @@ class BaseSoC(SoCMini):
         #add_stream("phy_req_source", phy_req)
 
         # 2) Decoded requests from depacketizer -----------------------------------
-        add_stream("depacketizer_req_source", req_src)
+        #add_stream("depacketizer_req_source", req_src)
 
         # 3) Crossbar slave input (what gets arbitrated to slaves) ----------------
-        add_stream("crossbar_phy_slave_sink", xb_in)
+        #add_stream("crossbar_phy_slave_sink", xb_in)
 
         # 4) Hostmem slave port input (what *you* expect to see) ------------------
-        #add_stream("hostmem_sink", hm_in)
+        add_stream("hostmem_sink", hm_in)
 
         # 5) Hostmem completions output (CplD for MemRd) --------------------------
-        #add_stream("hostmem_source", hm_out)
+        add_stream("hostmem_source", hm_out)
+
+        add(self.hostmem.fsm)
 
         # 6) Packetizer completion sink (what will go back to NVMe) ---------------
         #add_stream("packetizer_cmp_sink", cpl_sink)
