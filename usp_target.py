@@ -272,6 +272,14 @@ class BaseSoC(SoCMini):
             self.pcie_phy.cmp_source.ready,
             self.pcie_phy.cmp_source.last,
 
+            self.pcie_phy.cmp_sink.valid,
+            self.pcie_phy.cmp_sink.ready,
+            self.pcie_phy.cmp_sink.last,
+
+            self.pcie_phy.req_source.valid,
+            self.pcie_phy.req_source.ready,
+            self.pcie_phy.req_source.last,
+
             # -----------------------------------------------------------------------------------------
             # CFG master port (RootPort initiated config cycles)
             # -----------------------------------------------------------------------------------------

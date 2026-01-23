@@ -113,10 +113,8 @@ litex_server --uart --uart-port=/dev/ttyUSB0
 ./test_nvme.py --wait-link --timeout-ms 500 --cfg-timeout-ms 200 --mmio-check
 
 
-
-
 # Build/load bitstream with responder + analyzer
-./usp_target.py --build --load
+./usp_target.py --csr-csv=csr.csv --build --load
 
 # Server
 litex_server --uart --uart-port=/dev/ttyUSB0
@@ -125,7 +123,11 @@ litex_server --uart --uart-port=/dev/ttyUSB0
 ./test_cfg.py  --wait-link --enable-mem --enable-bme --disable-intx
 ./test_cfg.py  --wait-link --bar0-assign --bar0-base 0xe0000000
 
-# Arm LiteScope (your usual flow), then:
+
+# Arm LiteScope.
+litescope_cli -r usppciephy_req_source_valid
+
+# Then:
 ./test_nvme.py --wait-link --info
 ./test_nvme.py --wait-link --identify \
   --hostmem-base 0x10000000 \
