@@ -51,9 +51,6 @@ class LiteNVMeHostMemResponder(LiteXModule):
         depth_words = size // beat_bytes
         mem = Memory(data_width, depth_words)
 
-        # Dual-port BRAM:
-        # - Port A: DMA (NVMe Requests).
-        # - Port B: CSR access (debug only).
         dma_rp = mem.get_port(has_re=True,  mode=READ_FIRST)        # read port
         dma_wp = mem.get_port(write_capable=True)                   # write port
         csr_rp = mem.get_port(has_re=True,  mode=READ_FIRST)
@@ -61,8 +58,8 @@ class LiteNVMeHostMemResponder(LiteXModule):
         self.specials += mem, dma_rp, dma_wp, csr_rp, csr_wp
 
         # -----------------------------------------------------------------------------------------
-        # CSR access (debug): expose 32-bit dword view via read-modify of 128b words.
-        # This is for convenience; DMA path stays beat-wide and fast.
+        # CSR access (debug): expose 32-bit dword view via read-modify-write of beat-wide BRAM.
+        # Debug-only; DMA path stays beat-wide and fast.
         # -----------------------------------------------------------------------------------------
         dma_wr_count = Signal(32)
         dma_rd_count = Signal(32)
@@ -75,7 +72,6 @@ class LiteNVMeHostMemResponder(LiteXModule):
             self._dma_wr_count = CSRStatus(32, description="Count of DMA beats stored.")
             self._dma_rd_count = CSRStatus(32, description="Count of DMA beats served.")
 
-            # Map dword address to word address + lane.
             csr_dw_adr   = self._csr_adr.storage
             csr_word_adr = Signal(32)
             csr_lane     = Signal(max=beat_dwords)
@@ -85,27 +81,23 @@ class LiteNVMeHostMemResponder(LiteXModule):
                 csr_lane.eq(csr_dw_adr[:beat_dwords_shift]),
             ]
 
-            # CSR read: read whole word, select lane (registered by BRAM, so rdata is "previous").
+            # CSR read: read whole beat, select lane.
             csr_word = Signal(data_width)
             self.sync += csr_word.eq(csr_rp.dat_r)
 
-            # Select 32-bit lane with Case (no dynamic slicing).
             csr_lane_val = Signal(32)
-            csr_lane_cases = {i: csr_lane_val.eq(csr_word[32*i:32*(i+1)]) for i in range(beat_dwords)}
-            self.comb += Case(csr_lane, csr_lane_cases)
+            self.comb += Case(csr_lane, {i: csr_lane_val.eq(csr_word[32*i:32*(i+1)]) for i in range(beat_dwords)})
 
             self.comb += [
                 csr_rp.adr.eq(csr_word_adr),
                 csr_rp.re.eq(1),
                 self._csr_rdata.status.eq(csr_lane_val),
 
-                # Writes: best-effort whole-word write of only one lane:
-                # We do a read-modify-write over two cycles (debug only).
                 self._dma_wr_count.status.eq(dma_wr_count),
                 self._dma_rd_count.status.eq(dma_rd_count),
             ]
 
-            # Simple RMW for CSR writes (debug): 2-state mini FSM.
+            # 2-state RMW for CSR writes (debug).
             csr_fsm = FSM(reset_state="CSR_IDLE")
             self.submodules += csr_fsm
             csr_shadow = Signal(data_width)
@@ -116,15 +108,13 @@ class LiteNVMeHostMemResponder(LiteXModule):
                 )
             )
             csr_fsm.act("CSR_RMW_READ",
-                # capture current word (already coming from csr_rp.dat_r registered into csr_word)
                 NextValue(csr_shadow, csr_word),
                 NextState("CSR_RMW_WRITE")
             )
-            # Prepare updated word with Case.
+
             csr_updated = Signal(data_width)
             self.comb += csr_updated.eq(csr_shadow)
-            csr_upd_cases = {i: csr_updated[32*i:32*(i+1)].eq(self._csr_wdata.storage) for i in range(beat_dwords)}
-            self.comb += Case(csr_lane, csr_upd_cases)
+            self.comb += Case(csr_lane, {i: csr_updated[32*i:32*(i+1)].eq(self._csr_wdata.storage) for i in range(beat_dwords)})
 
             csr_fsm.act("CSR_RMW_WRITE",
                 csr_wp.adr.eq(csr_word_adr),
@@ -133,17 +123,13 @@ class LiteNVMeHostMemResponder(LiteXModule):
                 NextState("CSR_IDLE")
             )
         else:
-            # If no CSR, keep ports quiet.
-            self.comb += [
-                csr_rp.re.eq(0),
-                csr_wp.we.eq(0),
-            ]
+            self.comb += [csr_rp.re.eq(0), csr_wp.we.eq(0)]
 
         # -----------------------------------------------------------------------------------------
         # Port field helpers.
         # -----------------------------------------------------------------------------------------
-        req = port.sink   # incoming Requests (MemRd/MemWr)
-        cmp = port.source # outgoing Completions (Cpl/CplD)
+        req = port.sink
+        cmp = port.source
 
         def ep_dat(ep):
             if hasattr(ep, "dat"):
@@ -162,38 +148,30 @@ class LiteNVMeHostMemResponder(LiteXModule):
         has_cmpid = hasattr(cmp, "cmp_id")
         has_end   = hasattr(cmp, "end")
 
-        # -----------------------------------------------------------------------------------------
-        # Address window check: req.adr is byte address in LitePCIe user ports.
-        # -----------------------------------------------------------------------------------------
+        # Address window check: req.adr is byte address.
         in_window = Signal()
         self.comb += in_window.eq((req.adr >= base) & (req.adr < (base + size)))
 
-        # -----------------------------------------------------------------------------------------
-        # Internal latches.
-        # -----------------------------------------------------------------------------------------
+        # Latched request header fields.
         lat_tag    = Signal(8)
-        lat_len_dw = Signal(10)   # in dwords
+        lat_len_dw = Signal(10)   # dwords
         lat_req_id = Signal(16)
 
-        # Beat addressing within the window:
-        #   word_index = (byte_addr - base) / beat_bytes
+        # Beat index within hostmem window.
         cur_word = Signal(32)
 
-        # Total beats for request:
-        #   beats = ceil(len_dw / beat_dwords) = (len_dw + beat_dwords-1) >> log2(beat_dwords)
+        # Total beats for request: ceil(len_dw / beat_dwords)
         beats_total = Signal(16)
         beats_left  = Signal(16)
         beats_sent  = Signal(16)
 
         # -----------------------------------------------------------------------------------------
-        # Read pipeline: issue 1 read/cycle and push into FIFO when data returns.
+        # Read FIFO to absorb backpressure from packetizer/PHY.
         # -----------------------------------------------------------------------------------------
-        # Small FIFO to absorb backpressure from packetizer/PHY.
         self.submodules.rd_fifo = rd_fifo = stream.SyncFIFO([("dat", data_width)], depth=16, buffered=True)
 
-        # Track one-cycle BRAM latency:
-        rd_inflight = Signal()
-        rd_last_inflight = Signal()  # "is last beat" for the beat currently inflight
+        # 1-cycle BRAM latency tracking: returned data is valid when re_d=1.
+        re_d = Signal(reset=0)
 
         # Defaults.
         self.comb += [
@@ -201,6 +179,9 @@ class LiteNVMeHostMemResponder(LiteXModule):
             cmp.valid.eq(0),
             dma_rp.re.eq(0),
             dma_wp.we.eq(0),
+
+            rd_fifo.sink.valid.eq(0),
+            rd_fifo.sink.dat.eq(0),
         ]
         if hasattr(cmp, "first"): self.comb += cmp.first.eq(0)
         if hasattr(cmp, "last"):  self.comb += cmp.last.eq(0)
@@ -212,14 +193,14 @@ class LiteNVMeHostMemResponder(LiteXModule):
         if has_reqid and hasattr(cmp, "req_id"):
             self.comb += cmp.req_id.eq(0)
 
-        # Completion output comes from FIFO (stable under stall automatically).
+        # Completions come from FIFO.
         self.comb += [
             cmp.valid.eq(rd_fifo.source.valid),
             cmp_dat.eq(rd_fifo.source.dat),
             rd_fifo.source.ready.eq(cmp.ready),
         ]
 
-        # Tag/len/ids are constant for the whole completion.
+        # Constant completion metadata.
         if has_tag:
             self.comb += cmp.tag.eq(lat_tag)
         if hasattr(cmp, "len"):
@@ -227,26 +208,21 @@ class LiteNVMeHostMemResponder(LiteXModule):
         if has_reqid and hasattr(cmp, "req_id"):
             self.comb += cmp.req_id.eq(lat_req_id)
 
-        # first/last based on beats_sent counter; only update on successful pop.
+        # pop = completion beat accepted.
         pop = Signal()
         self.comb += pop.eq(cmp.valid & cmp.ready)
 
+        # first/last/end framing from beats_sent (pre-increment).
         if hasattr(cmp, "first"):
             self.comb += cmp.first.eq(beats_sent == 0)
         if hasattr(cmp, "last"):
-            self.comb += cmp.last.eq(beats_sent == (beats_total - 1))
+            self.comb += cmp.last.eq((beats_total != 0) & (beats_sent == (beats_total - 1)))
         if has_end:
-            self.comb += cmp.end.eq(beats_sent == (beats_total - 1))
+            self.comb += cmp.end.eq((beats_total != 0) & (beats_sent == (beats_total - 1)))
 
-        # -----------------------------------------------------------------------------------------
-        # MemWr byte-enable policy:
-        # For sustained 1 beat/cycle, we treat MemWr as full-beat writes.
-        # NVMe Identify path writes full dwords; in practice BE will be all-ones.
-        # If you *really* need partial-beat correctness, do RMW (will cost throughput).
-        # -----------------------------------------------------------------------------------------
+        # MemWr byte-enable policy (throughput-first).
         full_be_ok = Signal(reset=1)
         if has_be:
-            # Consider it OK if all bytes enabled on that beat.
             self.comb += full_be_ok.eq(req.be == (2**beat_bytes - 1))
 
         # -----------------------------------------------------------------------------------------
@@ -254,24 +230,24 @@ class LiteNVMeHostMemResponder(LiteXModule):
         # -----------------------------------------------------------------------------------------
         self.fsm = fsm = FSM(reset_state="IDLE")
 
-        # Helper: safe latches (no NextValue(None,...)).
         def latch_req_header():
-            stmts = []
-            stmts += [
-                NextValue(cur_word, (req.adr - base) >> beat_bytes_shift),
-            ]
+            stmts = [NextValue(cur_word, (req.adr - base) >> beat_bytes_shift)]
             if has_tag:
                 stmts += [NextValue(lat_tag, req.tag)]
             else:
                 stmts += [NextValue(lat_tag, 0)]
             if has_len:
-                stmts += [NextValue(lat_len_dw, req.len)]
-                stmts += [NextValue(beats_total, (req.len + (beat_dwords - 1)) >> beat_dwords_shift)]
-                stmts += [NextValue(beats_left,  (req.len + (beat_dwords - 1)) >> beat_dwords_shift)]
+                stmts += [
+                    NextValue(lat_len_dw, req.len),
+                    NextValue(beats_total, (req.len + (beat_dwords - 1)) >> beat_dwords_shift),
+                    NextValue(beats_left,  (req.len + (beat_dwords - 1)) >> beat_dwords_shift),
+                ]
             else:
-                stmts += [NextValue(lat_len_dw, 1)]
-                stmts += [NextValue(beats_total, 1)]
-                stmts += [NextValue(beats_left,  1)]
+                stmts += [
+                    NextValue(lat_len_dw, 1),
+                    NextValue(beats_total, 1),
+                    NextValue(beats_left,  1),
+                ]
             if has_reqid:
                 stmts += [NextValue(lat_req_id, req.req_id)]
             else:
@@ -279,7 +255,6 @@ class LiteNVMeHostMemResponder(LiteXModule):
             stmts += [NextValue(beats_sent, 0)]
             return stmts
 
-        # IDLE: accept one request header beat.
         fsm.act("IDLE",
             req.ready.eq(1),
             If(req.valid & req.ready,
@@ -290,8 +265,8 @@ class LiteNVMeHostMemResponder(LiteXModule):
                     If(req.we,
                         NextState("WR_STREAM")
                     ).Else(
-                        # flush FIFO/inflight state for new read
-                        NextValue(rd_inflight, 0),
+                        # reset read-return tracker for new MemRd
+                        NextValue(re_d, 0),
                         NextState("RD_STREAM")
                     )
                 )
@@ -305,16 +280,13 @@ class LiteNVMeHostMemResponder(LiteXModule):
             )
         )
 
-        # MemWr: 1 beat/cycle write.
-        # We keep req.ready asserted while we still have beats to consume.
+        # MemWr: 1 beat/cycle.
         fsm.act("WR_STREAM",
             req.ready.eq(beats_left != 0),
             If(req.valid & req.ready,
-                # Optional policy check: if BE not full, you can drop or accept.
-                # For now accept (and write full beat) since Identify uses full BE.
                 dma_wp.adr.eq(cur_word),
                 dma_wp.dat_w.eq(req_dat),
-                dma_wp.we.eq(1),
+                dma_wp.we.eq(1),  # assume full-be writes for throughput
 
                 NextValue(dma_wr_count, dma_wr_count + 1),
                 NextValue(cur_word, cur_word + 1),
@@ -326,51 +298,49 @@ class LiteNVMeHostMemResponder(LiteXModule):
             )
         )
 
-        # MemRd: issue reads at 1/cycle, push returned beats into FIFO.
-        # Stop issuing when FIFO is near full or when we issued all beats.
+        # MemRd:
+        # - issue one BRAM read per cycle while beats_left != 0 and FIFO has room
+        # - returned data (1-cycle later) is pushed into FIFO using re_d
+        fifo_has_room = Signal()
+        self.comb += fifo_has_room.eq(rd_fifo.level < (rd_fifo.depth - 1))
+
         can_issue = Signal()
-        self.comb += can_issue.eq((beats_left != 0) & (rd_fifo.level < (rd_fifo.depth - 1)) & (~rd_inflight | (rd_fifo.level < rd_fifo.depth)))
+        self.comb += can_issue.eq((beats_left != 0) & fifo_has_room)
 
         fsm.act("RD_STREAM",
-            # We already accepted request in IDLE; req stream should be one-beat for MemRd.
             req.ready.eq(0),
 
-            # Issue one read if possible.
+            # Push returned beat into FIFO when re_d is set (data valid this cycle).
+            If(re_d,
+                rd_fifo.sink.valid.eq(1),
+                rd_fifo.sink.dat.eq(dma_rp.dat_r),
+            ),
+
+            # Issue next read (for next-cycle return).
             If(can_issue,
                 dma_rp.adr.eq(cur_word),
                 dma_rp.re.eq(1),
-                NextValue(rd_inflight, 1),
-                NextValue(rd_last_inflight, beats_left == 1),
                 NextValue(cur_word, cur_word + 1),
                 NextValue(beats_left, beats_left - 1),
                 NextValue(dma_rd_count, dma_rd_count + 1),
             ),
 
-            # When inflight data returns (next cycle), push to FIFO.
-            # We treat dma_rp.dat_r as valid whenever rd_inflight was set in previous cycle.
-            If(rd_inflight,
-                If(rd_fifo.sink.ready,
-                    rd_fifo.sink.valid.eq(1),
-                    rd_fifo.sink.dat.eq(dma_rp.dat_r),
-                    If(rd_fifo.sink.valid & rd_fifo.sink.ready,
-                        NextValue(rd_inflight, 0)
-                    )
-                )
-            ),
-
-            # Count sent beats (on completion pop).
-            If(pop,
-                NextValue(beats_sent, beats_sent + 1)
-            ),
-
-            # Done when we have produced and sent all beats.
-            If((beats_sent == beats_total) & (beats_total != 0),
+            # Done when:
+            # - all reads issued (beats_left==0)
+            # - no pending return beat (re_d==0)
+            # - FIFO drained (no valid on source)
+            # - and all beats have been *sent* (beats_sent == beats_total)
+            If((beats_total != 0) &
+               (beats_sent == beats_total) &
+               (beats_left == 0) &
+               (~re_d) &
+               (~rd_fifo.source.valid),
                 NextState("IDLE")
             )
         )
 
-        # NOTE: beats_sent termination above is conservative; if you prefer, use:
-        #   If((beats_sent == beats_total) & ~rd_fifo.source.valid & (beats_left==0) & ~rd_inflight, IDLE)
+        # Track BRAM 1-cycle latency: re_d <= dma_rp.re.
+        self.sync += re_d.eq(dma_rp.re)
 
-        # Keep beats_sent in sync even outside RD_STREAM (safe).
+        # Count beats *sent* (once).
         self.sync += If(pop, beats_sent.eq(beats_sent + 1))
