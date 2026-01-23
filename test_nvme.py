@@ -139,6 +139,37 @@ def cfg_check_command(bus, b, d, f, timeout_ms=100):
 
     return {"cmd": cmd, "sts": sts, "bits": cd}
 
+def cfg_set_command(bus, b, d, f, set_mem=True, set_bme=True, timeout_ms=100):
+    v, err = cfg_rd0(bus, b, d, f, 1, timeout_ms=timeout_ms)  # CMD/STS @0x04
+    if err:
+        print("WARN: CFG read CMD/STS returned err=1, cannot update.")
+        return False
+
+    cmd = v & 0xffff
+    new_cmd = cmd
+    if set_mem:
+        new_cmd |= (1 << 1)  # MEM
+    if set_bme:
+        new_cmd |= (1 << 2)  # BME
+
+    if new_cmd == cmd:
+        return True
+
+    new_v = (v & 0xffff0000) | new_cmd
+    werr = cfg_wr0(bus, b, d, f, 1, new_v, timeout_ms=timeout_ms)
+    if werr:
+        print("WARN: CFG write CMD returned err=1.")
+        return False
+
+    v2, err2 = cfg_rd0(bus, b, d, f, 1, timeout_ms=timeout_ms)
+    if err2:
+        print("WARN: CFG readback CMD returned err=1.")
+        return False
+    cmd2 = v2 & 0xffff
+    print(f"CFG CMD updated: 0x{cmd:04x} -> 0x{cmd2:04x}")
+    return True
+
+
 # MEM/MMIO helpers ---------------------------------------------------------------------------------
 
 def mem_set_addr(bus, addr):
@@ -645,6 +676,9 @@ def main():
         # Clear ACQ[0] + some of Identify buffer for visibility.
         hostmem_fill(bus, acq_addr, 16, value=0, base=hostmem_base)
         hostmem_fill(bus, id_buf,  0x100, value=0, base=hostmem_base)
+
+        cfg_set_command(bus, b, d, f, set_mem=True, set_bme=True, timeout_ms=cfg_timeout_ms)
+        cfg_check_command(bus, b, d, f, timeout_ms=cfg_timeout_ms)
 
         # Init admin queues + enable.
         ok = nvme_admin_init(bus, bar0, info["cap"], asq_addr, acq_addr, q_entries=q_entries, timeout_ms=timeout_ms)

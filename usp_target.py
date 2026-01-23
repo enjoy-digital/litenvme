@@ -131,7 +131,7 @@ class BaseSoC(SoCMini):
         # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
 
         hostmem_base = 0x10000000
-        hostmem_size = 0x20000  # 128KB
+        hostmem_size = 0x4000  # 16KB = 4 pages (ASQ/ACQ/Identify + marge)
 
         def hostmem_decoder(a):
             return (a >= hostmem_base) & (a < (hostmem_base + hostmem_size))
@@ -477,7 +477,7 @@ class BaseSoC(SoCMini):
 
         self.analyzer = LiteScopeAnalyzer(
             analyzer_signals,
-            depth        = 4096,     # better chance to catch the 4KB Identify write burst
+            depth        = 1024,     # better chance to catch the 4KB Identify write burst
             clock_domain = "sys",
             register     = True,
             csr_csv      = "analyzer.csv",
