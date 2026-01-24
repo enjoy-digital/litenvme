@@ -46,7 +46,6 @@ def _ver_to_str(ver):
 def decode_identify_controller_from_dwords(dws):
     b = _dwords_to_bytes_le(dws)
 
-    # Offsets per NVMe Identify Controller Data Structure.
     vid   = _u16(b, 0x00)
     ssvid = _u16(b, 0x02)
     sn    = _get_ascii(b, 0x04, 20)
@@ -95,15 +94,12 @@ def pretty_print_identify_controller(info):
     print(f"  OAES     : 0x{info['oaes']:08x}")
 
 def decode_cqe(d0, d1, d2, d3):
-    # DW2: SQHD[15:0] | SQID[31:16]
     sq_head = d2 & 0xffff
     sq_id   = (d2 >> 16) & 0xffff
 
-    # DW3: CID[15:0] | STS[31:16]
     cid = d3 & 0xffff
     sts = (d3 >> 16) & 0xffff
 
-    # STS layout: P[0], SC[8:1], SCT[11:9], M[14], DNR[15]
     p   = sts & 0x1
     sc  = (sts >> 1) & 0xff
     sct = (sts >> 9) & 0x7
@@ -117,13 +113,16 @@ def decode_cqe(d0, d1, d2, d3):
         "p": p, "sc": sc, "sct": sct, "m": m, "dnr": dnr,
     }
 
-def pretty_print_cqe(cqe):
-    print("ACQ[0] decoded CQE:")
+def pretty_print_cqe(cqe, name="CQE"):
+    print(f"{name} decoded CQE:")
     print(f"  SQ Head : {cqe['sq_head']}")
     print(f"  SQ ID   : {cqe['sq_id']}")
     print(f"  CID     : {cqe['cid']}")
     print(f"  Status  : P={cqe['p']} SCT={cqe['sct']} SC={cqe['sc']} M={cqe['m']} DNR={cqe['dnr']}")
     print(f"  DW0/DW1 : 0x{cqe['dw0']:08x} 0x{cqe['dw1']:08x}")
+
+def cqe_ok(cqe):
+    return (cqe["sct"] == 0) and (cqe["sc"] == 0)
 
 # HostMem CSR helpers -----------------------------------------------------------------------------
 
@@ -154,8 +153,22 @@ def hostmem_dump(bus, addr, length, base=0x10000000):
 def hostmem_read_dwords(bus, addr, dword_count, base=0x10000000):
     return [hostmem_rd32(bus, addr + 4*i, base=base) for i in range(dword_count)]
 
-# CFG helpers --------------------------------------------------------------------------------------
+def hostmem_wr_cmd(bus, asq_base, slot, cmd_dwords, hostmem_base=0x10000000):
+    addr = asq_base + slot*64
+    for i, w in enumerate(cmd_dwords):
+        hostmem_wr32(bus, addr + i*4, w, base=hostmem_base)
 
+# NEW: read 16B CQE at slot ------------------------------------------------------------------------
+def hostmem_rd_cqe_slot(bus, cq_base, slot, hostmem_base=0x10000000):
+    addr = cq_base + slot*16
+    d0 = hostmem_rd32(bus, addr + 0x0, base=hostmem_base)
+    d1 = hostmem_rd32(bus, addr + 0x4, base=hostmem_base)
+    d2 = hostmem_rd32(bus, addr + 0x8, base=hostmem_base)
+    d3 = hostmem_rd32(bus, addr + 0xc, base=hostmem_base)
+    return (d0, d1, d2, d3)
+
+# CFG helpers --------------------------------------------------------------------------------------
+# (unchanged)
 def cfg_bdf_pack(bus, dev, fn, reg, ext=0):
     v  = (bus & 0xff) << 0
     v |= (dev & 0x1f) << 8
@@ -272,7 +285,7 @@ def cfg_set_command(bus, b, d, f, set_mem=True, set_bme=True, timeout_ms=100):
     return True
 
 # MEM/MMIO helpers ---------------------------------------------------------------------------------
-
+# (unchanged)
 def mem_set_addr(bus, addr):
     bus.regs.mmio_mem_adr_l.write(addr & 0xffffffff)
     bus.regs.mmio_mem_adr_h.write((addr >> 32) & 0xffffffff)
@@ -452,19 +465,12 @@ def nvme_read_core(bus, bar0, timeout_ms=200):
         "errs": errs,
     }
 
-def nvme_dump_regs(bus, bar0, length, stride=4, timeout_ms=200):
-    for off in range(0, length, stride):
-        v, err = mmio_rd32(bus, bar0 + off, timeout_ms=timeout_ms)
-        s = "" if err == 0 else "  (err=1)"
-        print(f"0x{off:04x}: 0x{v:08x}{s}")
-
 def nvme_wait_rdy(bus, bar0, want_rdy, timeout_ms, poll_s=0.005):
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
         csts, err = mmio_rd32(bus, bar0 + NVME_CSTS, timeout_ms=timeout_ms)
-        if err == 0:
-            if csts_rdy(csts) == (1 if want_rdy else 0):
-                return True
+        if err == 0 and csts_rdy(csts) == (1 if want_rdy else 0):
+            return True
         if time.time() > deadline:
             return False
         time.sleep(poll_s)
@@ -475,54 +481,11 @@ def nvme_disable(bus, bar0, cap=None, timeout_ms=200):
         print("WARN: read CC returned err=1.")
     if cc_en(cc) == 0:
         return True
-
-    new_cc = cc & ~0x1
-    mmio_wr32(bus, bar0 + NVME_CC, new_cc, timeout_ms=timeout_ms)
-
+    mmio_wr32(bus, bar0 + NVME_CC, cc & ~0x1, timeout_ms=timeout_ms)
     to_ms = 2000
     if cap is not None:
         to_ms = max(500, cap_to_ms(cap_decode(cap)["to"]))
-    ok = nvme_wait_rdy(bus, bar0, want_rdy=False, timeout_ms=to_ms, poll_s=0.001)
-    return ok
-
-def nvme_check_mmio_basics(bus, bar0, timeout_ms=200):
-    print("MMIO sanity:")
-
-    cap, e0 = mmio_rd64(bus, bar0 + NVME_CAP,  timeout_ms=timeout_ms)
-    vs,  e1 = mmio_rd32(bus, bar0 + NVME_VS,   timeout_ms=timeout_ms)
-    cc,  e2 = mmio_rd32(bus, bar0 + NVME_CC,   timeout_ms=timeout_ms)
-    csts,e3 = mmio_rd32(bus, bar0 + NVME_CSTS, timeout_ms=timeout_ms)
-
-    if e0 | e1 | e2 | e3:
-        print("  FAIL: basic reads returned err=1.")
-        return False
-
-    print("  OK: basic reads (CAP/VS/CC/CSTS).")
-
-    if cc_en(cc) != 0:
-        print("  WARN: CC.EN=1, skipping write/readback tests (disable first).")
-        return True
-
-    return True
-
-def nvme_check_doorbells(bus, bar0, cap, timeout_ms=200, max_q=4):
-    capd   = cap_decode(cap)
-    stride = doorbell_stride_bytes(capd["dstrd"])
-
-    print(f"Doorbells: base=0x{NVME_DOORBELL_BASE:04x} stride={stride} bytes (check reads only)")
-
-    for qid in range(max_q):
-        sq_off = NVME_DOORBELL_BASE + (qid * 2 + 0) * stride
-        cq_off = NVME_DOORBELL_BASE + (qid * 2 + 1) * stride
-
-        sq, e0 = mmio_rd32(bus, bar0 + sq_off, timeout_ms=timeout_ms)
-        cq, e1 = mmio_rd32(bus, bar0 + cq_off, timeout_ms=timeout_ms)
-
-        s0 = "" if e0 == 0 else " (err=1)"
-        s1 = "" if e1 == 0 else " (err=1)"
-        print(f"  Q{qid}: SQD@0x{sq_off:04x}=0x{sq:08x}{s0}  CQD@0x{cq_off:04x}=0x{cq:08x}{s1}")
-
-# Admin init + doorbells ---------------------------------------------------------------------------
+    return nvme_wait_rdy(bus, bar0, want_rdy=False, timeout_ms=to_ms, poll_s=0.001)
 
 def nvme_admin_init(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, timeout_ms=200):
     assert q_entries >= 2
@@ -542,8 +505,7 @@ def nvme_admin_init(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, timeout_ms=
         print("WARN: writing CC had err=1.")
 
     to_ms = max(500, cap_to_ms(cap_decode(cap)["to"]))
-    ok = nvme_wait_rdy(bus, bar0, want_rdy=True, timeout_ms=to_ms, poll_s=0.001)
-    return ok
+    return nvme_wait_rdy(bus, bar0, want_rdy=True, timeout_ms=to_ms, poll_s=0.001)
 
 def nvme_ring_admin_sq(bus, bar0, cap, tail, timeout_ms=200):
     db = nvme_db_addr(bar0, cap, qid=0, is_cq=False)
@@ -552,32 +514,58 @@ def nvme_ring_admin_sq(bus, bar0, cap, tail, timeout_ms=200):
         print("WARN: SQ0 doorbell write err=1.")
     return err == 0
 
+# NEW: generic doorbell rings for SQ/CQ ------------------------------------------------------------
+def nvme_ring_sq(bus, bar0, cap, qid, tail, timeout_ms=200):
+    db = nvme_db_addr(bar0, cap, qid=qid, is_cq=False)
+    mmio_wr32(bus, db, tail & 0xffff, timeout_ms=timeout_ms)
+
+def nvme_ring_cq(bus, bar0, cap, qid, head, timeout_ms=200):
+    db = nvme_db_addr(bar0, cap, qid=qid, is_cq=True)
+    mmio_wr32(bus, db, head & 0xffff, timeout_ms=timeout_ms)
+
 # NVMe Admin Identify command ---------------------------------------------------------------------
 
 def nvme_cmd_identify_controller(cid, prp1, nsid=0):
     cmd = [0]*16
     cmd[0]  = (0x06 & 0xff) | ((cid & 0xffff) << 16)
-    cmd[1]  = 0x00000000
     cmd[2]  = nsid & 0xffffffff
-    cmd[3]  = 0x00000000
-    cmd[4]  = 0x00000000
-    cmd[5]  = 0x00000000
     cmd[6]  = prp1 & 0xffffffff
     cmd[7]  = (prp1 >> 32) & 0xffffffff
-    cmd[8]  = 0x00000000
-    cmd[9]  = 0x00000000
     cmd[10] = 0x00000001  # CNS=1
-    cmd[11] = 0x00000000
-    cmd[12] = 0x00000000
-    cmd[13] = 0x00000000
-    cmd[14] = 0x00000000
-    cmd[15] = 0x00000000
     return cmd
 
-def hostmem_wr_cmd(bus, asq_base, slot, cmd_dwords, hostmem_base=0x10000000):
-    addr = asq_base + slot*64
-    for i, w in enumerate(cmd_dwords):
-        hostmem_wr32(bus, addr + i*4, w, base=hostmem_base)
+# NEW: Create IO CQ/SQ + Read ----------------------------------------------------------------------
+
+def nvme_cmd_create_iocq(cid, prp1_cq, qid=1, qsize_minus1=1, iv=0, ien=0):
+    cmd = [0]*16
+    cmd[0]  = (0x05 & 0xff) | ((cid & 0xffff) << 16)  # Create IO CQ
+    cmd[6]  = prp1_cq & 0xffffffff
+    cmd[7]  = (prp1_cq >> 32) & 0xffffffff
+    cmd[10] = (qid & 0xffff) | ((qsize_minus1 & 0xffff) << 16)
+    cmd[11] = (iv & 0xffff) | ((ien & 0x1) << 16)
+    return cmd
+
+def nvme_cmd_create_iosq(cid, prp1_sq, qid=1, qsize_minus1=1, cqid=1, qprio=0, pc=1):
+    cmd = [0]*16
+    cmd[0]  = (0x01 & 0xff) | ((cid & 0xffff) << 16)  # Create IO SQ
+    cmd[6]  = prp1_sq & 0xffffffff
+    cmd[7]  = (prp1_sq >> 32) & 0xffffffff
+    cmd[10] = (qid & 0xffff) | ((qsize_minus1 & 0xffff) << 16)
+    cmd[11] = (cqid & 0xffff) | ((qprio & 0x3) << 16) | ((pc & 0x1) << 18)
+    return cmd
+
+def nvme_cmd_read(cid, nsid, prp1_data, slba, nlb_minus1):
+    cmd = [0]*16
+    cmd[0]  = (0x02 & 0xff) | ((cid & 0xffff) << 16)  # Read
+    cmd[2]  = nsid & 0xffffffff
+    cmd[6]  = prp1_data & 0xffffffff
+    cmd[7]  = (prp1_data >> 32) & 0xffffffff
+    cmd[10] = slba & 0xffffffff
+    cmd[11] = (slba >> 32) & 0xffffffff
+    cmd[12] = (nlb_minus1 & 0xffff)
+    return cmd
+
+# Existing poll (non-phase) kept for Identify ------------------------------------------------------
 
 def nvme_poll_acq0(bus, acq_base, timeout_s=2.0, hostmem_base=0x10000000):
     deadline = time.time() + timeout_s
@@ -594,6 +582,18 @@ def nvme_poll_acq0(bus, acq_base, timeout_s=2.0, hostmem_base=0x10000000):
             return cur
         time.sleep(0.01)
     return last
+
+# NEW: phase-bit based CQ polling (for CQ0 and CQ1) ------------------------------------------------
+
+def poll_cq_phase(bus, cq_base, head, phase, timeout_s=2.0, hostmem_base=0x10000000):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        d0, d1, d2, d3 = hostmem_rd_cqe_slot(bus, cq_base, head, hostmem_base=hostmem_base)
+        cqe = decode_cqe(d0, d1, d2, d3)
+        if cqe["p"] == phase:
+            return cqe
+        time.sleep(0.001)
+    return None
 
 # Main ---------------------------------------------------------------------------------------------
 
@@ -621,6 +621,17 @@ def main():
     parser.add_argument("--max-q",       default="4", help="Max queue id to probe for --doorbells.")
 
     parser.add_argument("--identify", action="store_true", help="Send Admin Identify (controller) via BRAM hostmem.")
+
+    # NEW: first read
+    parser.add_argument("--read", action="store_true", help="Create IO queues (CQ1/SQ1) and do a first Read.")
+    parser.add_argument("--io-cq-addr", default="0x10003000", help="IO CQ1 base (4K aligned).")
+    parser.add_argument("--io-sq-addr", default="0x10004000", help="IO SQ1 base (4K aligned).")
+    parser.add_argument("--rd-buf",     default="0x10005000", help="Read buffer PRP1 (4K aligned).")
+    parser.add_argument("--nsid",       default="1", help="Namespace ID.")
+    parser.add_argument("--slba",       default="0", help="Start LBA.")
+    parser.add_argument("--nlb",        default="1", help="Number of LBAs (start with 1).")
+    parser.add_argument("--io-q-entries", default="2", help="IO queue entries (>=2, start with 2).")
+
     parser.add_argument("--hostmem-base", default="0x10000000", help="Hostmem window base (must match gateware).")
     parser.add_argument("--asq-addr", default="0x10000000", help="ASQ base (4K aligned).")
     parser.add_argument("--acq-addr", default="0x10001000", help="ACQ base (4K aligned).")
@@ -646,7 +657,7 @@ def main():
             raise RuntimeError("PCIe link did not come up.")
         print("Link up.")
 
-    if not (args.info or args.dump or args.disable or args.mmio_check or args.doorbells or args.identify):
+    if not (args.info or args.dump or args.disable or args.mmio_check or args.doorbells or args.identify or args.read):
         args.info = True
         args.mmio_check = True
 
@@ -662,7 +673,7 @@ def main():
         raise RuntimeError("BAR0 base is 0. Assign BAR0 in config space before running MMIO tests.")
 
     info = None
-    if args.info or args.disable or args.mmio_check or args.doorbells or args.identify:
+    if args.info or args.disable or args.mmio_check or args.doorbells or args.identify or args.read:
         info = nvme_read_core(bus, bar0, timeout_ms=timeout_ms)
 
     if args.dump is not None:
@@ -683,40 +694,37 @@ def main():
             info = nvme_read_core(bus, bar0, timeout_ms=timeout_ms)
         nvme_check_doorbells(bus, bar0, cap=info["cap"], timeout_ms=timeout_ms, max_q=max_q)
 
+    # Shared for identify/read
+    hostmem_base = int(args.hostmem_base, 0)
+    asq_addr     = int(args.asq_addr, 0)
+    acq_addr     = int(args.acq_addr, 0)
+    cid          = int(args.cid, 0)
+    q_entries    = int(args.q_entries, 0)
+
     if args.identify:
         if info is None:
             info = nvme_read_core(bus, bar0, timeout_ms=timeout_ms)
 
-        hostmem_base = int(args.hostmem_base, 0)
-        asq_addr     = int(args.asq_addr, 0)
-        acq_addr     = int(args.acq_addr, 0)
-        id_buf       = int(args.id_buf, 0)
-        cid          = int(args.cid, 0)
-        q_entries    = int(args.q_entries, 0)
+        id_buf = int(args.id_buf, 0)
 
-        # Clear ACQ[0] + some of Identify buffer for visibility.
         hostmem_fill(bus, acq_addr, 16, value=0, base=hostmem_base)
         hostmem_fill(bus, id_buf,  0x100, value=0, base=hostmem_base)
 
         cfg_set_command(bus, b, d, f, set_mem=True, set_bme=True, timeout_ms=cfg_timeout_ms)
         cfg_check_command(bus, b, d, f, timeout_ms=cfg_timeout_ms)
 
-        # Init admin queues + enable.
         ok = nvme_admin_init(bus, bar0, info["cap"], asq_addr, acq_addr, q_entries=q_entries, timeout_ms=timeout_ms)
 
         csts, _ = mmio_rd32(bus, bar0 + NVME_CSTS, timeout_ms=timeout_ms)
         print(f"Admin init: RDY={'1' if csts_rdy(csts) else '0'} CFS={csts_cfs(csts)} (poll_ok={'1' if ok else '0'})")
 
-        # Program Identify command in ASQ[0].
         cmd = nvme_cmd_identify_controller(cid=cid, prp1=id_buf, nsid=0)
         hostmem_wr_cmd(bus, asq_base=asq_addr, slot=0, cmd_dwords=cmd, hostmem_base=hostmem_base)
         print("ASQ[0] programmed (Identify Controller).")
 
-        # Ring SQ0 tail = 1.
         nvme_ring_admin_sq(bus, bar0, info["cap"], tail=1, timeout_ms=timeout_ms)
         print("SQ0 doorbell rung (tail=1).")
 
-        # Poll CQE0 (NVMe should MemWr it).
         cpl = nvme_poll_acq0(bus, acq_base=acq_addr, timeout_s=2.0, hostmem_base=hostmem_base)
         print("ACQ[0] raw:")
         if cpl is None:
@@ -724,16 +732,130 @@ def main():
         else:
             print(f"  {cpl[0]:08x} {cpl[1]:08x} {cpl[2]:08x} {cpl[3]:08x}")
             cqe = decode_cqe(cpl[0], cpl[1], cpl[2], cpl[3])
-            pretty_print_cqe(cqe)
+            pretty_print_cqe(cqe, name="ACQ[0]")
 
-        # Dump + decode first 0x100 bytes of Identify buffer.
         print("Identify buffer (first 0x100):")
         hostmem_dump(bus, addr=id_buf, length=0x100, base=hostmem_base)
 
-        # Decode Identify Controller from the first 0x100 bytes (needs 0x100/4 = 64 dwords).
         id_dws = hostmem_read_dwords(bus, addr=id_buf, dword_count=0x100//4, base=hostmem_base)
         id_info = decode_identify_controller_from_dwords(id_dws)
         pretty_print_identify_controller(id_info)
+
+    if args.read:
+        # We run our own admin sequence with phase-bit CQ polling for reliability.
+        io_cq_addr = int(args.io_cq_addr, 0)
+        io_sq_addr = int(args.io_sq_addr, 0)
+        rd_buf     = int(args.rd_buf, 0)
+        nsid       = int(args.nsid, 0)
+        slba       = int(args.slba, 0)
+        nlb        = int(args.nlb, 0)
+        io_q_entries = int(args.io_q_entries, 0)
+        if io_q_entries < 2:
+            raise ValueError("--io-q-entries must be >=2")
+
+        # Require 4K alignment for buffers/queues.
+        for name, a in [("io_cq_addr", io_cq_addr), ("io_sq_addr", io_sq_addr), ("rd_buf", rd_buf)]:
+            if (a & 0xfff) != 0:
+                raise ValueError(f"{name} must be 4K-aligned, got 0x{a:x}")
+
+        # Clear memory regions.
+        hostmem_fill(bus, io_cq_addr, 0x1000, value=0, base=hostmem_base)
+        hostmem_fill(bus, io_sq_addr, 0x1000, value=0, base=hostmem_base)
+        hostmem_fill(bus, rd_buf,     0x200,  value=0, base=hostmem_base)
+
+        # Init admin queues + enable.
+        cfg_set_command(bus, b, d, f, set_mem=True, set_bme=True, timeout_ms=cfg_timeout_ms)
+        ok = nvme_admin_init(bus, bar0, info["cap"], asq_addr, acq_addr, q_entries=q_entries, timeout_ms=timeout_ms)
+        csts, _ = mmio_rd32(bus, bar0 + NVME_CSTS, timeout_ms=timeout_ms)
+        print(f"Admin init (for read): RDY={'1' if csts_rdy(csts) else '0'} CFS={csts_cfs(csts)} (poll_ok={'1' if ok else '0'})")
+
+        # Admin queue pointers (phase starts at 1).
+        asq_tail = 0
+        acq_head = 0
+        acq_phase = 1
+
+        def admin_submit(cmd_dwords, slot, tail_after, timeout_s=2.0):
+            nonlocal acq_head, acq_phase
+
+            # Clear expected CQE slot (optional).
+            hostmem_fill(bus, acq_addr + acq_head*16, 16, value=0, base=hostmem_base)
+
+            hostmem_wr_cmd(bus, asq_base=asq_addr, slot=slot, cmd_dwords=cmd_dwords, hostmem_base=hostmem_base)
+            nvme_ring_admin_sq(bus, bar0, info["cap"], tail=tail_after, timeout_ms=timeout_ms)
+
+            cqe = poll_cq_phase(bus, cq_base=acq_addr, head=acq_head, phase=acq_phase,
+                                timeout_s=timeout_s, hostmem_base=hostmem_base)
+            if cqe is None:
+                return None
+
+            # consume CQE
+            acq_head = (acq_head + 1) % q_entries
+            if acq_head == 0:
+                acq_phase ^= 1
+            nvme_ring_cq(bus, bar0, info["cap"], qid=0, head=acq_head, timeout_ms=timeout_ms)
+            return cqe
+
+        # Create IO CQ1 (CID+1).
+        cmd = nvme_cmd_create_iocq(cid=cid + 1, prp1_cq=io_cq_addr, qid=1, qsize_minus1=io_q_entries-1, iv=0, ien=0)
+        cqe = admin_submit(cmd, slot=0, tail_after=1, timeout_s=2.0)
+        print("Create IO CQ1:")
+        if cqe is None:
+            print("  timeout")
+            bus.close()
+            return
+        pretty_print_cqe(cqe, name="ACQ")
+        if not cqe_ok(cqe):
+            print("  ERROR: Create IO CQ failed.")
+            bus.close()
+            return
+
+        # Create IO SQ1 (CID+2).
+        cmd = nvme_cmd_create_iosq(cid=cid + 2, prp1_sq=io_sq_addr, qid=1, qsize_minus1=io_q_entries-1, cqid=1, qprio=0, pc=1)
+        cqe = admin_submit(cmd, slot=1, tail_after=2, timeout_s=2.0)
+        print("Create IO SQ1:")
+        if cqe is None:
+            print("  timeout")
+            bus.close()
+            return
+        pretty_print_cqe(cqe, name="ACQ")
+        if not cqe_ok(cqe):
+            print("  ERROR: Create IO SQ failed.")
+            bus.close()
+            return
+
+        # IO queue pointers.
+        iosq_tail = 0
+        iocq_head = 0
+        iocq_phase = 1
+
+        # Submit one Read into SQ1 slot 0.
+        cmd = nvme_cmd_read(cid=cid + 3, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
+        hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=0, cmd_dwords=cmd, hostmem_base=hostmem_base)
+        iosq_tail = 1
+        nvme_ring_sq(bus, bar0, info["cap"], qid=1, tail=iosq_tail, timeout_ms=timeout_ms)
+
+        # Poll CQ1 head with phase.
+        cqe = poll_cq_phase(bus, cq_base=io_cq_addr, head=iocq_head, phase=iocq_phase,
+                            timeout_s=2.0, hostmem_base=hostmem_base)
+        print("Read CQ1:")
+        if cqe is None:
+            print("  timeout")
+            bus.close()
+            return
+        pretty_print_cqe(cqe, name="CQ1")
+        if not cqe_ok(cqe):
+            print("  ERROR: Read failed.")
+            bus.close()
+            return
+
+        # Consume CQ1 entry and ring CQ1 head doorbell.
+        iocq_head = (iocq_head + 1) % io_q_entries
+        if iocq_head == 0:
+            iocq_phase ^= 1
+        nvme_ring_cq(bus, bar0, info["cap"], qid=1, head=iocq_head, timeout_ms=timeout_ms)
+
+        print("Read buffer (first 0x100):")
+        hostmem_dump(bus, addr=rd_buf, length=0x100, base=hostmem_base)
 
     bus.close()
 
