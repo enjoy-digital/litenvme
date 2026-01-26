@@ -78,6 +78,7 @@ class BaseSoC(SoCMini):
             address_width        = 64,
             with_configuration   = True,
             with_ptm             = False,
+            address_mask         = 0,
         )
 
         # Timing constraints.
