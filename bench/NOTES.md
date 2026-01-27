@@ -60,3 +60,22 @@ litex_server --uart --uart-port=/dev/ttyUSBX --uart-baudrate=2e6
   --nsid 1 \
   --slba 0 \
   --nlb 1
+
+## 5) Quick I/O helper
+`nvme_io.py` is a smaller helper for read/write that can optionally do setup.
+
+# Full setup + read
+./nvme_io.py --wait-link --setup --read \
+  --q-entries 16 \
+  --io-q-entries 4 \
+  --nsid 1 \
+  --slba 0 \
+  --nlb 1
+
+# Read/write without setup (assumes queues already created)
+./nvme_io.py --read --write \
+  --bar0 0xe0000000 \
+  --io-q-entries 4 \
+  --nsid 1 \
+  --slba 0 \
+  --nlb 1
