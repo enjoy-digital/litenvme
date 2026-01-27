@@ -1,5 +1,7 @@
 # LiteNVMe bring-up quickstart
 
+See `doc/NVME_ACCESS.md` for a step-by-step description of Identify/Read/Write flows.
+
 ## 0) Build + load bitstream
 ./usp_target.py --csr-csv=csr.csv --build --load
 
