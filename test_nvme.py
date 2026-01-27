@@ -1002,18 +1002,37 @@ def main():
         iocq_head = 0
         iocq_phase = 1
 
+
+        # Prefill destination buffer with a non-zero pattern so we can tell if the SSD wrote anything.
+        pat = 0xA5A5A5A5
+        hostmem_fill(bus, rd_buf, 0x1000, value=pat, base=hostmem_base)
+
+        # Snapshot a small prefix (64 dwords = 256B) before the read.
+        before = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
+
         print(f"Submitting READ: NSID={nsid} SLBA={slba} NLB={nlb} PRP1=0x{rd_buf:08x}")
         print("READ SQE:", " ".join(f"{w:08x}" for w in cmd))
 
-        cmd = nvme_cmd_read(cid=cid + 3, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
-        assert cmd[1] == (nsid & 0xffffffff)
-        hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=0, cmd_dwords=cmd, hostmem_base=hostmem_base)
+        read_cmd = nvme_cmd_read(cid=cid + 3, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
+        assert (read_cmd[6] == (rd_buf & 0xffffffff))
+        hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=0, cmd_dwords=read_cmd, hostmem_base=hostmem_base)
         nvme_ring_sq(bus, bar0, info["cap"], qid=1, tail=iosq_tail, timeout_ms=timeout_ms)
 
         print("Polling CQ1 for READ completion...")
 
         cqe = poll_cq_phase(bus, cq_base=io_cq_addr, head=iocq_head, phase=iocq_phase,
                             timeout_s=2.0, hostmem_base=hostmem_base)
+
+        # Snapshot after the read and report what changed.
+        after = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
+
+        changed = sum(1 for i in range(64) if after[i] != before[i])
+        still_pat = sum(1 for i in range(64) if after[i] == pat)
+        all_zero  = sum(1 for i in range(64) if after[i] == 0)
+
+        print(f"Read buffer changed dwords: {changed}/64")
+        print(f"After read: {still_pat}/64 still pattern, {all_zero}/64 are zero")
+
         print("Read CQ1:")
         if cqe is None:
             print("  timeout")
@@ -1030,9 +1049,12 @@ def main():
             iocq_phase ^= 1
         nvme_ring_cq(bus, bar0, info["cap"], qid=1, head=iocq_head, timeout_ms=timeout_ms)
 
-        print("Read buffer (first 0x100):")
-        hostmem_dump(bus, addr=rd_buf, length=0x100, base=hostmem_base)
+        print("Read buffer (first 0x200):")
+        hostmem_dump(bus, addr=rd_buf, length=0x200, base=hostmem_base)
 
+        sig = hostmem_rd32(bus, rd_buf + 0x1FC, base=hostmem_base)
+        sig16 = (sig >> 16) & 0xffff
+        print(f"MBR sig16: 0x{sig16:04x} (expect aa55)")
 
 
     bus.close()
