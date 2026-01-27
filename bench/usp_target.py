@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 
 from migen import *
 from litex.gen import *
@@ -19,6 +20,7 @@ from litepcie.core.endpoint  import LitePCIeEndpoint
 
 from litescope import LiteScopeAnalyzer
 
+sys.path.append("..")
 from gateware.cfg import LiteNVMePCIeCfgAccessor
 from gateware.mem import LiteNVMePCIeMmioAccessor
 from gateware.hostmem import LiteNVMeHostMemResponder
