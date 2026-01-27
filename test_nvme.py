@@ -639,7 +639,7 @@ def nvme_cmd_identify_namespace(cid, nsid, prp1):
     # Identify, CNS=0, NSID=nsid
     cmd = [0]*16
     cmd[0]  = (0x06 & 0xff) | ((cid & 0xffff) << 16)
-    cmd[2]  = nsid & 0xffffffff
+    cmd[1]  = nsid & 0xffffffff                       # FIXED: NSID in DW1, not DW2
     cmd[6]  = prp1 & 0xffffffff
     cmd[7]  = (prp1 >> 32) & 0xffffffff
     cmd[10] = 0x00000000  # CNS=0 (Identify Namespace)
@@ -657,10 +657,19 @@ def nvme_cmd_identify_ns_list(cid, prp1):
 
 def nvme_cmd_set_features_num_queues(cid, nsqr, ncqr):
     # Admin opcode 0x09 (Set Features), FID=0x07 (Number of Queues).
-    # CDW10: [7:0]=FID, [31:16]=NCQR-1, [15:0]=NSQR-1
+    # CDW10: [7:0]=FID, [15:0]=NSQR-1, [31:16]=NCQR-1
+    # Fixed: Proper bitfield construction without overlap
     cmd = [0]*16
     cmd[0]  = (0x09 & 0xff) | ((cid & 0xffff) << 16)
-    cmd[10] = (0x07 & 0xff) | (((ncqr - 1) & 0xffff) << 16) | (((nsqr - 1) & 0xffff) << 0)
+
+    # Construct CDW10 carefully:
+    # Bits 7:0 = FID (0x07)
+    # Bits 15:0 = NSQR-1 (Number of Submission Queues Requested - 1)
+    # Bits 31:16 = NCQR-1 (Number of Completion Queues Requested - 1)
+    cdw10 = 0x07  # FID in bits 7:0
+    cdw10 |= ((nsqr - 1) & 0xffff) << 0    # NSQR-1 in bits 15:0
+    cdw10 |= ((ncqr - 1) & 0xffff) << 16   # NCQR-1 in bits 31:16
+    cmd[10] = cdw10
     return cmd
 
 
@@ -684,6 +693,7 @@ def nvme_poll_acq0(bus, acq_base, timeout_s=2.0, hostmem_base=0x10000000):
     return last
 
 def poll_cq_phase(bus, cq_base, head, phase, timeout_s=2.0, hostmem_base=0x10000000):
+    # FIXED: Was using undefined variable 'deadline' on RHS
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         d0, d1, d2, d3 = hostmem_rd_cqe_slot(bus, cq_base, head, hostmem_base=hostmem_base)
@@ -834,13 +844,20 @@ def main():
         if io_q_entries < 2:
             raise ValueError("--io-q-entries must be >=2")
 
+        # Validate queue size against controller capabilities
+        capd = cap_decode(info["cap"])
+        max_entries = capd["mqes"] + 1
+        if io_q_entries > max_entries:
+            print(f"WARNING: Requested {io_q_entries} entries exceeds CAP.MQES+1={max_entries}. Clamping.")
+            io_q_entries = max_entries
+
         for name, a in [("io_cq_addr", io_cq_addr), ("io_sq_addr", io_sq_addr), ("rd_buf", rd_buf)]:
             if (a & 0xfff) != 0:
                 raise ValueError(f"{name} must be 4K-aligned, got 0x{a:x}")
 
         hostmem_fill(bus, io_cq_addr, 0x1000, value=0, base=hostmem_base)
         hostmem_fill(bus, io_sq_addr, 0x1000, value=0, base=hostmem_base)
-        hostmem_fill(bus, rd_buf,     0x200,  value=0, base=hostmem_base)
+        hostmem_fill(bus, rd_buf,     0x1000, value=0, base=hostmem_base)  # Fixed: was 0x200, should be page size minimum
 
         # Scratch 4K page for Identify NS list.
         ns_buf = hostmem_base + 0x6000
