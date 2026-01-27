@@ -1,3 +1,9 @@
+# This file is part of LiteNVMe.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# Developed with LLM assistance.
+# SPDX-License-Identifier: BSD-2-Clause
+
 from litex.build.generic_platform import *
 from litex.build.xilinx           import XilinxUSPPlatform
 from litex.build.openfpgaloader   import OpenFPGALoader
