@@ -16,7 +16,7 @@ from litex.soc.interconnect.csr import *
 from litex.soc.cores.clock import USMMCM
 
 from litepcie.phy.usppciephy import USPPCIEPHY
-from litepcie.core.endpoint  import LitePCIeEndpoint
+from litepcie.core.rootport  import LitePCIeRootPort
 
 from litescope import LiteScopeAnalyzer
 
@@ -71,15 +71,13 @@ class BaseSoC(SoCMini):
             mode       = "RootPort",
         )
 
-        # PCIe Endpoint (FIXME: Should be named Root here...) --------------------------------------
-        self.pcie_endpoint = LitePCIeEndpoint(
+        # PCIe RootPort ----------------------------------------------------------------------------
+        self.pcie_endpoint = LitePCIeRootPort(
             phy                  = self.pcie_phy,
             max_pending_requests = 8,
             endianness           = self.pcie_phy.endianness,
             address_width        = 64,
             with_configuration   = True,
-            with_ptm             = False,
-            address_mask         = 0,
         )
 
         # Timing constraints.
