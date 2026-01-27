@@ -17,12 +17,7 @@ from migen.sim import run_simulation, passive
 from litex.gen import *
 from litex.soc.interconnect import stream
 
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from gateware.hostmem import LiteNVMeHostMemResponder
-
+from litenvme.hostmem import LiteNVMeHostMemResponder
 
 # ------------------------------------------------------------------------------------------
 # Minimal "LitePCIe user port" layouts matching what LiteNVMeHostMemResponder uses.

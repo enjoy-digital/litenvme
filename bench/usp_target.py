@@ -20,10 +20,9 @@ from litepcie.core.endpoint  import LitePCIeEndpoint
 
 from litescope import LiteScopeAnalyzer
 
-sys.path.append("..")
-from gateware.cfg import LiteNVMePCIeCfgAccessor
-from gateware.mem import LiteNVMePCIeMmioAccessor
-from gateware.hostmem import LiteNVMeHostMemResponder
+from litenvme.cfg import LiteNVMePCIeCfgAccessor
+from litenvme.mem import LiteNVMePCIeMmioAccessor
+from litenvme.hostmem import LiteNVMeHostMemResponder
 
 
 # CRG ----------------------------------------------------------------------------------------------

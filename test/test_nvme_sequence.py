@@ -30,10 +30,7 @@ from migen.sim import run_simulation, passive
 
 from litex.soc.interconnect import stream
 
-# Ensure repo root on PYTHONPATH for "gateware.hostmem"
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gateware.hostmem import LiteNVMeHostMemResponder
-
+from litenvme.hostmem import LiteNVMeHostMemResponder
 
 # ------------------------------------------------------------------------------------------
 # Minimal "LitePCIe user port" layouts matching what LiteNVMeHostMemResponder uses.
