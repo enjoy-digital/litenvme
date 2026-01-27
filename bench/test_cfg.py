@@ -6,12 +6,29 @@
 # Developed with LLM assistance.
 # SPDX-License-Identifier: BSD-2-Clause
 
-import argparse
 import time
+import argparse
 
 from litex import RemoteClient
 
+# Constants  ---------------------------------------------------------------------------------------
+
+CFG_CTRL_START = 0
+CFG_CTRL_WE    = 1
+CFG_STAT_DONE  = 0
+CFG_STAT_ERR   = 1
+LINK_STATUS_UP = 0
+
 # Helpers ------------------------------------------------------------------------------------------
+
+def _bit(v, n):
+    return (v >> n) & 1
+
+def _bits(v, lo, hi):
+    return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
+
+def _setbit(v, n, x):
+    return (v | (1 << n)) if x else (v & ~(1 << n))
 
 def cfg_bdf_pack(bus, dev, fn, reg, ext=0):
     v  = (bus & 0xff) << 0
@@ -23,14 +40,14 @@ def cfg_bdf_pack(bus, dev, fn, reg, ext=0):
 
 def cfg_rd0(bus, b, d, f, reg_dword, ext=0, timeout_ms=100):
     bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
-    bus.regs.cfg_cfg_ctrl.write(1)
+    bus.regs.cfg_cfg_ctrl.write(1 << CFG_CTRL_START)
     bus.regs.cfg_cfg_ctrl.write(0)
 
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
         stat = bus.regs.cfg_cfg_stat.read()
-        done = (stat >> 0) & 1
-        err  = (stat >> 1) & 1
+        done = (stat >> CFG_STAT_DONE) & 1
+        err  = (stat >> CFG_STAT_ERR) & 1
         if done:
             if err:
                 raise RuntimeError("CFG read failed (err=1).")
@@ -41,17 +58,17 @@ def cfg_rd0(bus, b, d, f, reg_dword, ext=0, timeout_ms=100):
 def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100):
     bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
     bus.regs.cfg_cfg_wdata.write(wdata & 0xffffffff)
-    bus.regs.cfg_cfg_ctrl.write(1 | (1<<1))  # start=1, we=1
+    bus.regs.cfg_cfg_ctrl.write((1 << CFG_CTRL_START) | (1 << CFG_CTRL_WE))
     bus.regs.cfg_cfg_ctrl.write(0)
 
     deadline = time.time() + (timeout_ms / 1000.0)
     while True:
         stat = bus.regs.cfg_cfg_stat.read()
-        done = (stat >> 0) & 1
-        err  = (stat >> 1) & 1
+        done = (stat >> CFG_STAT_DONE) & 1
+        err  = (stat >> CFG_STAT_ERR) & 1
         if done:
-            #if err:
-            #    raise RuntimeError("CFG write failed (err=1).")
+            if err:
+                raise RuntimeError("CFG write failed (err=1).")
             return
         if time.time() > deadline:
             raise TimeoutError("CFG write timeout (done=0).")
@@ -60,24 +77,12 @@ def wait_link_up(bus, timeout_s=5.0):
     deadline = time.time() + timeout_s
     while True:
         v = bus.regs.pcie_phy_phy_link_status.read()
-        link = (v >> 0) & 1
+        link = (v >> LINK_STATUS_UP) & 1
         if link:
             return True
         if time.time() > deadline:
             return False
         time.sleep(0.05)
-
-def _bit(v, n):
-    return (v >> n) & 1
-
-def _bits(v, lo, hi):
-    return (v >> lo) & ((1 << (hi - lo + 1)) - 1)
-
-def _setbit(v, n, x):
-    if x:
-        return v | (1 << n)
-    else:
-        return v & ~(1 << n)
 
 # Decoders -----------------------------------------------------------------------------------------
 
@@ -379,6 +384,7 @@ def main():
         bme    = True if args.enable_bme   else None
         intdis = True if args.disable_intx else None
         enable_command_bits(bus, b, d, f, mem=mem, bme=bme, intdis=intdis, dry_run=args.dry_run)
+    bus.close()
 
 if __name__ == "__main__":
     main()

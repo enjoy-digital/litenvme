@@ -6,10 +6,17 @@
 # Developed with LLM assistance.
 # SPDX-License-Identifier: BSD-2-Clause
 
-import argparse
 import time
+import argparse
 
 from litex import RemoteClient
+
+# Constants  ---------------------------------------------------------------------------------------
+
+CTRL_START_OFFSET = 0
+CTRL_WE_OFFSET    = 1
+CTRL_WSEL_OFFSET  = 4
+CTRL_LEN_OFFSET   = 8
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -18,16 +25,11 @@ def mem_set_addr(bus, addr):
     bus.regs.mmio_mem_adr_h.write((addr >> 32) & 0xffffffff)
 
 def mem_start(bus, we, wsel=0xf, length=1):
-    # ctrl fields:
-    # start bit0
-    # we    bit1
-    # wsel  bits[7:4]
-    # len   bits[17:8]
     ctrl  = 0
-    ctrl |= 1 << 0
-    ctrl |= (1 if we else 0) << 1
-    ctrl |= (wsel & 0xf) << 4
-    ctrl |= (length & 0x3ff) << 8
+    ctrl |= 1 << CTRL_START_OFFSET
+    ctrl |= (1 if we else 0) << CTRL_WE_OFFSET
+    ctrl |= (wsel & 0xf) << CTRL_WSEL_OFFSET
+    ctrl |= (length & 0x3ff) << CTRL_LEN_OFFSET
     bus.regs.mmio_mem_ctrl.write(ctrl)
     bus.regs.mmio_mem_ctrl.write(0)
 
@@ -36,10 +38,7 @@ def mem_wait_done(bus, timeout_ms=200):
     while True:
         stat = bus.regs.mmio_mem_stat.read()
         done = (stat >> 0) & 1
-        err  = (stat >> 1) & 1
         if done:
-            #if err:
-            #    raise RuntimeError("MEM transaction failed (err=1).")
             return
         if time.time() > deadline:
             raise TimeoutError("MEM transaction timeout (done=0).")
@@ -57,7 +56,6 @@ def mem_wr32(bus, addr, data, wsel=0xf, timeout_ms=200):
     mem_wait_done(bus, timeout_ms=timeout_ms)
 
 def dump_bar0(bus, base, length, stride=4):
-    # length in bytes.
     for off in range(0, length, stride):
         v = mem_rd32(bus, base + off)
         print(f"0x{off:08x}: 0x{v:08x}")
@@ -105,6 +103,7 @@ def main():
         base = int(args.bar0, 0)
         length = int(args.dump, 0)
         dump_bar0(bus, base, length, stride=stride)
+    bus.close()
 
 if __name__ == "__main__":
     main()

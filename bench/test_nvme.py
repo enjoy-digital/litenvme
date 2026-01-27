@@ -6,11 +6,19 @@
 # Developed with LLM assistance.
 # SPDX-License-Identifier: BSD-2-Clause
 
-import argparse
 import time
+import argparse
 import struct
 
 from litex import RemoteClient
+
+# Constants  ---------------------------------------------------------------------------------------
+
+CFG_CTRL_START = 0
+CFG_CTRL_WE    = 1
+CFG_STAT_DONE  = 0
+CFG_STAT_ERR   = 1
+LINK_STATUS_UP = 0
 
 # Helpers ------------------------------------------------------------------------------------------
 
@@ -24,7 +32,7 @@ def wait_link_up(bus, timeout_s=5.0):
     deadline = time.time() + timeout_s
     while True:
         v = bus.regs.pcie_phy_phy_link_status.read()
-        link = (v >> 0) & 1
+        link = (v >> LINK_STATUS_UP) & 1
         if link:
             return True
         if time.time() > deadline:
@@ -185,14 +193,14 @@ def cfg_bdf_pack(bus, dev, fn, reg, ext=0):
 def cfg_rd0(bus, b, d, f, reg_dword, ext=0, timeout_ms=100):
     for _ in range(2):
         bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
-        bus.regs.cfg_cfg_ctrl.write(1)
+        bus.regs.cfg_cfg_ctrl.write(1 << CFG_CTRL_START)
         bus.regs.cfg_cfg_ctrl.write(0)
 
         deadline = time.time() + (timeout_ms / 1000.0)
         while True:
             stat = bus.regs.cfg_cfg_stat.read()
-            done = (stat >> 0) & 1
-            err  = (stat >> 1) & 1
+            done = (stat >> CFG_STAT_DONE) & 1
+            err  = (stat >> CFG_STAT_ERR) & 1
             if done:
                 return bus.regs.cfg_cfg_rdata.read(), err
             if time.time() > deadline:
@@ -207,14 +215,14 @@ def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100):
     for _ in range(2):
         bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
         bus.regs.cfg_cfg_wdata.write(wdata & 0xffffffff)
-        bus.regs.cfg_cfg_ctrl.write(1 | (1<<1))  # start=1, we=1
+        bus.regs.cfg_cfg_ctrl.write((1 << CFG_CTRL_START) | (1 << CFG_CTRL_WE))
         bus.regs.cfg_cfg_ctrl.write(0)
 
         deadline = time.time() + (timeout_ms / 1000.0)
         while True:
             stat = bus.regs.cfg_cfg_stat.read()
-            done = (stat >> 0) & 1
-            err  = (stat >> 1) & 1
+            done = (stat >> CFG_STAT_DONE) & 1
+            err  = (stat >> CFG_STAT_ERR) & 1
             if done:
                 return err
             if time.time() > deadline:
@@ -540,29 +548,12 @@ def nvme_disable(bus, bar0, cap=None, timeout_ms=200):
         to_ms = max(500, cap_to_ms(cap_decode(cap)["to"]))
     return nvme_wait_rdy(bus, bar0, want_rdy=False, timeout_ms=to_ms, poll_s=0.001)
 
-def nvme_admin_init(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, timeout_ms=200):
+def nvme_admin_init(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, disable=True, timeout_ms=200):
     assert q_entries >= 2
     aqa = ((q_entries - 1) & 0xfff) | (((q_entries - 1) & 0xfff) << 16)
 
-    nvme_disable(bus, bar0, cap=cap, timeout_ms=timeout_ms)
-
-    e0 = mmio_wr32(bus, bar0 + NVME_AQA, aqa, timeout_ms=timeout_ms)
-    e1 = mmio_wr64(bus, bar0 + NVME_ASQ, asq_addr, timeout_ms=timeout_ms)
-    e2 = mmio_wr64(bus, bar0 + NVME_ACQ, acq_addr, timeout_ms=timeout_ms)
-    if e0 | e1 | e2:
-        print("WARN: writing AQA/ASQ/ACQ had err=1 (posted/UR/CA).")
-
-    cc = cc_make_en(iocqes=4, iosqes=6, mps=0, css=0, ams=0)
-    e3 = mmio_wr32(bus, bar0 + NVME_CC, cc, timeout_ms=timeout_ms)
-    if e3:
-        print("WARN: writing CC had err=1.")
-
-    to_ms = max(500, cap_to_ms(cap_decode(cap)["to"]))
-    return nvme_wait_rdy(bus, bar0, want_rdy=True, timeout_ms=to_ms, poll_s=0.001)
-
-def nvme_admin_init_nodisable(bus, bar0, cap, asq_addr, acq_addr, q_entries=2, timeout_ms=200):
-    assert q_entries >= 2
-    aqa = ((q_entries - 1) & 0xfff) | (((q_entries - 1) & 0xfff) << 16)
+    if disable:
+        nvme_disable(bus, bar0, cap=cap, timeout_ms=timeout_ms)
 
     e0 = mmio_wr32(bus, bar0 + NVME_AQA, aqa, timeout_ms=timeout_ms)
     e1 = mmio_wr64(bus, bar0 + NVME_ASQ, asq_addr, timeout_ms=timeout_ms)
@@ -876,8 +867,9 @@ def main():
         ok = False
         for attempt in range(3):
             try:
-                ok = nvme_admin_init_nodisable(bus, bar0, info["cap"], asq_addr, acq_addr,
-                                               q_entries=q_entries, timeout_ms=max(timeout_ms, 500))
+                ok = nvme_admin_init(bus, bar0, info["cap"], asq_addr, acq_addr,
+                                               q_entries=q_entries, disable=False,
+                                               timeout_ms=max(timeout_ms, 500))
                 break
             except TimeoutError:
                 time.sleep(0.05)
@@ -1017,9 +1009,8 @@ def main():
         before = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
 
         print(f"Submitting READ: NSID={nsid} SLBA={slba} NLB={nlb} PRP1=0x{rd_buf:08x}")
-        print("READ SQE:", " ".join(f"{w:08x}" for w in cmd))
-
         read_cmd = nvme_cmd_read(cid=cid + 3, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
+        print("READ SQE:", " ".join(f"{w:08x}" for w in read_cmd))
         assert (read_cmd[6] == (rd_buf & 0xffffffff))
         hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=0, cmd_dwords=read_cmd, hostmem_base=hostmem_base)
         nvme_ring_sq(bus, bar0, info["cap"], qid=1, tail=iosq_tail, timeout_ms=timeout_ms)
