@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 
+# This file is part of LiteNVMe.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# Developed with LLM assistance.
+# SPDX-License-Identifier: BSD-2-Clause
+
 import argparse
 import time
 
