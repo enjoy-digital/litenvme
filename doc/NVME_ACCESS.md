@@ -168,3 +168,22 @@ compares a small prefix (first 64 dwords) for a quick sanity check.
 - **Queue sizes**: Use small queues (2-4 entries) during bring-up.
 - **Doorbells**: Always ring SQ tail after writing SQEs and ring CQ head after consuming CQEs.
 - **Alignment**: Keep all queue/buffer addresses 4K-aligned.
+
+## One-time setup vs per-I/O steps
+
+### One-time (per boot / per reset)
+
+- **PCIe link up** and BAR0 discovery/assignment.
+- **Enable Command.MEM + Command.BME** in PCIe config space.
+- **Admin queue init** (AQA/ASQ/ACQ) and controller enable (CC.EN).
+- **Create IO queues** (CQ1/SQ1) via admin commands.
+- **Discover NSID** (Identify Namespace List) if you do not want to hardcode it.
+
+### Per I/O (each read/write)
+
+- Write SQE into the current **SQ tail** slot.
+- Ring **SQ tail doorbell** (MMIO).
+- Poll **CQ** for completion (phase bit check).
+- Ring **CQ head doorbell** to acknowledge completion.
+- For reads: consume data from `rd_buf`.
+- For writes: provide data in `wr_buf` (optionally read back to verify).
