@@ -132,7 +132,7 @@ class BaseSoC(SoCMini):
         # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
 
         hostmem_base = 0x10000000
-        hostmem_size = 0x10000  # 64KB
+        hostmem_size = 0x8000  # 32KB
 
         def hostmem_decoder(a):
             return (a >= hostmem_base) & (a < (hostmem_base + hostmem_size))

@@ -128,10 +128,15 @@ litex_server --uart --uart-port=/dev/ttyUSB0
 litescope_cli -r usppciephy_req_source_valid
 
 # Then:
-./test_nvme.py --wait-link --info
+./test_cfg.py  --wait-link --bar0-assign --bar0-base 0xe0000000
 ./test_nvme.py --wait-link --identify \
   --hostmem-base 0x10000000 \
   --asq-addr      0x10000000 \
   --acq-addr      0x10001000 \
   --id-buf        0x10002000 \
   --cid 1
+
+./test_nvme.py --wait-link --identify --q-entries 16
+./test_nvme.py --wait-link --read --q-entries 16 --io-q-entries 4 --nsid 1 --slba 0 --nlb 1
+
+
