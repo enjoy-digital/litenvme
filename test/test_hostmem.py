@@ -111,12 +111,12 @@ class TestHostMemIdentifyRead(unittest.TestCase):
         # ----------------------------------------------------------------------------------
         def csr_write_dw(dw_index, value):
             # set address + data
-            yield dut._csr_adr.storage.eq(dw_index)
-            yield dut._csr_wdata.storage.eq(value)
+            yield dut.csr._csr_adr.storage.eq(dw_index)
+            yield dut.csr._csr_wdata.storage.eq(value)
             # pulse write strobe
-            yield dut._csr_we.storage.eq(1)
+            yield dut.csr._csr_we.storage.eq(1)
             yield
-            yield dut._csr_we.storage.eq(0)
+            yield dut.csr._csr_we.storage.eq(0)
             # allow RMW to complete
             for _ in range(4):
                 yield

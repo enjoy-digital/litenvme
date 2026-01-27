@@ -470,7 +470,7 @@ class BaseSoC(SoCMini):
         # 5) Hostmem completions output (CplD for MemRd) --------------------------
         add_stream("hostmem_source", hm_out)
 
-        add(self.hostmem.fsm)
+        add(self.hostmem.dma.fsm)
 
         # 6) Packetizer completion sink (what will go back to NVMe) ---------------
         #add_stream("packetizer_cmp_sink", cpl_sink)

@@ -135,19 +135,19 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
             return (abs_addr - base) // 4
 
         def csr_write_dw(dw_index, value):
-            yield dut._csr_adr.storage.eq(dw_index)
-            yield dut._csr_wdata.storage.eq(value)
-            yield dut._csr_we.storage.eq(1)
+            yield dut.csr._csr_adr.storage.eq(dw_index)
+            yield dut.csr._csr_wdata.storage.eq(value)
+            yield dut.csr._csr_we.storage.eq(1)
             yield
-            yield dut._csr_we.storage.eq(0)
+            yield dut.csr._csr_we.storage.eq(0)
             for _ in range(5):
                 yield
 
         def csr_read_dw(dw_index):
-            yield dut._csr_adr.storage.eq(dw_index)
+            yield dut.csr._csr_adr.storage.eq(dw_index)
             for _ in range(6):
                 yield
-            return (yield dut._csr_rdata.status)
+            return (yield dut.csr._csr_rdata.status)
 
         # ----------------------------------------------------------------------
         # TB helpers: NVMe-side MemRd / MemWr into hostmem responder.

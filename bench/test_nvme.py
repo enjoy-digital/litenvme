@@ -127,19 +127,19 @@ def cqe_ok(cqe):
 # HostMem CSR helpers -----------------------------------------------------------------------------
 
 def hostmem_set_adr(bus, dword_adr):
-    bus.regs.hostmem_csr_adr.write(dword_adr & 0xffffffff)
+    bus.regs.hostmem_csr_csr_adr.write(dword_adr & 0xffffffff)
 
 def hostmem_wr32(bus, addr, data, base=0x10000000):
     dword = (addr - base) >> 2
     hostmem_set_adr(bus, dword)
-    bus.regs.hostmem_csr_wdata.write(data & 0xffffffff)
-    bus.regs.hostmem_csr_we.write(1)
-    bus.regs.hostmem_csr_we.write(0)
+    bus.regs.hostmem_csr_csr_wdata.write(data & 0xffffffff)
+    bus.regs.hostmem_csr_csr_we.write(1)
+    bus.regs.hostmem_csr_csr_we.write(0)
 
 def hostmem_rd32(bus, addr, base=0x10000000):
     dword = (addr - base) >> 2
     hostmem_set_adr(bus, dword)
-    return bus.regs.hostmem_csr_rdata.read()
+    return bus.regs.hostmem_csr_csr_rdata.read()
 
 def hostmem_fill(bus, addr, length, value=0, base=0x10000000):
     for off in range(0, length, 4):
