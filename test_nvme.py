@@ -972,14 +972,23 @@ def main():
         print("NSID list (first 16 dwords):")
         print("  " + " ".join(f"{x:08x}" for x in ns_list))
 
+        # ns_list already contains the first 16 NSIDs (enough for most drives).
         active_nsid = 0
-        for x in hostmem_read_dwords(bus, ns_buf, 1024, base=hostmem_base):
+        for x in ns_list:
             if x != 0:
                 active_nsid = x
                 break
 
         if active_nsid == 0:
-            print("  ERROR: no active namespace reported.")
+            # If somehow the first 16 are all zero, scan a bit more but not 1024.
+            more = hostmem_read_dwords(bus, ns_buf + 16*4, 64, base=hostmem_base)  # +64 dwords
+            for x in more:
+                if x != 0:
+                    active_nsid = x
+                    break
+
+        if active_nsid == 0:
+            print("  ERROR: no active namespace reported in the first 80 entries.")
             bus.close()
             return
 
@@ -987,14 +996,21 @@ def main():
             print(f"Using NSID={active_nsid} instead of NSID={nsid}.")
             nsid = active_nsid
 
+
         # 5) Submit Read on SQ1.
         iosq_tail = 1
         iocq_head = 0
         iocq_phase = 1
 
+        print(f"Submitting READ: NSID={nsid} SLBA={slba} NLB={nlb} PRP1=0x{rd_buf:08x}")
+        print("READ SQE:", " ".join(f"{w:08x}" for w in cmd))
+
         cmd = nvme_cmd_read(cid=cid + 3, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
+        assert cmd[1] == (nsid & 0xffffffff)
         hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=0, cmd_dwords=cmd, hostmem_base=hostmem_base)
         nvme_ring_sq(bus, bar0, info["cap"], qid=1, tail=iosq_tail, timeout_ms=timeout_ms)
+
+        print("Polling CQ1 for READ completion...")
 
         cqe = poll_cq_phase(bus, cq_base=io_cq_addr, head=iocq_head, phase=iocq_phase,
                             timeout_s=2.0, hostmem_base=hostmem_base)
