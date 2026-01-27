@@ -1,13 +1,14 @@
-# test/test_hostmem.py
+# This file is part of LiteNVMe.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# Developed with LLM assistance.
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Unit test for LiteNVMeHostMemResponder:
 # - Preload ASQ[0] (64B) through CSR dword interface.
 # - Simulate NVMe issuing a MemRd TLP for that 64B.
-# - Check CplD beats returned at 1 beat/cycle after BRAM latency,
-#   and that backpressure does not deadlock.
-#
+# - Check CplD beats returned at 1 beat/cycle after BRAM latency.
 
-import sys
 import unittest
 import random
 
@@ -19,9 +20,7 @@ from litex.soc.interconnect import stream
 
 from litenvme.hostmem import LiteNVMeHostMemResponder
 
-# ------------------------------------------------------------------------------------------
 # Minimal "LitePCIe user port" layouts matching what LiteNVMeHostMemResponder uses.
-# ------------------------------------------------------------------------------------------
 
 def _req_layout(data_width, beat_bytes):
     return [
@@ -54,9 +53,7 @@ class _Port(Module):
         self.source = stream.Endpoint(_cmp_layout(data_width))
 
 
-# ------------------------------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------------------------------
 
 def _pack_dwords_to_int(dws):
     v = 0
@@ -68,9 +65,7 @@ def _unpack_int_to_dwords(v, n):
     return [((v >> (32*i)) & 0xFFFFFFFF) for i in range(n)]
 
 
-# ------------------------------------------------------------------------------------------
 # Test
-# ------------------------------------------------------------------------------------------
 
 class TestHostMemIdentifyRead(unittest.TestCase):
     def _run_case(self, data_width=128, stall_prob=0.3, seed=0xC001D00D):
@@ -103,12 +98,7 @@ class TestHostMemIdentifyRead(unittest.TestCase):
 
         got_cpl_beats = []
 
-        # ----------------------------------------------------------------------------------
         # CSR dword write helper.
-        # Your CSR RMW FSM is:
-        #   CSR_IDLE -> CSR_RMW_READ -> CSR_RMW_WRITE -> CSR_IDLE
-        # so we pulse _csr_we.storage for 1 cycle and wait a few cycles.
-        # ----------------------------------------------------------------------------------
         def csr_write_dw(dw_index, value):
             # set address + data
             yield dut.csr._csr_adr.storage.eq(dw_index)
@@ -121,9 +111,7 @@ class TestHostMemIdentifyRead(unittest.TestCase):
             for _ in range(4):
                 yield
 
-        # ----------------------------------------------------------------------------------
         # Stimulus: preload ASQ[0] then issue MemRd for 64B.
-        # ----------------------------------------------------------------------------------
         def stimulus():
             # Init inputs.
             yield port.sink.valid.eq(0)
@@ -138,19 +126,13 @@ class TestHostMemIdentifyRead(unittest.TestCase):
             yield port.sink.be.eq((1 << (data_width//8)) - 1)
             yield
 
-            # ----------------------------------------------------------------------
             # 1) Preload SQE (16 DW) into ASQ base through CSR dword interface.
-            # ----------------------------------------------------------------------
             asq_addr = base + 0x0000
             for i, dw in enumerate(sqe):
                 dw_addr = (asq_addr - base) // 4 + i
                 yield from csr_write_dw(dw_addr, dw)
 
-            # ----------------------------------------------------------------------
-            # 2) NVMe issues a MemRd for 64B from ASQ[0].
-            #    In LitePCIe user port, this is a single request beat (header),
-            #    with len in dwords.
-            # ----------------------------------------------------------------------
+            # 2) NVMe issues a MemRd for 64B from ASQ[0] (single request beat).
             yield port.sink.adr.eq(asq_addr)
             yield port.sink.we.eq(0)
             yield port.sink.len.eq(16)          # 16 dwords = 64B
@@ -170,13 +152,11 @@ class TestHostMemIdentifyRead(unittest.TestCase):
             yield port.sink.first.eq(0)
             yield port.sink.last.eq(0)
 
-            # Let completions run; bound runtime to avoid “stuck forever”.
+            # Let completions run; bound runtime to avoid stuck simulations.
             for _ in range(2000):
                 yield
 
-        # ----------------------------------------------------------------------------------
         # Completion monitor with random backpressure.
-        # ----------------------------------------------------------------------------------
         @passive
         def monitor():
             beats_expected = (16 + (beat_dwords - 1)) // beat_dwords  # ceil(16/beat_dwords)
@@ -206,9 +186,7 @@ class TestHostMemIdentifyRead(unittest.TestCase):
 
         run_simulation(dut, [stimulus(), monitor()], vcd_name=None)
 
-        # ----------------------------------------------------------------------------------
         # Checks
-        # ----------------------------------------------------------------------------------
         beats_expected = (16 + (beat_dwords - 1)) // beat_dwords
         self.assertEqual(
             len(got_cpl_beats), beats_expected,

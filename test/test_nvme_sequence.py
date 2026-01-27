@@ -1,4 +1,8 @@
-# test/test_nvme_sequence.py
+# This file is part of LiteNVMe.
+#
+# Copyright (c) 2026 Florent Kermarrec <florent@enjoy-digital.fr>
+# Developed with LLM assistance.
+# SPDX-License-Identifier: BSD-2-Clause
 #
 # Full-ish NVMe sequence simulation around LiteNVMeHostMemResponder:
 # - Host preloads ASQ[0] (SQE) through CSR dword interface.
@@ -15,15 +19,10 @@
 # - CSR debug port basic lane mapping works (CSR-only selftest), without relying on CSR
 #   to validate DMA-written beat-wide contents.
 #
-# IMPORTANT:
-# - The responder only supports ONE in-flight MemRd.
-#   So the TB must not issue a second MemRd until all completions of the first MemRd
-#   have been observed (drained).
+# IMPORTANT: The responder only supports one in-flight MemRd.
 
 import unittest
 import random
-from pathlib import Path
-import sys
 
 from migen import *
 from migen.sim import run_simulation, passive
@@ -32,9 +31,7 @@ from litex.soc.interconnect import stream
 
 from litenvme.hostmem import LiteNVMeHostMemResponder
 
-# ------------------------------------------------------------------------------------------
 # Minimal "LitePCIe user port" layouts matching what LiteNVMeHostMemResponder uses.
-# ------------------------------------------------------------------------------------------
 
 def _req_layout(data_width, beat_bytes):
     return [
@@ -66,9 +63,7 @@ class _Port(Module):
         self.source = stream.Endpoint(_cmp_layout(data_width))
 
 
-# ------------------------------------------------------------------------------------------
 # Helpers
-# ------------------------------------------------------------------------------------------
 
 def _pack_dwords_to_int(dws):
     v = 0
@@ -80,9 +75,7 @@ def _unpack_int_to_dwords(v, n):
     return [((v >> (32*i)) & 0xFFFFFFFF) for i in range(n)]
 
 
-# ------------------------------------------------------------------------------------------
 # Test
-# ------------------------------------------------------------------------------------------
 
 class TestNVMeSequenceHostMem(unittest.TestCase):
     def _run_case(self, data_width=128, stall_prob=0.25, seed=0xC001D00D, do_csr_rw_test=True):
@@ -104,9 +97,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
         beat_dwords = data_width // 32
         full_be     = (1 << beat_bytes) - 1
 
-        # ----------------------------------------------------------------------
         # Addresses inside the hostmem window.
-        # ----------------------------------------------------------------------
         asq_addr = base + 0x0000
         acq_addr = base + 0x1000
         id_buf   = base + 0x2000
@@ -115,9 +106,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
         identify_bytes  = 256
         identify_dwords = identify_bytes // 4
 
-        # ----------------------------------------------------------------------
         # Build Identify Controller SQE (16 DW = 64B).
-        # ----------------------------------------------------------------------
         cid = 0x0001
         sqe = [0] * 16
         sqe[0]  = (0x06 & 0xFF) | ((cid & 0xFFFF) << 16)  # opcode + CID
@@ -128,9 +117,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
         identify_payload = [((0xA5A50000 ^ i) & 0xFFFFFFFF) for i in range(identify_dwords)]
         cqe = [0xDEADBEEF, 0x00010001, 0x00000000, 0xABCD1234]
 
-        # ----------------------------------------------------------------------
-        # TB helpers: CSR dword R/W (debug access).
-        # ----------------------------------------------------------------------
+        # CSR dword R/W (debug access).
         def abs_to_dw_index(abs_addr):
             return (abs_addr - base) // 4
 
@@ -149,15 +136,8 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
                 yield
             return (yield dut.csr._csr_rdata.status)
 
-        # ----------------------------------------------------------------------
-        # TB helpers: NVMe-side MemRd / MemWr into hostmem responder.
-        #
-        # IMPORTANT: In Migen simulation, changing signals after a `yield` only
-        # takes effect on the next cycle. If you keep valid high across beats,
-        # you can accidentally "replay" the previous beat for one extra cycle.
-        #
-        # So we use 1-cycle valid pulses per beat (wait-ready, then pulse valid).
-        # ----------------------------------------------------------------------
+        # NVMe-side MemRd / MemWr into hostmem responder.
+        # Note: use 1-cycle valid pulses to avoid replay on signal updates.
 
         def _pulse_req_common(addr, we, len_dw, tag, req_id):
             yield port.sink.adr.eq(addr)
@@ -307,9 +287,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
                 cyc += 1
                 yield
 
-        # ----------------------------------------------------------------------
         # Optional CSR-only memory R/W self-test.
-        # ----------------------------------------------------------------------
         csr_rw_ok = []
 
         def csr_mem_rw_selftest():
@@ -328,9 +306,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
                     ok = False
             csr_rw_ok.append(ok)
 
-        # ----------------------------------------------------------------------
         # Wait for completions (with progress + snapshot on timeout).
-        # ----------------------------------------------------------------------
         def wait_cpl(tag, beats_expected, timeout_cycles=5000):
             last_n = -1
             for t in range(timeout_cycles):
@@ -353,9 +329,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
                 f"(got {len(cpl_by_tag.get(tag, []))})"
             )
 
-        # ----------------------------------------------------------------------
         # Main stimulus (single simulation run).
-        # ----------------------------------------------------------------------
         def stimulus():
             yield port.sink.valid.eq(0)
             yield port.sink.first.eq(0)
@@ -407,9 +381,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
             vcd_name="nvme_sequence.vcd"
         )
 
-        # ----------------------------------------------------------------------
         # Helpers to decode completions.
-        # ----------------------------------------------------------------------
         def reassemble_dwords(beats, n_dwords):
             out = []
             for b in beats:
@@ -437,9 +409,7 @@ class TestNVMeSequenceHostMem(unittest.TestCase):
             got = reassemble_dwords(beats, exp_len_dw)
             self.assertEqual(got, exp_payload_dws, msg=f"tag=0x{tag:02x}: payload mismatch")
 
-        # ----------------------------------------------------------------------
         # Checks.
-        # ----------------------------------------------------------------------
         check_cpl_stream(tag=0x5A, exp_req_id=0x1234, exp_len_dw=16,              exp_payload_dws=sqe)
         check_cpl_stream(tag=0x66, exp_req_id=0xCAFE, exp_len_dw=identify_dwords, exp_payload_dws=identify_payload)
         check_cpl_stream(tag=0x77, exp_req_id=0xBEEF, exp_len_dw=4,               exp_payload_dws=cqe)
