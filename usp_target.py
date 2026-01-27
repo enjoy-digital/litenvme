@@ -56,7 +56,7 @@ class BaseSoC(SoCMini):
         SoCMini.__init__(self, platform, sys_clk_freq, ident="LiteNVME Test SoC.", ident_version=True)
 
         # UARTBone ---------------------------------------------------------------------------------
-        self.add_uartbone()
+        self.add_uartbone(baudrate=2e6)
 
         # PCIe -------------------------------------------------------------------------------------
         pcie_pads = platform.request("pcie_x4")

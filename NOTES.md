@@ -117,7 +117,7 @@ litex_server --uart --uart-port=/dev/ttyUSB0
 ./usp_target.py --csr-csv=csr.csv --build --load
 
 # Server
-litex_server --uart --uart-port=/dev/ttyUSB0
+litex_server --uart --uart-port=/dev/ttyUSB1 --uart-baudrate=2e6
 
 # Bring-up
 ./test_cfg.py  --wait-link --enable-mem --enable-bme --disable-intx
@@ -138,5 +138,3 @@ litescope_cli -r usppciephy_req_source_valid
 
 ./test_nvme.py --wait-link --identify --q-entries 16
 ./test_nvme.py --wait-link --read --q-entries 16 --io-q-entries 4 --nsid 1 --slba 0 --nlb 1
-
-
