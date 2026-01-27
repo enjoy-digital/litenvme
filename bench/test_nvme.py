@@ -632,6 +632,17 @@ def nvme_cmd_read(cid, nsid, prp1_data, slba, nlb_minus1):
     cmd[12] = (nlb_minus1 & 0xffff)
     return cmd
 
+def nvme_cmd_write(cid, nsid, prp1_data, slba, nlb_minus1):
+    cmd = [0]*16
+    cmd[0]  = (0x01 & 0xff) | ((cid & 0xffff) << 16)  # Write
+    cmd[1]  = nsid & 0xffffffff                       # NSID is DW1
+    cmd[6]  = prp1_data & 0xffffffff
+    cmd[7]  = (prp1_data >> 32) & 0xffffffff
+    cmd[10] = slba & 0xffffffff
+    cmd[11] = (slba >> 32) & 0xffffffff
+    cmd[12] = (nlb_minus1 & 0xffff)
+    return cmd
+
 def nvme_cmd_identify_namespace(cid, nsid, prp1):
     # Identify, CNS=0, NSID=nsid
     cmd = [0]*16
@@ -728,9 +739,12 @@ def main():
     parser.add_argument("--identify", action="store_true", help="Send Admin Identify (controller) via BRAM hostmem.")
 
     parser.add_argument("--read", action="store_true", help="Create IO queues (CQ1/SQ1) and do a first Read.")
+    parser.add_argument("--write", action="store_true", help="Create IO queues (CQ1/SQ1) and do a first Write.")
     parser.add_argument("--io-cq-addr", default="0x10003000", help="IO CQ1 base (4K aligned).")
     parser.add_argument("--io-sq-addr", default="0x10004000", help="IO SQ1 base (4K aligned).")
     parser.add_argument("--rd-buf",     default="0x10005000", help="Read buffer PRP1 (4K aligned).")
+    parser.add_argument("--wr-buf",     default="0x10006000", help="Write buffer PRP1 (4K aligned).")
+    parser.add_argument("--write-verify", action="store_true", help="Read back to verify write data.")
     parser.add_argument("--nsid",       default="1", help="Namespace ID.")
     parser.add_argument("--slba",       default="0", help="Start LBA.")
     parser.add_argument("--nlb",        default="1", help="Number of LBAs (start with 1).")
@@ -761,7 +775,7 @@ def main():
             raise RuntimeError("PCIe link did not come up.")
         print("Link up.")
 
-    if not (args.info or args.dump or args.disable or args.mmio_check or args.doorbells or args.identify or args.read):
+    if not (args.info or args.dump or args.disable or args.mmio_check or args.doorbells or args.identify or args.read or args.write):
         args.info = True
         args.mmio_check = True
 
@@ -830,10 +844,11 @@ def main():
         id_info = decode_identify_controller_from_dwords(id_dws)
         pretty_print_identify_controller(id_info)
 
-    if args.read:
+    if args.read or args.write:
         io_cq_addr = int(args.io_cq_addr, 0)
         io_sq_addr = int(args.io_sq_addr, 0)
         rd_buf     = int(args.rd_buf, 0)
+        wr_buf     = int(args.wr_buf, 0)
         nsid       = int(args.nsid, 0)
         slba       = int(args.slba, 0)
         nlb        = int(args.nlb, 0)
@@ -848,13 +863,14 @@ def main():
             print(f"WARNING: Requested {io_q_entries} entries exceeds CAP.MQES+1={max_entries}. Clamping.")
             io_q_entries = max_entries
 
-        for name, a in [("io_cq_addr", io_cq_addr), ("io_sq_addr", io_sq_addr), ("rd_buf", rd_buf)]:
+        for name, a in [("io_cq_addr", io_cq_addr), ("io_sq_addr", io_sq_addr), ("rd_buf", rd_buf), ("wr_buf", wr_buf)]:
             if (a & 0xfff) != 0:
                 raise ValueError(f"{name} must be 4K-aligned, got 0x{a:x}")
 
         hostmem_fill(bus, io_cq_addr, 0x1000, value=0, base=hostmem_base)
         hostmem_fill(bus, io_sq_addr, 0x1000, value=0, base=hostmem_base)
         hostmem_fill(bus, rd_buf,     0x1000, value=0, base=hostmem_base)  # Fixed: was 0x200, should be page size minimum
+        hostmem_fill(bus, wr_buf,     0x1000, value=0, base=hostmem_base)
 
         # Scratch 4K page for Identify NS list.
         ns_buf = hostmem_base + 0x6000
@@ -995,63 +1011,98 @@ def main():
             nsid = active_nsid
 
 
-        # 5) Submit Read on SQ1.
-        iosq_tail = 1
-        iocq_head = 0
+        # 5) Submit IO commands on SQ1.
+        iosq_tail  = 0
+        iocq_head  = 0
         iocq_phase = 1
 
+        def io_submit(cmd_dwords, timeout_s=2.0):
+            nonlocal iosq_tail, iocq_head, iocq_phase
 
-        # Prefill destination buffer with a non-zero pattern so we can tell if the SSD wrote anything.
-        pat = 0xA5A5A5A5
-        hostmem_fill(bus, rd_buf, 0x1000, value=pat, base=hostmem_base)
+            hostmem_fill(bus, io_cq_addr + iocq_head*16, 16, value=0, base=hostmem_base)
+            hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=iosq_tail, cmd_dwords=cmd_dwords, hostmem_base=hostmem_base)
 
-        # Snapshot a small prefix (64 dwords = 256B) before the read.
-        before = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
+            tail_next = (iosq_tail + 1) % io_q_entries
+            nvme_ring_sq(bus, bar0, info["cap"], qid=1, tail=tail_next, timeout_ms=timeout_ms)
+            iosq_tail = tail_next
 
-        print(f"Submitting READ: NSID={nsid} SLBA={slba} NLB={nlb} PRP1=0x{rd_buf:08x}")
-        read_cmd = nvme_cmd_read(cid=cid + 3, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
-        print("READ SQE:", " ".join(f"{w:08x}" for w in read_cmd))
-        assert (read_cmd[6] == (rd_buf & 0xffffffff))
-        hostmem_wr_cmd(bus, asq_base=io_sq_addr, slot=0, cmd_dwords=read_cmd, hostmem_base=hostmem_base)
-        nvme_ring_sq(bus, bar0, info["cap"], qid=1, tail=iosq_tail, timeout_ms=timeout_ms)
+            cqe = poll_cq_phase(bus, cq_base=io_cq_addr, head=iocq_head, phase=iocq_phase,
+                                timeout_s=timeout_s, hostmem_base=hostmem_base)
+            if cqe is None:
+                return None
 
-        print("Polling CQ1 for READ completion...")
+            iocq_head = (iocq_head + 1) % io_q_entries
+            if iocq_head == 0:
+                iocq_phase ^= 1
+            nvme_ring_cq(bus, bar0, info["cap"], qid=1, head=iocq_head, timeout_ms=timeout_ms)
+            return cqe
 
-        cqe = poll_cq_phase(bus, cq_base=io_cq_addr, head=iocq_head, phase=iocq_phase,
-                            timeout_s=2.0, hostmem_base=hostmem_base)
+        if args.write:
+            pat = 0xA5A5A5A5
+            hostmem_fill(bus, wr_buf, 0x1000, value=pat, base=hostmem_base)
 
-        # Snapshot after the read and report what changed.
-        after = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
+            print(f"Submitting WRITE: NSID={nsid} SLBA={slba} NLB={nlb} PRP1=0x{wr_buf:08x}")
+            write_cmd = nvme_cmd_write(cid=cid + 3, nsid=nsid, prp1_data=wr_buf, slba=slba, nlb_minus1=nlb-1)
+            print("WRITE SQE:", " ".join(f"{w:08x}" for w in write_cmd))
 
-        changed = sum(1 for i in range(64) if after[i] != before[i])
-        still_pat = sum(1 for i in range(64) if after[i] == pat)
-        all_zero  = sum(1 for i in range(64) if after[i] == 0)
+            cqe = io_submit(write_cmd, timeout_s=2.0)
+            print("Write CQ1:")
+            if cqe is None:
+                print("  timeout")
+                bus.close()
+                return
+            pretty_print_cqe(cqe, name="CQ1")
+            if not cqe_ok(cqe):
+                print("  ERROR: Write failed.")
+                bus.close()
+                return
 
-        print(f"Read buffer changed dwords: {changed}/64")
-        print(f"After read: {still_pat}/64 still pattern, {all_zero}/64 are zero")
+        if args.read or args.write_verify:
+            # Prefill destination buffer with a non-zero pattern so we can tell if the SSD wrote anything.
+            pat = 0xA5A5A5A5
+            hostmem_fill(bus, rd_buf, 0x1000, value=pat, base=hostmem_base)
 
-        print("Read CQ1:")
-        if cqe is None:
-            print("  timeout")
-            bus.close()
-            return
-        pretty_print_cqe(cqe, name="CQ1")
-        if not cqe_ok(cqe):
-            print("  ERROR: Read failed.")
-            bus.close()
-            return
+            # Snapshot a small prefix (64 dwords = 256B) before the read.
+            before = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
 
-        iocq_head = (iocq_head + 1) % io_q_entries
-        if iocq_head == 0:
-            iocq_phase ^= 1
-        nvme_ring_cq(bus, bar0, info["cap"], qid=1, head=iocq_head, timeout_ms=timeout_ms)
+            print(f"Submitting READ: NSID={nsid} SLBA={slba} NLB={nlb} PRP1=0x{rd_buf:08x}")
+            read_cmd = nvme_cmd_read(cid=cid + 4, nsid=nsid, prp1_data=rd_buf, slba=slba, nlb_minus1=nlb-1)
+            print("READ SQE:", " ".join(f"{w:08x}" for w in read_cmd))
 
-        print("Read buffer (first 0x200):")
-        hostmem_dump(bus, addr=rd_buf, length=0x200, base=hostmem_base)
+            cqe = io_submit(read_cmd, timeout_s=2.0)
+            print("Read CQ1:")
+            if cqe is None:
+                print("  timeout")
+                bus.close()
+                return
+            pretty_print_cqe(cqe, name="CQ1")
+            if not cqe_ok(cqe):
+                print("  ERROR: Read failed.")
+                bus.close()
+                return
 
-        sig = hostmem_rd32(bus, rd_buf + 0x1FC, base=hostmem_base)
-        sig16 = (sig >> 16) & 0xffff
-        print(f"MBR sig16: 0x{sig16:04x} (expect aa55)")
+            # Snapshot after the read and report what changed.
+            after = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
+
+            changed = sum(1 for i in range(64) if after[i] != before[i])
+            still_pat = sum(1 for i in range(64) if after[i] == pat)
+            all_zero  = sum(1 for i in range(64) if after[i] == 0)
+
+            print(f"Read buffer changed dwords: {changed}/64")
+            print(f"After read: {still_pat}/64 still pattern, {all_zero}/64 are zero")
+
+            print("Read buffer (first 0x200):")
+            hostmem_dump(bus, addr=rd_buf, length=0x200, base=hostmem_base)
+
+            sig = hostmem_rd32(bus, rd_buf + 0x1FC, base=hostmem_base)
+            sig16 = (sig >> 16) & 0xffff
+            print(f"MBR sig16: 0x{sig16:04x} (expect aa55)")
+
+            if args.write and args.write_verify:
+                wr_before = hostmem_read_dwords(bus, wr_buf, 64, base=hostmem_base)
+                wr_after  = hostmem_read_dwords(bus, rd_buf, 64, base=hostmem_base)
+                mism = sum(1 for i in range(64) if wr_before[i] != wr_after[i])
+                print(f"Write verify: mismatched dwords {mism}/64")
 
 
     bus.close()

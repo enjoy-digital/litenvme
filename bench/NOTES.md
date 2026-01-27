@@ -26,7 +26,7 @@ litex_server --uart --uart-port=/dev/ttyUSBX --uart-baudrate=2e6
 # Dump first 0x100 bytes of BAR0
 ./test_bar0.py --bar0 0xe0000000 --dump 0x100
 
-## 4) NVMe identify + read
+## 4) NVMe identify + read/write
 # Identify
 ./test_nvme.py --wait-link --identify \
   --hostmem-base 0x10000000 \
@@ -37,6 +37,22 @@ litex_server --uart --uart-port=/dev/ttyUSBX --uart-baudrate=2e6
 
 # Read (example)
 ./test_nvme.py --wait-link --read \
+  --q-entries 16 \
+  --io-q-entries 4 \
+  --nsid 1 \
+  --slba 0 \
+  --nlb 1
+
+# Write (example)
+./test_nvme.py --wait-link --write \
+  --q-entries 16 \
+  --io-q-entries 4 \
+  --nsid 1 \
+  --slba 0 \
+  --nlb 1
+
+# Write + verify (read-back)
+./test_nvme.py --wait-link --write --write-verify \
   --q-entries 16 \
   --io-q-entries 4 \
   --nsid 1 \

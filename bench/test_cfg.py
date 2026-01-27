@@ -55,7 +55,7 @@ def cfg_rd0(bus, b, d, f, reg_dword, ext=0, timeout_ms=100):
         if time.time() > deadline:
             raise TimeoutError("CFG read timeout (done=0).")
 
-def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100):
+def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100, allow_err=False):
     bus.regs.cfg_cfg_bdf.write(cfg_bdf_pack(b, d, f, reg_dword, ext))
     bus.regs.cfg_cfg_wdata.write(wdata & 0xffffffff)
     bus.regs.cfg_cfg_ctrl.write((1 << CFG_CTRL_START) | (1 << CFG_CTRL_WE))
@@ -67,7 +67,7 @@ def cfg_wr0(bus, b, d, f, reg_dword, wdata, ext=0, timeout_ms=100):
         done = (stat >> CFG_STAT_DONE) & 1
         err  = (stat >> CFG_STAT_ERR) & 1
         if done:
-            if err:
+            if err and not allow_err:
                 raise RuntimeError("CFG write failed (err=1).")
             return
         if time.time() > deadline:
@@ -234,10 +234,10 @@ def size_and_assign_bar0(bus, b, d, f, base_addr, dry_run=False):
         return 0, is_64
 
     # Size probe.
-    cfg_wr0(bus, b, d, f, 4, 0xffffffff)
+    cfg_wr0(bus, b, d, f, 4, 0xffffffff, allow_err=True)
     bar0_m = cfg_rd0(bus, b, d, f, 4)
     if is_64:
-        cfg_wr0(bus, b, d, f, 5, 0xffffffff)
+        cfg_wr0(bus, b, d, f, 5, 0xffffffff, allow_err=True)
         bar1_m = cfg_rd0(bus, b, d, f, 5)
         mask = ((bar1_m << 32) | (bar0_m & 0xfffffff0)) & 0xffffffffffffffff
     else:
@@ -253,13 +253,13 @@ def size_and_assign_bar0(bus, b, d, f, base_addr, dry_run=False):
         raise RuntimeError("Base address not aligned to BAR size.")
 
     if is_64:
-        cfg_wr0(bus, b, d, f, 4, (base_addr & 0xffffffff) | (bar0 & 0xf))
-        cfg_wr0(bus, b, d, f, 5, (base_addr >> 32) & 0xffffffff)
+        cfg_wr0(bus, b, d, f, 4, (base_addr & 0xffffffff) | (bar0 & 0xf), allow_err=True)
+        cfg_wr0(bus, b, d, f, 5, (base_addr >> 32) & 0xffffffff, allow_err=True)
         rb0 = cfg_rd0(bus, b, d, f, 4)
         rb1 = cfg_rd0(bus, b, d, f, 5)
         print(f"BAR0/BAR1    = 0x{rb0:08x} / 0x{rb1:08x}")
     else:
-        cfg_wr0(bus, b, d, f, 4, (base_addr & 0xffffffff) | (bar0 & 0xf))
+        cfg_wr0(bus, b, d, f, 4, (base_addr & 0xffffffff) | (bar0 & 0xf), allow_err=True)
         rb0 = cfg_rd0(bus, b, d, f, 4)
         print(f"BAR0         = 0x{rb0:08x}")
 
