@@ -25,10 +25,10 @@ DMA to/from system memory, software integration). Development is done through
 incremental, verifiable milestones to validate PCIe/NVMe behavior early and keep
 the final core robust.
 
-Today, LiteNVMe uses a bring-up oriented setup (LitePCIe RootPort + a small BRAM
-“host memory window”) to validate the protocol and data movement end-to-end on
-real hardware before moving to the final architecture (AXI/Wishbone/DDR backend,
-full DMA, higher throughput).
+Today, LiteNVMe uses a bring-up oriented setup (LitePCIe RootPort + a small
+AXI-mapped BRAM “host memory window”) to validate the protocol and data movement
+end-to-end on real hardware before moving to the final architecture (AXI/DDR
+backend, full DMA, higher throughput).
 
 [> Current status (WIP)
 -----------------------
@@ -46,11 +46,11 @@ Hardware validated (end-to-end with a real NVMe SSD):
 Bring-up components currently used:
 
 * LitePCIe in RootPort mode.
-* BRAM-backed host memory responder (stands in for system DRAM during bring-up).
+* AXI-mapped BRAM host memory responder (stands in for system DRAM during bring-up).
 * UARTBone-driven test scripts for reproducible sequences and debug.
 
-[> Validation steps
--------------------
+[> Validation steps (bring-up)
+-------------------------------
 
 1. Enable PCIe MEM/BME and assign/discover BAR0.
 2. Read NVMe CAP/VS and sanity-check controller presence.
@@ -71,7 +71,7 @@ Bring-up components currently used:
 [> Possible improvements
 ------------------------
 
-* Replace BRAM host window with real memory backend (AXI/Wishbone/DDR).
+* Replace BRAM host window with real system memory backend (AXI/DDR).
 * Add a proper DMA path (PRP/SGL) and scale performance (multi-queue, deeper rings).
 * Make MMIO/CFG accessors fully robust (sticky completion/clear semantics).
 * Extend command coverage (Identify Namespace, larger reads/writes, admin log pages, etc.).
@@ -97,7 +97,7 @@ and NVMe request/response sequencing in simulation.
 To run all unit tests:
 
 ```sh
-$ ./setup.py test
+$ pytest -v
 ```
 
 Or run individually:
