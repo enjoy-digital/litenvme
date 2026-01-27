@@ -30,67 +30,6 @@ def _get_dat(ep):
         return ep.data
     raise ValueError("Endpoint has no dat/data field.")
 
-# Backend Interface --------------------------------------------------------------------------------
-
-class LiteNVMeHostMemBackend(LiteXModule):
-    """Beat-wide Host Memory backend interface.
-
-    Addressing is in "beat words" (not bytes). A beat is `data_width` wide.
-
-    Provides:
-      - Write: (w_adr, w_data, w_en).
-      - Read:  (r_adr, r_en) with synchronous return (r_data).
-    """
-    def __init__(self, data_width):
-        self.data_width = data_width
-
-        # Write (1 beat).
-        self.w_adr   = Signal(32)
-        self.w_data  = Signal(data_width)
-        self.w_en    = Signal()
-
-        # Read issue (1 beat) + synchronous data return.
-        self.r_adr   = Signal(32)
-        self.r_en    = Signal()
-        self.r_data  = Signal(data_width)
-
-# SRAM Backend -------------------------------------------------------------------------------------
-
-class LiteNVMeHostMemBackendSRAM(LiteNVMeHostMemBackend):
-    """SRAM Host Memory backend.
-
-    Simple dual-port RAM:
-      - Separate write/read ports.
-      - Read is synchronous (1-cycle latency), READ_FIRST mode.
-    """
-    def __init__(self, size, data_width):
-        super().__init__(data_width=data_width)
-
-        beat_bytes  = data_width // 8
-        assert (size % beat_bytes) == 0
-        depth_words = size // beat_bytes
-
-        mem = Memory(data_width, depth_words)
-        rp  = mem.get_port(has_re=True, mode=READ_FIRST)
-        wp  = mem.get_port(write_capable=True)
-        self.specials += mem, rp, wp
-
-        # # #
-
-        self.comb += [
-            # Write port.
-            wp.adr.eq(self.w_adr),
-            wp.dat_w.eq(self.w_data),
-            wp.we.eq(self.w_en),
-
-            # Read port.
-            rp.adr.eq(self.r_adr),
-            rp.re.eq(self.r_en),
-
-            # Registered output from Memory port.
-            self.r_data.eq(rp.dat_r),
-        ]
-
 # AXI SRAM Backend ---------------------------------------------------------------------------------
 
 class LiteNVMeHostMemAXIRAM(LiteXModule):
