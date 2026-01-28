@@ -51,8 +51,8 @@ class _CRG(LiteXModule):
 
 # BaseSoC ------------------------------------------------------------------------------------------
 
-class BaseSoC(SoCMini):
-    def __init__(self, sys_clk_freq=int(125e6), **kwargs):
+class BaseSoC(SoCCore):
+    def __init__(self, sys_clk_freq=int(125e6), with_cpu=False, cpu_firmware=None, **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = Platform()
 
@@ -60,10 +60,21 @@ class BaseSoC(SoCMini):
         self.crg = _CRG(platform, sys_clk_freq)
 
         # SoCCore ----------------------------------------------------------------------------------
-        SoCMini.__init__(self, platform, sys_clk_freq, ident="LiteNVME Test SoC.", ident_version=True)
+        soc_kwargs = dict(ident="LiteNVME Test SoC.", ident_version=True, cpu_type=None, uart_name="stub")
+        if with_cpu:
+            soc_kwargs.update(dict(
+                cpu_type            = "vexriscv",
+                cpu_variant         = "minimal",
+                integrated_rom_size = 0x8000,
+                uart_name           = "serial",
+            ))
+            if cpu_firmware is not None:
+                soc_kwargs["integrated_rom_init"] = cpu_firmware
+        SoCCore.__init__(self, platform, sys_clk_freq, **soc_kwargs)
 
         # UARTBone ---------------------------------------------------------------------------------
-        self.add_uartbone(baudrate=2e6)
+        if not with_cpu:
+            self.add_uartbone(uart_name="serial", baudrate=2e6)
 
         # PCIe -------------------------------------------------------------------------------------
         pcie_pads = platform.request("pcie_x4")
@@ -270,16 +281,35 @@ def main():
     from litex.build.parser import LiteXArgumentParser
     parser = LiteXArgumentParser(platform=Platform, description="LiteNVME Test SoC.")
     parser.add_target_argument("--sys-clk-freq", default=125e6, type=float, help="System clock frequency.")
+    parser.add_argument("--with-cpu", action="store_true", help="Enable VexRiscv soft CPU.")
+    parser.add_argument("--cpu-firmware", default=None, help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
     parser.add_argument("--litescope-probe", default="pcie", choices=["none", "pcie"], help="Select LiteScope probe set.")
     args = parser.parse_args()
 
-    soc = BaseSoC(sys_clk_freq=args.sys_clk_freq, **parser.soc_argdict)
-    if args.litescope_probe == "pcie":
-        soc.add_pcie_probe()
+    def build_soc(cpu_firmware=None):
+        soc = BaseSoC(sys_clk_freq=args.sys_clk_freq, with_cpu=args.with_cpu, cpu_firmware=cpu_firmware, **parser.soc_argdict)
+        if args.litescope_probe == "pcie":
+            soc.add_pcie_probe()
+        builder = Builder(soc, **parser.builder_argdict)
+        if args.build:
+            builder.build(**parser.toolchain_argdict)
+        return soc, builder
 
-    builder = Builder(soc, **parser.builder_argdict)
-    if args.build:
-        builder.build(**parser.toolchain_argdict)
+    if args.with_cpu and args.cpu_firmware == "auto":
+        # First build to generate software headers.
+        soc, builder = build_soc(cpu_firmware=None)
+
+        # Compile firmware against generated headers.
+        fw_dir = os.path.join(os.path.dirname(__file__), "firmware")
+        build_dir = builder.output_dir
+        os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} clean all")
+
+        # Second build with integrated ROM init.
+        fw_bin = os.path.join(fw_dir, "firmware.bin")
+        soc, builder = build_soc(cpu_firmware=fw_bin)
+    else:
+        soc, builder = build_soc(cpu_firmware=args.cpu_firmware)
+
     if args.load:
         prog = soc.platform.create_programmer()
         prog.load_bitstream(builder.get_bitstream_filename(mode="sram"))
