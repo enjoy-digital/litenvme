@@ -52,7 +52,7 @@ class _CRG(LiteXModule):
 # BaseSoC ------------------------------------------------------------------------------------------
 
 class BaseSoC(SoCCore):
-    def __init__(self, sys_clk_freq=int(125e6), with_cpu=False, cpu_firmware=None, cpu_boot="rom", **kwargs):
+    def __init__(self, sys_clk_freq=int(125e6), with_cpu=False, cpu_firmware=None, cpu_boot="bios", **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = Platform()
 
@@ -65,7 +65,7 @@ class BaseSoC(SoCCore):
             soc_kwargs.update(dict(
                 cpu_type      = "vexriscv",
                 uart_name     = "serial",
-                uart_baudrate = 2e6,
+                uart_baudrate = 115200,
             ))
             if cpu_boot == "bios":
                 soc_kwargs.update(dict(
@@ -290,7 +290,7 @@ def main():
     parser = LiteXArgumentParser(platform=Platform, description="LiteNVME Test SoC.")
     parser.add_argument("--sys-clk-freq",    default=125e6,       type=float,          help="System clock frequency.")
     parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
-    parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"],  help="CPU boot mode: ROM firmware or LiteX BIOS.")
+    parser.add_argument("--cpu-boot",        default="bios", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
     parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
     args = parser.parse_args()
@@ -307,7 +307,12 @@ def main():
             soc.add_pcie_probe()
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
-            builder.build(**parser.toolchain_argdict)
+            toolchain_kwargs = dict(parser.toolchain_argdict)
+            if getattr(args, "no_compile_gateware", False):
+                toolchain_kwargs["run"] = False
+            else:
+                toolchain_kwargs.setdefault("run", cpu_firmware is not None)
+            builder.build(**toolchain_kwargs)
         return soc, builder
 
     if args.with_cpu and args.cpu_firmware == "auto":

@@ -1,5 +1,5 @@
 BUILD_DIR?=../build/usp_platform
-BOOT?=rom
+BOOT?=bios
 
 include $(BUILD_DIR)/software/include/generated/variables.mak
 include $(SOC_DIRECTORY)/software/common.mak
