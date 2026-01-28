@@ -122,6 +122,7 @@ static void help(void)
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
 	puts("bar0_info          - Read NVMe CAP/VS/CSTS at BAR0");
 	puts("nvme_identify [cid]- Run Admin Identify (controller) and decode");
+	puts("nvme_identify_auto [bar0] [cid] - Auto BAR0 assign + enable MEM/BME/INTx off + Identify");
 	puts("todo               - Placeholder for NVMe bring-up");
 }
 
@@ -153,7 +154,7 @@ static void status_cmd(void)
 /* MMIO Helpers                                                          */
 /*-----------------------------------------------------------------------*/
 
-static uint32_t bar0_base = 0;
+static uint64_t bar0_base = 0;
 
 static void mmio_set_addr(uint64_t addr)
 {
@@ -221,18 +222,18 @@ static int mmio_wr64(uint64_t addr, uint64_t val)
 static void bar0_cmd(char *str)
 {
 	if (str == NULL || strlen(str) == 0) {
-		printf("bar0 = 0x%08" PRIx32 "\n", bar0_base);
+		printf("bar0 = 0x%016" PRIx64 "\n", bar0_base);
 		return;
 	}
-	bar0_base = (uint32_t)strtoul(str, NULL, 0);
-	printf("bar0 = 0x%08" PRIx32 "\n", bar0_base);
+	bar0_base = strtoull(str, NULL, 0);
+	printf("bar0 = 0x%016" PRIx64 "\n", bar0_base);
 }
 
 static void bar0_rd_cmd(char *str)
 {
 	uint32_t off = (uint32_t)strtoul(str, NULL, 0);
 	uint32_t v = 0;
-	if (mmio_rd32((uint64_t)bar0_base + off, &v))
+	if (mmio_rd32(bar0_base + off, &v))
 		printf("ERR\n");
 	else
 		printf("0x%08" PRIx32 "\n", v);
@@ -244,7 +245,7 @@ static void bar0_wr_cmd(char *str)
 	char *b = get_token(&str);
 	uint32_t off = (uint32_t)strtoul(a, NULL, 0);
 	uint32_t v   = (uint32_t)strtoul(b, NULL, 0);
-	if (mmio_wr32((uint64_t)bar0_base + off, v))
+	if (mmio_wr32(bar0_base + off, v))
 		printf("ERR\n");
 }
 
@@ -258,7 +259,7 @@ static void bar0_dump_cmd(char *str)
 		stride = 4;
 	for (uint32_t off = 0; off < len; off += stride) {
 		uint32_t v = 0;
-		mmio_rd32((uint64_t)bar0_base + off, &v);
+		mmio_rd32(bar0_base + off, &v);
 		printf("0x%08" PRIx32 ": 0x%08" PRIx32 "\n", off, v);
 	}
 }
@@ -303,10 +304,10 @@ static void mmio_dump_cmd(char *str)
 static void bar0_info_cmd(void)
 {
 	uint32_t cap0 = 0, cap1 = 0, vs = 0, csts = 0;
-	mmio_rd32((uint64_t)bar0_base + 0x0000, &cap0);
-	mmio_rd32((uint64_t)bar0_base + 0x0004, &cap1);
-	mmio_rd32((uint64_t)bar0_base + 0x0008, &vs);
-	mmio_rd32((uint64_t)bar0_base + 0x001c, &csts);
+	mmio_rd32(bar0_base + 0x0000, &cap0);
+	mmio_rd32(bar0_base + 0x0004, &cap1);
+	mmio_rd32(bar0_base + 0x0008, &vs);
+	mmio_rd32(bar0_base + 0x001c, &csts);
 	printf("CAP  = 0x%08" PRIx32 "%08" PRIx32 "\n", cap1, cap0);
 	printf("VS   = 0x%08" PRIx32 "\n", vs);
 	printf("CSTS = 0x%08" PRIx32 "\n", csts);
@@ -431,30 +432,30 @@ static void cfg_wr_cmd(char *str)
 		printf("ERR\n");
 }
 
-static void cmd_enable_cmd(void)
+static void cmd_set_bits(int mem, int bme, int intdis)
 {
 	uint32_t v = 0;
 	if (cfg_rd32(1, &v)) {
 		printf("ERR\n");
 		return;
 	}
-	v |= (1 << 1); /* MEM */
-	v |= (1 << 2); /* BME */
+	uint32_t cmd = v & 0xffffu;
+	if (mem >= 0)    cmd = (cmd & ~(1u << 1))  | ((mem ? 1u : 0u) << 1);
+	if (bme >= 0)    cmd = (cmd & ~(1u << 2))  | ((bme ? 1u : 0u) << 2);
+	if (intdis >= 0) cmd = (cmd & ~(1u << 10)) | ((intdis ? 1u : 0u) << 10);
+	v = (v & 0xffff0000u) | (cmd & 0xffffu);
 	if (cfg_wr32(1, v))
 		printf("ERR\n");
 }
 
+static void cmd_enable_cmd(void)
+{
+	cmd_set_bits(1, 1, -1);
+}
+
 static void cmd_disable_cmd(void)
 {
-	uint32_t v = 0;
-	if (cfg_rd32(1, &v)) {
-		printf("ERR\n");
-		return;
-	}
-	v &= ~(1 << 1);
-	v &= ~(1 << 2);
-	if (cfg_wr32(1, v))
-		printf("ERR\n");
+	cmd_set_bits(0, 0, -1);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -487,6 +488,70 @@ static uint32_t cc_make_en(uint32_t iocqes, uint32_t iosqes, uint32_t mps)
 	cc |= (iosqes & 0xfu) << 16;
 	cc |= (iocqes & 0xfu) << 20;
 	return cc;
+}
+
+static uint64_t bar_size_from_mask(uint64_t mask)
+{
+	return (~mask + 1u) & 0xffffffffffffffffull;
+}
+
+static int nvme_bar0_assign(uint64_t base_addr)
+{
+	uint32_t bar0 = 0, bar1 = 0;
+	if (cfg_rd32(4, &bar0)) {
+		puts("ERR: CFG read BAR0 failed.");
+		return 1;
+	}
+	if (bar0 & 1) {
+		puts("ERR: BAR0 is I/O, unexpected for NVMe.");
+		return 1;
+	}
+	uint32_t bar_type = (bar0 >> 1) & 0x3;
+	int is_64 = (bar_type == 0x2);
+
+	printf("BAR0 orig    = 0x%08" PRIx32 " (64b=%d)\n", bar0, is_64);
+
+	cfg_wr32(4, 0xffffffff);
+	if (cfg_rd32(4, &bar0)) {
+		puts("ERR: CFG read BAR0 mask failed.");
+		return 1;
+	}
+	uint64_t mask = (uint64_t)(bar0 & 0xfffffff0u);
+	if (is_64) {
+		cfg_wr32(5, 0xffffffff);
+		if (cfg_rd32(5, &bar1)) {
+			puts("ERR: CFG read BAR1 mask failed.");
+			return 1;
+		}
+		mask |= ((uint64_t)bar1 << 32);
+	}
+
+	uint64_t size = bar_size_from_mask(mask);
+	printf("BAR0 size    = 0x%llx\n", (unsigned long long)size);
+
+	if (size == 0 || (size & (size - 1)) != 0) {
+		puts("ERR: BAR size invalid.");
+		return 1;
+	}
+	if (base_addr & (size - 1)) {
+		puts("ERR: BAR0 base not aligned to size.");
+		return 1;
+	}
+
+	cfg_wr32(4, (uint32_t)(base_addr & 0xffffffffu) | (bar0 & 0xfu));
+	if (is_64)
+		cfg_wr32(5, (uint32_t)((base_addr >> 32) & 0xffffffffu));
+
+	cfg_rd32(4, &bar0);
+	if (is_64) {
+		cfg_rd32(5, &bar1);
+		printf("BAR0/BAR1    = 0x%08" PRIx32 " / 0x%08" PRIx32 "\n", bar0, bar1);
+	} else {
+		printf("BAR0         = 0x%08" PRIx32 "\n", bar0);
+	}
+
+	bar0_base = base_addr;
+	return 0;
 }
 
 static int nvme_wait_rdy(uint32_t want_rdy, uint32_t loops)
@@ -575,13 +640,8 @@ static void identify_decode(const uint32_t *dws, uint32_t dword_count)
 	printf("  OAES     : 0x%08" PRIx32 "\n", oaes);
 }
 
-static void nvme_identify_cmd(char *str)
+static void nvme_identify_run(uint16_t cid)
 {
-	uint16_t cid = 1;
-	if (str && strlen(str)) {
-		cid = (uint16_t)strtoul(str, NULL, 0);
-	}
-
 	if (bar0_base == 0) {
 		puts("ERR: BAR0 base is 0. Use bar0 <addr> first.");
 		return;
@@ -642,6 +702,34 @@ static void nvme_identify_cmd(char *str)
 	identify_decode(id_dws, 64);
 }
 
+static void nvme_identify_cmd(char *str)
+{
+	uint16_t cid = 1;
+	if (str && strlen(str))
+		cid = (uint16_t)strtoul(str, NULL, 0);
+	nvme_identify_run(cid);
+}
+
+static void nvme_identify_auto_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	uint16_t cid = 1;
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		if (a && strlen(a))
+			base_addr = strtoull(a, NULL, 0);
+		if (b && strlen(b))
+			cid = (uint16_t)strtoul(b, NULL, 0);
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return;
+
+	cmd_set_bits(1, 1, 1);
+	nvme_identify_run(cid);
+}
+
 static void todo_cmd(void)
 {
 	puts("TODO: implement NVMe bring-up + IO commands in firmware.");
@@ -694,6 +782,8 @@ static void console_service(void)
 		bar0_info_cmd();
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
+	else if (strcmp(token, "nvme_identify_auto") == 0)
+		nvme_identify_auto_cmd(str);
 	else if (strcmp(token, "todo") == 0)
 		todo_cmd();
 	prompt();

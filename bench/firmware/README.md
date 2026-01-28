@@ -44,9 +44,24 @@ Console commands (from the firmware prompt):
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
 - `bar0_info` — read CAP/VS/CSTS at BAR0
 - `nvme_identify [cid]` — run Admin Identify (controller) and decode
+- `nvme_identify_auto [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify
 
 Suggested next step: add a small firmware that:
 - polls PCIe link status,
 - configures BAR0 and Command.MEM/BME,
 - initializes admin queues and IO queues,
 - services a simple mailbox for read/write requests.
+
+Manual Identify flow (equivalent to NOTES.md up to Identify):
+```
+bdf <bus> <dev> <fn>
+cmd_enable
+bar0 <addr>
+bar0_info
+nvme_identify
+```
+
+One-shot Identify flow:
+```
+nvme_identify_auto 0xe0000000 1
+```
