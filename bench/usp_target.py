@@ -75,7 +75,7 @@ class BaseSoC(SoCCore):
                 ))
             else:
                 soc_kwargs.update(dict(
-                    integrated_rom_size = 0x8000,
+                    integrated_rom_size = 0x20000,
                 ))
             if cpu_boot == "rom" and cpu_firmware is not None:
                 soc_kwargs["integrated_rom_init"] = cpu_firmware

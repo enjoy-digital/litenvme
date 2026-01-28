@@ -121,6 +121,7 @@ static void help(void)
 	puts("bdf <b> <d> <f>    - Set PCIe BDF (bus/dev/fn)");
 	puts("cfg_bdf           - Read raw CFG BDF CSR");
 	puts("cfg_scan [bus]     - Scan a bus for valid devices");
+	puts("debug [0|1]        - Enable/disable debug traces");
 	puts("mmio_use [pcie|mmio] - Select MMIO CSR block (pcie_mmio or mmio)");
 	puts("cfg_use [pcie|cfg] - Select CFG CSR block (pcie_cfg or cfg)");
 	puts("cfg_rd <reg>       - Read CFG dword (reg index)");
@@ -170,11 +171,20 @@ static void status_cmd(void)
 
 static uint64_t bar0_base = 0;
 static int mmio_last_err = 0;
+static uint32_t mmio_last_stat = 0;
 #ifdef CSR_PCIE_MMIO_MEM_CTRL_ADDR
-static int mmio_use_pcie = 1;
+static int mmio_use_pcie = 0;
 #else
 static int mmio_use_pcie = 0;
 #endif
+static int dbg = 0;
+
+static void delay_cycles(unsigned int cycles)
+{
+	volatile unsigned int i;
+	for (i = 0; i < cycles; i++)
+		__asm__ __volatile__("");
+}
 
 static void mmio_set_addr(uint64_t addr)
 {
@@ -209,6 +219,7 @@ static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 		uint32_t stat = (mmio_use_pcie && PCIE_MMIO_AVAILABLE) ?
 			pcie_mmio_mem_stat_read() : mmio_mem_stat_read();
 		if (stat & 0x1) {
+			mmio_last_stat = stat;
 			if (stat_out)
 				*stat_out = stat;
 			mmio_last_err = (stat >> 1) & 0x1;
@@ -216,6 +227,7 @@ static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 		}
 	}
 	mmio_last_err = 1;
+	mmio_last_stat = 0xffffffffu;
 	return 1;
 }
 
@@ -228,6 +240,9 @@ static int mmio_rd32(uint64_t addr, uint32_t *val)
 		return 1;
 	*val = (mmio_use_pcie && PCIE_MMIO_AVAILABLE) ?
 		pcie_mmio_mem_rdata_read() : mmio_mem_rdata_read();
+	if (dbg)
+		printf("DBG: mmio_rd32 0x%016" PRIx64 " stat=0x%08" PRIx32 " val=0x%08" PRIx32 "\n",
+		       addr, stat, *val);
 	return 0;
 }
 
@@ -240,7 +255,12 @@ static int mmio_wr32(uint64_t addr, uint32_t val)
 	else
 		mmio_mem_wdata_write(val);
 	mmio_start(1, 0xf, 1);
-	return mmio_wait_done(1000000, &stat);
+	if (mmio_wait_done(1000000, &stat))
+		return 1;
+	if (dbg)
+		printf("DBG: mmio_wr32 0x%016" PRIx64 " stat=0x%08" PRIx32 " val=0x%08" PRIx32 "\n",
+		       addr, stat, val);
+	return 0;
 }
 
 static int mmio_rd64(uint64_t addr, uint64_t *val)
@@ -436,6 +456,7 @@ static uint8_t cfg_bus = 0;
 static uint8_t cfg_dev = 0;
 static uint8_t cfg_fun = 0;
 static int cfg_use_pcie = 0;
+static int cfg_last_err = 0;
 
 static uint32_t cfg_bdf_pack(uint8_t bus, uint8_t dev, uint8_t fun, uint8_t reg, uint8_t ext)
 {
@@ -465,12 +486,18 @@ static void cfg_ctrl_write(uint32_t v)
 {
 	if (cfg_use_pcie) pcie_cfg_cfg_ctrl_write(v);
 	else cfg_cfg_ctrl_write(v);
+	if (dbg)
+		printf("DBG: cfg_ctrl_write 0x%08" PRIx32 "\n", v);
 }
 
 static void cfg_bdf_write(uint32_t v)
 {
 	if (cfg_use_pcie) pcie_cfg_cfg_bdf_write(v);
 	else cfg_cfg_bdf_write(v);
+	if (dbg) {
+		uint32_t rb = cfg_use_pcie ? pcie_cfg_cfg_bdf_read() : cfg_cfg_bdf_read();
+		printf("DBG: cfg_bdf_write 0x%08" PRIx32 " (rb 0x%08" PRIx32 ")\n", v, rb);
+	}
 }
 
 static void cfg_wdata_write(uint32_t v)
@@ -481,7 +508,10 @@ static void cfg_wdata_write(uint32_t v)
 
 static uint32_t cfg_stat_read(void)
 {
-	return cfg_use_pcie ? pcie_cfg_cfg_stat_read() : cfg_cfg_stat_read();
+	uint32_t v = cfg_use_pcie ? pcie_cfg_cfg_stat_read() : cfg_cfg_stat_read();
+	if (dbg)
+		printf("DBG: cfg_stat_read 0x%08" PRIx32 "\n", v);
+	return v;
 }
 
 static uint32_t cfg_rdata_read(void)
@@ -494,8 +524,12 @@ static int cfg_wait_done(unsigned int timeout)
 	while (timeout--) {
 		uint32_t stat = cfg_stat_read();
 		if (stat & 0x1)
-			return (stat >> 1) & 0x1;
+			{
+				cfg_last_err = (stat >> 1) & 0x1;
+				return 0;
+			}
 	}
+	cfg_last_err = 1;
 	return 1;
 }
 
@@ -506,7 +540,11 @@ static int cfg_rd32(uint8_t reg, uint32_t *val)
 	cfg_ctrl_write(0);
 	if (cfg_wait_done(1000000))
 		return 1;
+	if (cfg_last_err)
+		return 1;
 	*val = cfg_rdata_read();
+	if (dbg)
+		printf("DBG: cfg_rd32 reg=%u val=0x%08" PRIx32 "\n", reg, *val);
 	return 0;
 }
 
@@ -529,6 +567,7 @@ static void bdf_cmd(char *str)
 		cfg_dev = (uint8_t)strtoul(b, NULL, 0);
 		cfg_fun = (uint8_t)strtoul(c, NULL, 0);
 	}
+	cfg_bdf_write(cfg_bdf_pack(cfg_bus, cfg_dev, cfg_fun, 0, 0));
 	printf("BDF = %u:%u:%u\n", cfg_bus, cfg_dev, cfg_fun);
 }
 
@@ -536,6 +575,23 @@ static void cfg_bdf_raw_cmd(void)
 {
 	uint32_t v = cfg_use_pcie ? pcie_cfg_cfg_bdf_read() : cfg_cfg_bdf_read();
 	printf("CFG_BDF = 0x%08" PRIx32 "\n", v);
+	if (dbg)
+		printf("DBG: cfg_bdf fields bus=%u dev=%u fn=%u reg=%u ext=%u\n",
+		       (unsigned)((v >> 0) & 0xff),
+		       (unsigned)((v >> 8) & 0x1f),
+		       (unsigned)((v >> 13) & 0x7),
+		       (unsigned)((v >> 16) & 0x3f),
+		       (unsigned)((v >> 22) & 0x7));
+}
+
+static void debug_cmd(char *str)
+{
+	if (str == NULL || strlen(str) == 0) {
+		printf("debug = %d\n", dbg);
+		return;
+	}
+	dbg = (int)strtoul(str, NULL, 0) ? 1 : 0;
+	printf("debug = %d\n", dbg);
 }
 
 static void cfg_scan_cmd(char *str)
@@ -577,6 +633,8 @@ static void cfg_rd_cmd(char *str)
 		printf("ERR\n");
 	else
 		printf("0x%08" PRIx32 "\n", v);
+	if (cfg_last_err)
+		puts("WARN: cfg_rd err=1 (read may still be valid).");
 }
 
 static void cfg_wr_cmd(char *str)
@@ -831,19 +889,29 @@ static int nvme_identify_run(uint16_t cid)
 		puts("ERR: BAR0 base is 0. Use bar0 <addr> first.");
 		return 1;
 	}
+	if (dbg)
+		printf("DBG: nvme_identify_run mmio_use=%s bar0=0x%016" PRIx64 "\n",
+		       mmio_use_pcie ? "pcie_mmio" : "mmio", bar0_base);
 
 	cmd_enable_cmd();
 
 	uint64_t cap = 0;
 	uint32_t cc = 0;
-	if (mmio_rd64(bar0_base + NVME_CAP, &cap))
-		puts("ERR: CAP read timeout.");
-	else if (mmio_last_err)
-		puts("WARN: CAP read err=1 (read may still be valid).");
-	if (mmio_rd32(bar0_base + NVME_CC, &cc))
-		puts("ERR: CC read timeout.");
-	else if (mmio_last_err)
-		puts("WARN: CC read err=1 (read may still be valid).");
+	for (int tries = 0; tries < 5; tries++) {
+		if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
+			puts("ERR: CAP read timeout.");
+		} else if (mmio_last_err) {
+			puts("WARN: CAP read err=1 (read may still be valid).");
+		}
+		if (mmio_rd32(bar0_base + NVME_CC, &cc)) {
+			puts("ERR: CC read timeout.");
+		} else if (mmio_last_err) {
+			puts("WARN: CC read err=1 (read may still be valid).");
+		}
+		if (cap != 0)
+			break;
+		delay_cycles(50000);
+	}
 	if (cap == 0 && mmio_use_pcie && PCIE_MMIO_AVAILABLE) {
 		puts("INFO: CAP=0, retrying with mmio.");
 		mmio_use_pcie = 0;
@@ -959,24 +1027,11 @@ static void nvme_identify_auto_cmd(char *str)
 			cid = (uint16_t)strtoul(b, NULL, 0);
 	}
 
-	int prev_cfg = cfg_use_pcie;
-	if (!nvme_bar0_assign(base_addr)) {
-		cmd_set_bits(1, 1, 1);
-		cmd_print_cmdsts();
-		if (nvme_identify_run(cid) == 0)
-			return;
-	}
-
-	cfg_use_pcie = !prev_cfg;
-	if (nvme_bar0_assign(base_addr)) {
-		cfg_use_pcie = prev_cfg;
+	if (nvme_bar0_assign(base_addr))
 		return;
-	}
-	printf("INFO: retrying with cfg_use=%s\n", cfg_use_pcie ? "pcie_cfg" : "cfg");
 	cmd_set_bits(1, 1, 1);
 	cmd_print_cmdsts();
 	nvme_identify_run(cid);
-	cfg_use_pcie = prev_cfg;
 }
 
 static void todo_cmd(void)
@@ -1009,6 +1064,8 @@ static void console_service(void)
 		cfg_bdf_raw_cmd();
 	else if (strcmp(token, "cfg_scan") == 0)
 		cfg_scan_cmd(str);
+	else if (strcmp(token, "debug") == 0)
+		debug_cmd(str);
 	else if (strcmp(token, "cfg_rd") == 0)
 		cfg_rd_cmd(str);
 	else if (strcmp(token, "cfg_wr") == 0)
