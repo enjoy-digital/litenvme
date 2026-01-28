@@ -43,6 +43,7 @@ Console commands (from the firmware prompt):
 - `mmio_rd <addr>` / `mmio_wr <addr> <val>` — absolute MMIO access
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
 - `bar0_info` — read CAP/VS/CSTS at BAR0
+- `nvme_identify [cid]` — run Admin Identify (controller) and decode
 
 Suggested next step: add a small firmware that:
 - polls PCIe link status,
