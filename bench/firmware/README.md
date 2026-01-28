@@ -31,6 +31,19 @@ tools or other RISC-V toolchains. The firmware is expected to perform the same
 setup steps as the host scripts (BAR0 discovery, MEM/BME enable, admin+IO queue
 init) and then optionally execute read/write commands.
 
+Console commands (from the firmware prompt):
+
+- `status` — link status + hostmem counters
+- `bdf <b> <d> <f>` — set target BDF for config access
+- `cfg_rd <reg>` / `cfg_wr <reg> <val>` — config space access
+- `cmd_enable` / `cmd_disable` — set/clear Command.MEM + Command.BME
+- `bar0 <addr>` — set BAR0 base
+- `bar0_rd <off>` / `bar0_wr <off> <val>` — BAR0 MMIO access
+- `bar0_dump <len> [s]` — dump BAR0 space
+- `mmio_rd <addr>` / `mmio_wr <addr> <val>` — absolute MMIO access
+- `mmio_dump <addr> <len> [s]` — dump MMIO space
+- `bar0_info` — read CAP/VS/CSTS at BAR0
+
 Suggested next step: add a small firmware that:
 - polls PCIe link status,
 - configures BAR0 and Command.MEM/BME,
