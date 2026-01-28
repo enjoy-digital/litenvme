@@ -1,9 +1,15 @@
 BUILD_DIR?=../build/usp_platform
+BOOT?=rom
 
 include $(BUILD_DIR)/software/include/generated/variables.mak
 include $(SOC_DIRECTORY)/software/common.mak
 
 OBJECTS = crt0.o main.o
+LINKER ?= linker.ld
+
+ifeq ($(BOOT),rom)
+LINKER = linker_rom.ld
+endif
 
 all: firmware.bin
 
@@ -16,7 +22,7 @@ endif
 vpath %.a $(PACKAGES:%=../%)
 
 firmware.elf: $(OBJECTS)
-	$(CC) $(LDFLAGS) -T linker.ld -N -o $@ \
+	$(CC) $(LDFLAGS) -T $(LINKER) -N -o $@ \
 		$(OBJECTS) \
 		$(PACKAGES:%=-L$(BUILD_DIR)/software/%) \
 		-Wl,--whole-archive \

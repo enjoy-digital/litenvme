@@ -22,6 +22,10 @@ For faster iteration, you can boot the LiteX BIOS and load the firmware into RAM
 litex_term /dev/ttyUSBX --kernel bench/firmware/firmware.bin
 ```
 
+The firmware linker script is selected by `BOOT`:
+- `BOOT=rom` links `.text` into ROM (`linker_rom.ld`).
+- `BOOT=bios` links `.text` into main RAM (`linker.ld`).
+
 The ROM init file can be generated from a compiled firmware image using LiteX
 tools or other RISC-V toolchains. The firmware is expected to perform the same
 setup steps as the host scripts (BAR0 discovery, MEM/BME enable, admin+IO queue

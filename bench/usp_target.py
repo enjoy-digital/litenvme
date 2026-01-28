@@ -63,9 +63,9 @@ class BaseSoC(SoCCore):
         soc_kwargs = dict(ident="LiteNVME Test SoC.", ident_version=True, cpu_type=None, uart_name="stub")
         if with_cpu:
             soc_kwargs.update(dict(
-                cpu_type            = "vexriscv",
-                cpu_variant         = "minimal",
-                uart_name           = "serial",
+                cpu_type      = "vexriscv",
+                uart_name     = "serial",
+                uart_baudrate = 2e6,
             ))
             if cpu_boot == "bios":
                 soc_kwargs.update(dict(
@@ -317,7 +317,7 @@ def main():
         # Compile firmware against generated headers.
         fw_dir = os.path.join(os.path.dirname(__file__), "firmware")
         build_dir = builder.output_dir
-        os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} clean all")
+        os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} BOOT={args.cpu_boot} clean all")
 
         # Second build with integrated ROM init (ROM boot only).
         fw_bin = os.path.join(fw_dir, "firmware.bin")
