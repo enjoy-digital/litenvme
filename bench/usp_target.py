@@ -280,10 +280,10 @@ class BaseSoC(SoCCore):
 def main():
     from litex.build.parser import LiteXArgumentParser
     parser = LiteXArgumentParser(platform=Platform, description="LiteNVME Test SoC.")
-    parser.add_target_argument("--sys-clk-freq", default=125e6, type=float, help="System clock frequency.")
-    parser.add_argument("--with-cpu", action="store_true", help="Enable VexRiscv soft CPU.")
-    parser.add_argument("--cpu-firmware", default=None, help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
-    parser.add_argument("--litescope-probe", default="pcie", choices=["none", "pcie"], help="Select LiteScope probe set.")
+    parser.add_argument("--sys-clk-freq",    default=125e6,       type=float,          help="System clock frequency.")
+    parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
+    parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
+    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
     args = parser.parse_args()
 
     def build_soc(cpu_firmware=None):

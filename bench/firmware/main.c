@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include <irq.h>
 #include <libbase/uart.h>
@@ -25,6 +26,8 @@ static char *readstr(void)
 	if (readchar_nonblock()) {
 		c[0] = getchar();
 		c[1] = 0;
+		if ((unsigned char)c[0] == 0x00 || (unsigned char)c[0] == 0xff)
+			return NULL;
 		switch (c[0]) {
 		case 0x7f:
 		case 0x08:
@@ -101,13 +104,13 @@ static void reboot_cmd(void)
 static void status_cmd(void)
 {
 #ifdef CSR_PCIE_PHY_PHY_LINK_STATUS_ADDR
-	printf("pcie_link: %08x\n", pcie_phy_phy_link_status_read());
+	printf("pcie_link: %08" PRIx32 "\n", (uint32_t)pcie_phy_phy_link_status_read());
 #else
 	printf("pcie_link: (no CSR)\n");
 #endif
 #ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
-	printf("hostmem_wr_count: %08x\n", hostmem_csr_dma_wr_count_read());
-	printf("hostmem_rd_count: %08x\n", hostmem_csr_dma_rd_count_read());
+	printf("hostmem_wr_count: %08" PRIx32 "\n", (uint32_t)hostmem_csr_dma_wr_count_read());
+	printf("hostmem_rd_count: %08" PRIx32 "\n", (uint32_t)hostmem_csr_dma_rd_count_read());
 #else
 	printf("hostmem_count: (no CSR)\n");
 #endif
