@@ -15,6 +15,13 @@ Or use the auto two-pass flow (generate headers, build firmware, integrate ROM):
 ./usp_target.py --with-cpu --cpu-firmware=auto --build --no-compile-gateware
 ```
 
+For faster iteration, you can boot the LiteX BIOS and load the firmware into RAM:
+
+```
+./usp_target.py --with-cpu --cpu-boot=bios --build --no-compile-gateware
+litex_term /dev/ttyUSBX --kernel bench/firmware/firmware.bin
+```
+
 The ROM init file can be generated from a compiled firmware image using LiteX
 tools or other RISC-V toolchains. The firmware is expected to perform the same
 setup steps as the host scripts (BAR0 discovery, MEM/BME enable, admin+IO queue
