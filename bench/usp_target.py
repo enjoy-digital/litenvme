@@ -64,13 +64,14 @@ class BaseSoC(SoCCore):
         if with_cpu:
             soc_kwargs.update(dict(
                 cpu_type      = "vexriscv",
+                cpu_variant   = "minimal",
                 uart_name     = "serial",
                 uart_baudrate = 115200,
             ))
             if cpu_boot == "bios":
                 soc_kwargs.update(dict(
                     integrated_rom_size      = 0x10000,  # BIOS
-                    integrated_main_ram_size = 0x8000,   # App load
+                    integrated_main_ram_size = 0x4000,   # App load
                 ))
             else:
                 soc_kwargs.update(dict(
@@ -290,7 +291,7 @@ def main():
     parser = LiteXArgumentParser(platform=Platform, description="LiteNVME Test SoC.")
     parser.add_argument("--sys-clk-freq",    default=125e6,       type=float,          help="System clock frequency.")
     parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
-    parser.add_argument("--cpu-boot",        default="bios", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
+    parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
     parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
     args = parser.parse_args()

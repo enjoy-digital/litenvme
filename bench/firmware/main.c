@@ -15,6 +15,16 @@
 #include <generated/csr.h>
 
 /*-----------------------------------------------------------------------*/
+/* CSR feature flags                                                      */
+/*-----------------------------------------------------------------------*/
+
+#ifdef CSR_PCIE_MMIO_MEM_CTRL_ADDR
+#define PCIE_MMIO_AVAILABLE 1
+#else
+#define PCIE_MMIO_AVAILABLE 0
+#endif
+
+/*-----------------------------------------------------------------------*/
 /* NVMe constants/layout                                                  */
 /*-----------------------------------------------------------------------*/
 
@@ -109,6 +119,10 @@ static void help(void)
 	puts("reboot             - Reboot CPU");
 	puts("status             - Print PCIe link + hostmem counters");
 	puts("bdf <b> <d> <f>    - Set PCIe BDF (bus/dev/fn)");
+	puts("cfg_bdf           - Read raw CFG BDF CSR");
+	puts("cfg_scan [bus]     - Scan a bus for valid devices");
+	puts("mmio_use [pcie|mmio] - Select MMIO CSR block (pcie_mmio or mmio)");
+	puts("cfg_use [pcie|cfg] - Select CFG CSR block (pcie_cfg or cfg)");
 	puts("cfg_rd <reg>       - Read CFG dword (reg index)");
 	puts("cfg_wr <reg> <v>   - Write CFG dword (reg index)");
 	puts("cmd_enable         - Set Command.MEM + Command.BME");
@@ -155,11 +169,22 @@ static void status_cmd(void)
 /*-----------------------------------------------------------------------*/
 
 static uint64_t bar0_base = 0;
+static int mmio_last_err = 0;
+#ifdef CSR_PCIE_MMIO_MEM_CTRL_ADDR
+static int mmio_use_pcie = 1;
+#else
+static int mmio_use_pcie = 0;
+#endif
 
 static void mmio_set_addr(uint64_t addr)
 {
-	mmio_mem_adr_l_write((uint32_t)(addr & 0xffffffff));
-	mmio_mem_adr_h_write((uint32_t)((addr >> 32) & 0xffffffff));
+	if (mmio_use_pcie && PCIE_MMIO_AVAILABLE) {
+		pcie_mmio_mem_adr_l_write((uint32_t)(addr & 0xffffffff));
+		pcie_mmio_mem_adr_h_write((uint32_t)((addr >> 32) & 0xffffffff));
+	} else {
+		mmio_mem_adr_l_write((uint32_t)(addr & 0xffffffff));
+		mmio_mem_adr_h_write((uint32_t)((addr >> 32) & 0xffffffff));
+	}
 }
 
 static void mmio_start(int we, uint8_t wsel, uint16_t length)
@@ -169,45 +194,69 @@ static void mmio_start(int we, uint8_t wsel, uint16_t length)
 	ctrl |= (we ? 1 : 0) << 1;
 	ctrl |= (wsel & 0xf) << 4;
 	ctrl |= (length & 0x3ff) << 8;
-	mmio_mem_ctrl_write(ctrl);
-	mmio_mem_ctrl_write(0);
+	if (mmio_use_pcie && PCIE_MMIO_AVAILABLE) {
+		pcie_mmio_mem_ctrl_write(ctrl);
+		pcie_mmio_mem_ctrl_write(0);
+	} else {
+		mmio_mem_ctrl_write(ctrl);
+		mmio_mem_ctrl_write(0);
+	}
 }
 
-static int mmio_wait_done(unsigned int timeout)
+static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 {
 	while (timeout--) {
-		uint32_t stat = mmio_mem_stat_read();
-		if (stat & 0x1)
-			return (stat >> 1) & 0x1;
+		uint32_t stat = (mmio_use_pcie && PCIE_MMIO_AVAILABLE) ?
+			pcie_mmio_mem_stat_read() : mmio_mem_stat_read();
+		if (stat & 0x1) {
+			if (stat_out)
+				*stat_out = stat;
+			mmio_last_err = (stat >> 1) & 0x1;
+			return 0;
+		}
 	}
+	mmio_last_err = 1;
 	return 1;
 }
 
 static int mmio_rd32(uint64_t addr, uint32_t *val)
 {
+	uint32_t stat = 0;
 	mmio_set_addr(addr);
 	mmio_start(0, 0xf, 1);
-	if (mmio_wait_done(1000000))
+	if (mmio_wait_done(1000000, &stat))
 		return 1;
-	*val = mmio_mem_rdata_read();
+	*val = (mmio_use_pcie && PCIE_MMIO_AVAILABLE) ?
+		pcie_mmio_mem_rdata_read() : mmio_mem_rdata_read();
 	return 0;
 }
 
 static int mmio_wr32(uint64_t addr, uint32_t val)
 {
+	uint32_t stat = 0;
 	mmio_set_addr(addr);
-	mmio_mem_wdata_write(val);
+	if (mmio_use_pcie && PCIE_MMIO_AVAILABLE)
+		pcie_mmio_mem_wdata_write(val);
+	else
+		mmio_mem_wdata_write(val);
 	mmio_start(1, 0xf, 1);
-	return mmio_wait_done(1000000);
+	return mmio_wait_done(1000000, &stat);
 }
 
 static int mmio_rd64(uint64_t addr, uint64_t *val)
 {
 	uint32_t lo = 0, hi = 0;
 	int err0 = mmio_rd32(addr + 0, &lo);
+	int mmio_err0 = mmio_last_err;
+	if (err0)
+		return 1;
 	int err1 = mmio_rd32(addr + 4, &hi);
+	int mmio_err1 = mmio_last_err;
+	if (err1)
+		return 1;
 	*val = ((uint64_t)hi << 32) | lo;
-	return err0 | err1;
+	mmio_last_err = mmio_err0 | mmio_err1;
+	return 0;
 }
 
 static int mmio_wr64(uint64_t addr, uint64_t val)
@@ -215,8 +264,15 @@ static int mmio_wr64(uint64_t addr, uint64_t val)
 	uint32_t lo = (uint32_t)(val & 0xffffffffu);
 	uint32_t hi = (uint32_t)((val >> 32) & 0xffffffffu);
 	int err0 = mmio_wr32(addr + 0, lo);
+	int mmio_err0 = mmio_last_err;
+	if (err0)
+		return 1;
 	int err1 = mmio_wr32(addr + 4, hi);
-	return err0 | err1;
+	int mmio_err1 = mmio_last_err;
+	if (err1)
+		return 1;
+	mmio_last_err = mmio_err0 | mmio_err1;
+	return 0;
 }
 
 static void bar0_cmd(char *str)
@@ -227,6 +283,21 @@ static void bar0_cmd(char *str)
 	}
 	bar0_base = strtoull(str, NULL, 0);
 	printf("bar0 = 0x%016" PRIx64 "\n", bar0_base);
+}
+
+static void mmio_select_cmd(char *str)
+{
+	if (str == NULL || strlen(str) == 0) {
+		printf("mmio_use = %s\n", mmio_use_pcie ? "pcie_mmio" : "mmio");
+		return;
+	}
+	if (strcmp(str, "pcie") == 0 || strcmp(str, "pcie_mmio") == 0 || strcmp(str, "1") == 0)
+		mmio_use_pcie = PCIE_MMIO_AVAILABLE ? 1 : 0;
+	else
+		mmio_use_pcie = 0;
+	printf("mmio_use = %s\n", mmio_use_pcie ? "pcie_mmio" : "mmio");
+	if (!PCIE_MMIO_AVAILABLE && (strcmp(str, "pcie") == 0 || strcmp(str, "pcie_mmio") == 0 || strcmp(str, "1") == 0))
+		puts("WARN: pcie_mmio CSR not available, using mmio.");
 }
 
 static void bar0_rd_cmd(char *str)
@@ -304,10 +375,17 @@ static void mmio_dump_cmd(char *str)
 static void bar0_info_cmd(void)
 {
 	uint32_t cap0 = 0, cap1 = 0, vs = 0, csts = 0;
-	mmio_rd32(bar0_base + 0x0000, &cap0);
-	mmio_rd32(bar0_base + 0x0004, &cap1);
-	mmio_rd32(bar0_base + 0x0008, &vs);
-	mmio_rd32(bar0_base + 0x001c, &csts);
+	int timeout = 0;
+	if (mmio_rd32(bar0_base + 0x0000, &cap0)) timeout = 1;
+	if (mmio_rd32(bar0_base + 0x0004, &cap1)) timeout = 1;
+	if (mmio_rd32(bar0_base + 0x0008, &vs)) timeout = 1;
+	if (mmio_rd32(bar0_base + 0x001c, &csts)) timeout = 1;
+	if (timeout) {
+		puts("ERR: MMIO timeout.");
+		return;
+	}
+	if (mmio_last_err)
+		puts("WARN: MMIO err=1 (read may still be valid).");
 	printf("CAP  = 0x%08" PRIx32 "%08" PRIx32 "\n", cap1, cap0);
 	printf("VS   = 0x%08" PRIx32 "\n", vs);
 	printf("CSTS = 0x%08" PRIx32 "\n", csts);
@@ -357,6 +435,7 @@ static void hostmem_read_dwords(uint32_t addr, uint32_t *dst, uint32_t count)
 static uint8_t cfg_bus = 0;
 static uint8_t cfg_dev = 0;
 static uint8_t cfg_fun = 0;
+static int cfg_use_pcie = 0;
 
 static uint32_t cfg_bdf_pack(uint8_t bus, uint8_t dev, uint8_t fun, uint8_t reg, uint8_t ext)
 {
@@ -369,10 +448,51 @@ static uint32_t cfg_bdf_pack(uint8_t bus, uint8_t dev, uint8_t fun, uint8_t reg,
 	return v;
 }
 
+static void cfg_select_cmd(char *str)
+{
+	if (str == NULL || strlen(str) == 0) {
+		printf("cfg_use = %s\n", cfg_use_pcie ? "pcie_cfg" : "cfg");
+		return;
+	}
+	if (strcmp(str, "pcie") == 0 || strcmp(str, "pcie_cfg") == 0 || strcmp(str, "1") == 0)
+		cfg_use_pcie = 1;
+	else
+		cfg_use_pcie = 0;
+	printf("cfg_use = %s\n", cfg_use_pcie ? "pcie_cfg" : "cfg");
+}
+
+static void cfg_ctrl_write(uint32_t v)
+{
+	if (cfg_use_pcie) pcie_cfg_cfg_ctrl_write(v);
+	else cfg_cfg_ctrl_write(v);
+}
+
+static void cfg_bdf_write(uint32_t v)
+{
+	if (cfg_use_pcie) pcie_cfg_cfg_bdf_write(v);
+	else cfg_cfg_bdf_write(v);
+}
+
+static void cfg_wdata_write(uint32_t v)
+{
+	if (cfg_use_pcie) pcie_cfg_cfg_wdata_write(v);
+	else cfg_cfg_wdata_write(v);
+}
+
+static uint32_t cfg_stat_read(void)
+{
+	return cfg_use_pcie ? pcie_cfg_cfg_stat_read() : cfg_cfg_stat_read();
+}
+
+static uint32_t cfg_rdata_read(void)
+{
+	return cfg_use_pcie ? pcie_cfg_cfg_rdata_read() : cfg_cfg_rdata_read();
+}
+
 static int cfg_wait_done(unsigned int timeout)
 {
 	while (timeout--) {
-		uint32_t stat = cfg_cfg_stat_read();
+		uint32_t stat = cfg_stat_read();
 		if (stat & 0x1)
 			return (stat >> 1) & 0x1;
 	}
@@ -381,21 +501,21 @@ static int cfg_wait_done(unsigned int timeout)
 
 static int cfg_rd32(uint8_t reg, uint32_t *val)
 {
-	cfg_cfg_bdf_write(cfg_bdf_pack(cfg_bus, cfg_dev, cfg_fun, reg, 0));
-	cfg_cfg_ctrl_write(1);
-	cfg_cfg_ctrl_write(0);
+	cfg_bdf_write(cfg_bdf_pack(cfg_bus, cfg_dev, cfg_fun, reg, 0));
+	cfg_ctrl_write(1);
+	cfg_ctrl_write(0);
 	if (cfg_wait_done(1000000))
 		return 1;
-	*val = cfg_cfg_rdata_read();
+	*val = cfg_rdata_read();
 	return 0;
 }
 
 static int cfg_wr32(uint8_t reg, uint32_t val)
 {
-	cfg_cfg_bdf_write(cfg_bdf_pack(cfg_bus, cfg_dev, cfg_fun, reg, 0));
-	cfg_cfg_wdata_write(val);
-	cfg_cfg_ctrl_write(1 | (1 << 1));
-	cfg_cfg_ctrl_write(0);
+	cfg_bdf_write(cfg_bdf_pack(cfg_bus, cfg_dev, cfg_fun, reg, 0));
+	cfg_wdata_write(val);
+	cfg_ctrl_write(1 | (1 << 1));
+	cfg_ctrl_write(0);
 	return cfg_wait_done(1000000);
 }
 
@@ -410,6 +530,43 @@ static void bdf_cmd(char *str)
 		cfg_fun = (uint8_t)strtoul(c, NULL, 0);
 	}
 	printf("BDF = %u:%u:%u\n", cfg_bus, cfg_dev, cfg_fun);
+}
+
+static void cfg_bdf_raw_cmd(void)
+{
+	uint32_t v = cfg_use_pcie ? pcie_cfg_cfg_bdf_read() : cfg_cfg_bdf_read();
+	printf("CFG_BDF = 0x%08" PRIx32 "\n", v);
+}
+
+static void cfg_scan_cmd(char *str)
+{
+	uint8_t bus = cfg_bus;
+	if (str && strlen(str))
+		bus = (uint8_t)strtoul(str, NULL, 0);
+	printf("Scanning bus %u...\n", bus);
+	for (uint8_t dev = 0; dev < 32; dev++) {
+		for (uint8_t fun = 0; fun < 8; fun++) {
+			uint32_t id = 0;
+			uint8_t prev_bus = cfg_bus;
+			uint8_t prev_dev = cfg_dev;
+			uint8_t prev_fun = cfg_fun;
+			cfg_bus = bus;
+			cfg_dev = dev;
+			cfg_fun = fun;
+			if (cfg_rd32(0, &id)) {
+				cfg_bus = prev_bus;
+				cfg_dev = prev_dev;
+				cfg_fun = prev_fun;
+				continue;
+			}
+			cfg_bus = prev_bus;
+			cfg_dev = prev_dev;
+			cfg_fun = prev_fun;
+			if (id == 0xffffffffu || id == 0x00000000u)
+				continue;
+			printf("  %u:%u:%u -> VID/DID 0x%08" PRIx32 "\n", bus, dev, fun, id);
+		}
+	}
 }
 
 static void cfg_rd_cmd(char *str)
@@ -429,7 +586,7 @@ static void cfg_wr_cmd(char *str)
 	uint8_t reg = (uint8_t)strtoul(a, NULL, 0);
 	uint32_t v  = (uint32_t)strtoul(b, NULL, 0);
 	if (cfg_wr32(reg, v))
-		printf("ERR\n");
+		printf("WARN: cfg_wr err=1 (write may still be accepted)\n");
 }
 
 static void cmd_set_bits(int mem, int bme, int intdis)
@@ -445,7 +602,17 @@ static void cmd_set_bits(int mem, int bme, int intdis)
 	if (intdis >= 0) cmd = (cmd & ~(1u << 10)) | ((intdis ? 1u : 0u) << 10);
 	v = (v & 0xffff0000u) | (cmd & 0xffffu);
 	if (cfg_wr32(1, v))
-		printf("ERR\n");
+		printf("WARN: cfg_wr err=1 (write may still be accepted)\n");
+}
+
+static void cmd_print_cmdsts(void)
+{
+	uint32_t v = 0;
+	if (cfg_rd32(1, &v)) {
+		puts("ERR: CFG read CMD/STS failed.");
+		return;
+	}
+	printf("CMD/STS = 0x%08" PRIx32 "\n", v);
 }
 
 static void cmd_enable_cmd(void)
@@ -498,18 +665,36 @@ static uint64_t bar_size_from_mask(uint64_t mask)
 static int nvme_bar0_assign(uint64_t base_addr)
 {
 	uint32_t bar0 = 0, bar1 = 0;
-	if (cfg_rd32(4, &bar0)) {
+	uint32_t bar0_orig = 0;
+	uint32_t id = 0;
+
+	if (cfg_rd32(0, &id)) {
+		cfg_use_pcie = !cfg_use_pcie;
+		if (cfg_rd32(0, &id)) {
+			cfg_use_pcie = !cfg_use_pcie;
+			puts("ERR: CFG read ID failed.");
+			return 1;
+		}
+		printf("INFO: cfg_use auto -> %s\n", cfg_use_pcie ? "pcie_cfg" : "cfg");
+	}
+	if (id == 0xffffffffu || id == 0x00000000u) {
+		puts("ERR: No device at current BDF (read VID/DID invalid).");
+		return 1;
+	}
+	printf("VID/DID      = 0x%08" PRIx32 "\n", id);
+
+	if (cfg_rd32(4, &bar0_orig)) {
 		puts("ERR: CFG read BAR0 failed.");
 		return 1;
 	}
-	if (bar0 & 1) {
+	if (bar0_orig & 1) {
 		puts("ERR: BAR0 is I/O, unexpected for NVMe.");
 		return 1;
 	}
-	uint32_t bar_type = (bar0 >> 1) & 0x3;
+	uint32_t bar_type = (bar0_orig >> 1) & 0x3;
 	int is_64 = (bar_type == 0x2);
 
-	printf("BAR0 orig    = 0x%08" PRIx32 " (64b=%d)\n", bar0, is_64);
+	printf("BAR0 orig    = 0x%08" PRIx32 " (64b=%d)\n", bar0_orig, is_64);
 
 	cfg_wr32(4, 0xffffffff);
 	if (cfg_rd32(4, &bar0)) {
@@ -538,7 +723,7 @@ static int nvme_bar0_assign(uint64_t base_addr)
 		return 1;
 	}
 
-	cfg_wr32(4, (uint32_t)(base_addr & 0xffffffffu) | (bar0 & 0xfu));
+	cfg_wr32(4, (uint32_t)(base_addr & 0xffffffffu) | (bar0_orig & 0xfu));
 	if (is_64)
 		cfg_wr32(5, (uint32_t)((base_addr >> 32) & 0xffffffffu));
 
@@ -558,7 +743,7 @@ static int nvme_wait_rdy(uint32_t want_rdy, uint32_t loops)
 {
 	while (loops--) {
 		uint32_t csts = 0;
-		if (!mmio_rd32((uint64_t)bar0_base + NVME_CSTS, &csts)) {
+		if (!mmio_rd32(bar0_base + NVME_CSTS, &csts)) {
 			if (csts_rdy(csts) == want_rdy)
 				return 1;
 		}
@@ -640,31 +825,69 @@ static void identify_decode(const uint32_t *dws, uint32_t dword_count)
 	printf("  OAES     : 0x%08" PRIx32 "\n", oaes);
 }
 
-static void nvme_identify_run(uint16_t cid)
+static int nvme_identify_run(uint16_t cid)
 {
 	if (bar0_base == 0) {
 		puts("ERR: BAR0 base is 0. Use bar0 <addr> first.");
-		return;
+		return 1;
 	}
 
 	cmd_enable_cmd();
 
 	uint64_t cap = 0;
 	uint32_t cc = 0;
-	mmio_rd64((uint64_t)bar0_base + NVME_CAP, &cap);
-	mmio_rd32((uint64_t)bar0_base + NVME_CC, &cc);
+	if (mmio_rd64(bar0_base + NVME_CAP, &cap))
+		puts("ERR: CAP read timeout.");
+	else if (mmio_last_err)
+		puts("WARN: CAP read err=1 (read may still be valid).");
+	if (mmio_rd32(bar0_base + NVME_CC, &cc))
+		puts("ERR: CC read timeout.");
+	else if (mmio_last_err)
+		puts("WARN: CC read err=1 (read may still be valid).");
+	if (cap == 0 && mmio_use_pcie && PCIE_MMIO_AVAILABLE) {
+		puts("INFO: CAP=0, retrying with mmio.");
+		mmio_use_pcie = 0;
+		if (mmio_rd64(bar0_base + NVME_CAP, &cap))
+			puts("ERR: CAP read timeout.");
+		else if (mmio_last_err)
+			puts("WARN: CAP read err=1 (read may still be valid).");
+		if (mmio_rd32(bar0_base + NVME_CC, &cc))
+			puts("ERR: CC read timeout.");
+		else if (mmio_last_err)
+			puts("WARN: CC read err=1 (read may still be valid).");
+	}
+	if (cap == 0) {
+		puts("ERR: CAP is 0 (BAR0 not responding).");
+		return 1;
+	}
 	if (cc_en(cc)) {
-		mmio_wr32((uint64_t)bar0_base + NVME_CC, cc & ~1u);
-		nvme_wait_rdy(0, 1000000);
+		if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
+			puts("ERR: CC write timeout.");
+		else if (mmio_last_err)
+			puts("WARN: CC write err=1 (write may still be accepted).");
+		if (!nvme_wait_rdy(0, 1000000))
+			puts("WARN: CSTS.RDY did not clear.");
 	}
 
 	uint32_t aqa = ((ADMIN_Q_ENTRIES - 1) & 0xfffu) | (((ADMIN_Q_ENTRIES - 1) & 0xfffu) << 16);
-	mmio_wr32((uint64_t)bar0_base + NVME_AQA, aqa);
-	mmio_wr64((uint64_t)bar0_base + NVME_ASQ, (uint64_t)ASQ_ADDR);
-	mmio_wr64((uint64_t)bar0_base + NVME_ACQ, (uint64_t)ACQ_ADDR);
+	if (mmio_wr32(bar0_base + NVME_AQA, aqa))
+		puts("ERR: AQA write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: AQA write err=1 (write may still be accepted).");
+	if (mmio_wr64(bar0_base + NVME_ASQ, (uint64_t)ASQ_ADDR))
+		puts("ERR: ASQ write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: ASQ write err=1 (write may still be accepted).");
+	if (mmio_wr64(bar0_base + NVME_ACQ, (uint64_t)ACQ_ADDR))
+		puts("ERR: ACQ write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: ACQ write err=1 (write may still be accepted).");
 
 	cc = cc_make_en(4, 6, 0);
-	mmio_wr32((uint64_t)bar0_base + NVME_CC, cc);
+	if (mmio_wr32(bar0_base + NVME_CC, cc))
+		puts("ERR: CC write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: CC write err=1 (write may still be accepted).");
 
 	if (!nvme_wait_rdy(1, 2000000)) {
 		puts("WARN: CSTS.RDY did not assert.");
@@ -679,27 +902,40 @@ static void nvme_identify_run(uint16_t cid)
 		hostmem_wr32(ASQ_ADDR + i * 4, cmd[i]);
 
 	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 0, 0);
-	mmio_wr32(db, 1);
+	if (mmio_wr32(db, 1))
+		puts("ERR: SQ doorbell write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+	int cqe_ok = 0;
 	for (uint32_t loops = 0; loops < 2000000; loops++) {
 		d0 = hostmem_rd32(ACQ_ADDR + 0x0);
 		d1 = hostmem_rd32(ACQ_ADDR + 0x4);
 		d2 = hostmem_rd32(ACQ_ADDR + 0x8);
 		d3 = hostmem_rd32(ACQ_ADDR + 0xc);
 		if (((d3 >> 16) & 0x1) == 1)
-			break;
+			{ cqe_ok = 1; break; }
 	}
 
 	printf("ACQ[0] raw: %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n", d0, d1, d2, d3);
 	decode_cqe(d0, d1, d2, d3);
 
 	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 0, 1);
-	mmio_wr32(db_cq, 1);
+	if (mmio_wr32(db_cq, 1))
+		puts("ERR: CQ doorbell write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: CQ doorbell write err=1 (write may still be accepted).");
+
+	if (!cqe_ok) {
+		puts("ERR: no completion observed.");
+		return 1;
+	}
 
 	uint32_t id_dws[64];
 	hostmem_read_dwords(ID_BUF_ADDR, id_dws, 64);
 	identify_decode(id_dws, 64);
+	return 0;
 }
 
 static void nvme_identify_cmd(char *str)
@@ -723,11 +959,24 @@ static void nvme_identify_auto_cmd(char *str)
 			cid = (uint16_t)strtoul(b, NULL, 0);
 	}
 
-	if (nvme_bar0_assign(base_addr))
-		return;
+	int prev_cfg = cfg_use_pcie;
+	if (!nvme_bar0_assign(base_addr)) {
+		cmd_set_bits(1, 1, 1);
+		cmd_print_cmdsts();
+		if (nvme_identify_run(cid) == 0)
+			return;
+	}
 
+	cfg_use_pcie = !prev_cfg;
+	if (nvme_bar0_assign(base_addr)) {
+		cfg_use_pcie = prev_cfg;
+		return;
+	}
+	printf("INFO: retrying with cfg_use=%s\n", cfg_use_pcie ? "pcie_cfg" : "cfg");
 	cmd_set_bits(1, 1, 1);
+	cmd_print_cmdsts();
 	nvme_identify_run(cid);
+	cfg_use_pcie = prev_cfg;
 }
 
 static void todo_cmd(void)
@@ -756,10 +1005,18 @@ static void console_service(void)
 		status_cmd();
 	else if (strcmp(token, "bdf") == 0)
 		bdf_cmd(str);
+	else if (strcmp(token, "cfg_bdf") == 0)
+		cfg_bdf_raw_cmd();
+	else if (strcmp(token, "cfg_scan") == 0)
+		cfg_scan_cmd(str);
 	else if (strcmp(token, "cfg_rd") == 0)
 		cfg_rd_cmd(str);
 	else if (strcmp(token, "cfg_wr") == 0)
 		cfg_wr_cmd(str);
+	else if (strcmp(token, "cfg_use") == 0)
+		cfg_select_cmd(str);
+	else if (strcmp(token, "mmio_use") == 0)
+		mmio_select_cmd(str);
 	else if (strcmp(token, "cmd_enable") == 0)
 		cmd_enable_cmd();
 	else if (strcmp(token, "cmd_disable") == 0)
