@@ -34,19 +34,15 @@ init) and then optionally execute read/write commands.
 Console commands (from the firmware prompt):
 
 - `status` — link status + hostmem counters
-- `bdf <b> <d> <f>` — set target BDF for config access
-- `cfg_use [pcie|cfg]` — select CFG CSR block (`cfg` matches host scripts)
 - `cfg_rd <reg>` / `cfg_wr <reg> <val>` — config space access
 - Note: some CFG writes can return `err=1` but still take effect (posted/UR/CA). Always read back to confirm.
 - `cmd_enable` / `cmd_disable` — set/clear Command.MEM + Command.BME
-- `bar0 <addr>` — set BAR0 base
-- `bar0_rd <off>` / `bar0_wr <off> <val>` — BAR0 MMIO access
-- `bar0_dump <len> [s]` — dump BAR0 space
 - `mmio_rd <addr>` / `mmio_wr <addr> <val>` — absolute MMIO access
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
-- `bar0_info` — read CAP/VS/CSTS at BAR0
-- `nvme_identify [cid]` — run Admin Identify (controller) and decode
-- `nvme_identify_auto [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify
+- `nvme_identify [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify
+
+Notes:
+- The PCIe BDF is fixed in firmware (0:1:0). Update `cfg_bus/cfg_dev/cfg_fun` in `bench/firmware/main.c` if needed.
 
 Suggested next step: add a small firmware that:
 - polls PCIe link status,
@@ -54,16 +50,7 @@ Suggested next step: add a small firmware that:
 - initializes admin queues and IO queues,
 - services a simple mailbox for read/write requests.
 
-Manual Identify flow (equivalent to NOTES.md up to Identify):
-```
-bdf <bus> <dev> <fn>
-cmd_enable
-bar0 <addr>
-bar0_info
-nvme_identify
-```
-
 One-shot Identify flow:
 ```
-nvme_identify_auto 0xe0000000 1
+nvme_identify 0xe0000000 1
 ```
