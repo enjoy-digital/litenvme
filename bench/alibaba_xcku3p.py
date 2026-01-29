@@ -33,6 +33,7 @@ from litescope import LiteScopeAnalyzer
 from litenvme.cfg     import LiteNVMePCIeCfgAccessor
 from litenvme.mem     import LiteNVMePCIeMmioAccessor
 from litenvme.hostmem import LiteNVMeHostMemResponder
+from litenvme.req     import LiteNVMeRequestCSR
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -163,6 +164,10 @@ class BaseSoC(SoCCore):
             with_csr = True,
         )
         self.add_module(name="pcie_mmio", module=self.mmio)
+
+        # NVMe Request CSR (firmware-driven).
+        self.req = LiteNVMeRequestCSR()
+        self.add_module(name="nvme_req", module=self.req)
 
         # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
 

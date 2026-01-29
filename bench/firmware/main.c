@@ -187,6 +187,11 @@ static int mmio_warn_writes = 0;
 static int nvme_debug = 0;
 static uint32_t nvme_fill_pattern = 0xA5A5A5A5u;
 
+// NVMe Request CSR opcodes.
+#define NVME_REQ_OP_READ     0
+#define NVME_REQ_OP_WRITE    1
+#define NVME_REQ_OP_IDENTIFY 2
+
 static void delay_cycles(unsigned int cycles)
 {
 	volatile unsigned int i;
@@ -1415,6 +1420,86 @@ static void nvme_verify_cmd(char *str)
 		       slba, slba + (uint64_t)nlb - 1, nvme_fill_pattern);
 }
 
+static void nvme_req_service(void)
+{
+#ifdef CSR_NVME_REQ_REQ_CTRL_ADDR
+	uint32_t ctrl = nvme_req_req_ctrl_read();
+	if ((ctrl & 0x1u) == 0)
+		return;
+
+	uint32_t op   = nvme_req_req_op_read();
+	uint32_t nsid = nvme_req_req_nsid_read();
+	uint64_t lba  = ((uint64_t)nvme_req_req_lba_hi_read() << 32) | nvme_req_req_lba_lo_read();
+	uint32_t nlb  = nvme_req_req_nlb_read();
+	uint64_t buf  = ((uint64_t)nvme_req_req_buf_hi_read() << 32) | nvme_req_req_buf_lo_read();
+	uint64_t bar0 = ((uint64_t)nvme_req_req_bar0_hi_read() << 32) | nvme_req_req_bar0_lo_read();
+
+	if (nvme_debug) {
+		printf("REQ op=%" PRIu32 " nsid=%" PRIu32 " lba=%" PRIu64 " nlb=%" PRIu32 "\n",
+		       op, nsid, lba, nlb);
+		printf("REQ buf=0x%016" PRIx64 " bar0=0x%016" PRIx64 "\n", buf, bar0);
+	}
+
+	nvme_req_req_status_write(1); // busy=1, done=0, error=0
+	nvme_req_req_cqe_status_write(0);
+
+	int err = 0;
+	uint32_t cqe[4] = {0, 0, 0, 0};
+
+	if (bar0 == 0)
+		bar0 = 0xe0000000ull;
+
+	if (nvme_bar0_assign(bar0))
+		err = 1;
+
+	if (!err) {
+		uint64_t cap = 0;
+		if (nvme_admin_init(&cap)) {
+			err = 1;
+		} else if (op == NVME_REQ_OP_IDENTIFY) {
+			hostmem_fill(ACQ_ADDR, ADMIN_Q_ENTRIES * 16, 0);
+			hostmem_fill(ID_BUF_ADDR, 0x100, 0);
+			uint32_t cmd[16];
+			nvme_cmd_identify_controller(1, (uint64_t)ID_BUF_ADDR, cmd);
+			if (nvme_admin_submit(cap, cmd, cqe))
+				err = 1;
+		} else if (op == NVME_REQ_OP_READ || op == NVME_REQ_OP_WRITE) {
+			if (nvme_io_setup(cap)) {
+				err = 1;
+			} else {
+				if (nlb == 0 || nlb > 8) {
+					err = 1;
+				} else {
+					if (op == NVME_REQ_OP_WRITE)
+						hostmem_fill((uint32_t)buf, 0x1000, nvme_fill_pattern);
+					uint32_t cmd[16];
+					if (op == NVME_REQ_OP_READ)
+						nvme_cmd_read(0x30, nsid, buf, lba, (uint16_t)(nlb - 1), cmd);
+					else
+						nvme_cmd_write(0x31, nsid, buf, lba, (uint16_t)(nlb - 1), cmd);
+					if (nvme_io_submit(cap, cmd, cqe))
+						err = 1;
+				}
+			}
+		} else {
+			err = 1;
+		}
+	}
+
+	if (err) {
+		nvme_req_req_status_write(0x6); // done=1, error=1
+	} else {
+		nvme_req_req_status_write(0x2); // done=1, error=0
+	}
+	nvme_req_req_cqe_status_write(cqe[3]);
+	if (nvme_debug)
+		printf("REQ done err=%d cqe=0x%08" PRIx32 "\n", err, cqe[3]);
+
+	// Clear start.
+	nvme_req_req_ctrl_write(0);
+#endif
+}
+
 /*-----------------------------------------------------------------------*/
 /* Console service / Main                                                */
 /*-----------------------------------------------------------------------*/
@@ -1483,6 +1568,7 @@ int main(void)
 	prompt();
 
 	while (1) {
+		nvme_req_service();
 		console_service();
 	}
 

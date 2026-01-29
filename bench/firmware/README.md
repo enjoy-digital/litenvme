@@ -53,6 +53,10 @@ Console commands (from the firmware prompt):
 Notes:
 - The PCIe BDF is fixed in firmware (0:1:0). Update `cfg_bus/cfg_dev/cfg_fun` in `bench/firmware/main.c` if needed.
 
+CSR request flow (firmware-driven, no UART):
+- The gateware exposes `nvme_req_*` CSRs (op/nsid/lba/nlb/buf/bar0 + start/status).
+- Firmware polls `req_start`, executes the request, then updates `req_status` and `req_cqe_status`.
+
 Suggested next step: add a small firmware that:
 - polls PCIe link status,
 - configures BAR0 and Command.MEM/BME,
