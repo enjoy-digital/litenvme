@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 # ./alibaba_xcku3p.py --with-etherbone --csr-csv=csr.csv --build --load
-
+# ./alibaba_xcku3p.py --with-cpu --cpu-boot=bios --csr-csv=csr.csv --with-etherbone  --build --load
 
 import os
 
@@ -78,7 +78,7 @@ class BaseSoC(SoCCore):
             if cpu_boot == "bios":
                 soc_kwargs.update(dict(
                     integrated_rom_size      = 0x10000,  # BIOS
-                    integrated_main_ram_size = 0x4000,   # App load
+                    integrated_main_ram_size = 0x8000,   # App load
                 ))
             else:
                 soc_kwargs.update(dict(
@@ -340,10 +340,14 @@ def main():
         build_dir = builder.output_dir
         os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} BOOT={args.cpu_boot} clean all")
 
-        # Second build with integrated ROM init (ROM boot only).
+        # Second build:
+        # - ROM boot: integrate firmware.bin into ROM init.
+        # - BIOS boot: rebuild gateware after firmware build.
         fw_bin = os.path.join(fw_dir, "firmware.bin")
         if args.cpu_boot == "rom":
             soc, builder = build_soc(cpu_firmware=fw_bin)
+        else:
+            soc, builder = build_soc(cpu_firmware=None)
     else:
         soc, builder = build_soc(cpu_firmware=args.cpu_firmware)
 
