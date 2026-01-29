@@ -32,7 +32,12 @@
 #define ASQ_ADDR           (HOSTMEM_BASE + 0x0000u)
 #define ACQ_ADDR           (HOSTMEM_BASE + 0x1000u)
 #define ID_BUF_ADDR        (HOSTMEM_BASE + 0x2000u)
+#define IO_CQ_ADDR         (HOSTMEM_BASE + 0x3000u)
+#define IO_SQ_ADDR         (HOSTMEM_BASE + 0x4000u)
+#define IO_RD_BUF_ADDR     (HOSTMEM_BASE + 0x5000u)
+#define IO_WR_BUF_ADDR     (HOSTMEM_BASE + 0x6000u)
 #define ADMIN_Q_ENTRIES    2
+#define IO_Q_ENTRIES       4
 
 #define NVME_CAP           0x0000u
 #define NVME_VS            0x0008u
@@ -126,6 +131,8 @@ static void help(void)
 	puts("mmio_wr <addr> <v> - MMIO write dword at absolute address");
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
 	puts("nvme_identify [bar0] [cid] - Auto BAR0 assign + enable MEM/BME/INTx off + Identify");
+	puts("nvme_read [bar0] [nsid] [slba] [nlb]  - Read NLB blocks into hostmem");
+	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
 	puts("todo               - Placeholder for NVMe bring-up");
 }
 
@@ -474,6 +481,13 @@ static uint32_t bit(uint32_t v, uint32_t n) { return (v >> n) & 1u; }
 
 static uint32_t csts_rdy(uint32_t csts) { return bit(csts, 0); }
 static uint32_t cc_en(uint32_t cc) { return bit(cc, 0); }
+static uint32_t cqe_ok(uint32_t d3)
+{
+	uint32_t sts = (d3 >> 16) & 0xffffu;
+	uint32_t sc  = (sts >> 1) & 0xffu;
+	uint32_t sct = (sts >> 9) & 0x7u;
+	return (sct == 0) && (sc == 0);
+}
 
 static uint32_t doorbell_stride_bytes(uint32_t dstrd)
 {
@@ -496,6 +510,71 @@ static uint32_t cc_make_en(uint32_t iocqes, uint32_t iosqes, uint32_t mps)
 	cc |= (iosqes & 0xfu) << 16;
 	cc |= (iocqes & 0xfu) << 20;
 	return cc;
+}
+
+static void nvme_cmd_set_features_num_queues(uint16_t cid, uint16_t nsqr, uint16_t ncqr, uint32_t *cmd)
+{
+	for (int i = 0; i < 16; i++)
+		cmd[i] = 0;
+	cmd[0]  = (0x09u & 0xffu) | (((uint32_t)cid & 0xffffu) << 16);
+	uint32_t cdw10 = 0x07;
+	cdw10 |= ((nsqr - 1) & 0xffffu) << 0;
+	cdw10 |= ((ncqr - 1) & 0xffffu) << 16;
+	cmd[10] = cdw10;
+}
+
+static void nvme_cmd_create_iocq(uint16_t cid, uint64_t prp1_cq, uint16_t qid,
+                                 uint16_t qsize_minus1, uint16_t iv, uint16_t ien, uint16_t pc,
+                                 uint32_t *cmd)
+{
+	for (int i = 0; i < 16; i++)
+		cmd[i] = 0;
+	cmd[0]  = (0x05u & 0xffu) | (((uint32_t)cid & 0xffffu) << 16);
+	cmd[6]  = (uint32_t)(prp1_cq & 0xffffffffu);
+	cmd[7]  = (uint32_t)((prp1_cq >> 32) & 0xffffffffu);
+	cmd[10] = (qid & 0xffffu) | ((qsize_minus1 & 0xffffu) << 16);
+	uint32_t cq_flags = ((pc & 0x1u) << 0) | ((ien & 0x1u) << 1);
+	cmd[11] = ((iv & 0xffffu) << 16) | (cq_flags & 0xffffu);
+}
+
+static void nvme_cmd_create_iosq(uint16_t cid, uint64_t prp1_sq, uint16_t qid,
+                                 uint16_t qsize_minus1, uint16_t cqid, uint16_t qprio, uint16_t pc,
+                                 uint32_t *cmd)
+{
+	for (int i = 0; i < 16; i++)
+		cmd[i] = 0;
+	cmd[0]  = (0x01u & 0xffu) | (((uint32_t)cid & 0xffffu) << 16);
+	cmd[6]  = (uint32_t)(prp1_sq & 0xffffffffu);
+	cmd[7]  = (uint32_t)((prp1_sq >> 32) & 0xffffffffu);
+	cmd[10] = (qid & 0xffffu) | ((qsize_minus1 & 0xffffu) << 16);
+	uint32_t sq_flags = ((pc & 0x1u) << 0) | ((qprio & 0x3u) << 1);
+	cmd[11] = ((cqid & 0xffffu) << 16) | (sq_flags & 0xffffu);
+}
+
+static void nvme_cmd_read(uint16_t cid, uint32_t nsid, uint64_t prp1_data, uint64_t slba, uint16_t nlb_minus1, uint32_t *cmd)
+{
+	for (int i = 0; i < 16; i++)
+		cmd[i] = 0;
+	cmd[0]  = (0x02u & 0xffu) | (((uint32_t)cid & 0xffffu) << 16);
+	cmd[1]  = nsid;
+	cmd[6]  = (uint32_t)(prp1_data & 0xffffffffu);
+	cmd[7]  = (uint32_t)((prp1_data >> 32) & 0xffffffffu);
+	cmd[10] = (uint32_t)(slba & 0xffffffffu);
+	cmd[11] = (uint32_t)((slba >> 32) & 0xffffffffu);
+	cmd[12] = (nlb_minus1 & 0xffffu);
+}
+
+static void nvme_cmd_write(uint16_t cid, uint32_t nsid, uint64_t prp1_data, uint64_t slba, uint16_t nlb_minus1, uint32_t *cmd)
+{
+	for (int i = 0; i < 16; i++)
+		cmd[i] = 0;
+	cmd[0]  = (0x01u & 0xffu) | (((uint32_t)cid & 0xffffu) << 16);
+	cmd[1]  = nsid;
+	cmd[6]  = (uint32_t)(prp1_data & 0xffffffffu);
+	cmd[7]  = (uint32_t)((prp1_data >> 32) & 0xffffffffu);
+	cmd[10] = (uint32_t)(slba & 0xffffffffu);
+	cmd[11] = (uint32_t)((slba >> 32) & 0xffffffffu);
+	cmd[12] = (nlb_minus1 & 0xffffu);
 }
 
 static uint64_t bar_size_from_mask(uint64_t mask)
@@ -658,10 +737,23 @@ static void identify_decode(const uint32_t *dws, uint32_t dword_count)
 	printf("  RAB      : %u\n", b[0x48]);
 	printf("  CMIC     : 0x%02x\n", b[0x4c]);
 	printf("  MDTS     : %u\n", b[0x4d]);
-	printf("  OAES     : 0x%08" PRIx32 "\n", oaes);
+printf("  OAES     : 0x%08" PRIx32 "\n", oaes);
 }
 
-static int nvme_identify_run(uint16_t cid)
+static uint16_t admin_sq_tail = 0;
+static uint16_t admin_cq_head = 0;
+static uint16_t admin_cq_phase = 1;
+static uint16_t io_sq_tail = 0;
+static uint16_t io_cq_head = 0;
+static uint16_t io_cq_phase = 1;
+
+static void nvme_admin_reset_queues(void);
+static void nvme_io_reset_queues(void);
+static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe);
+static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe);
+
+
+static int nvme_admin_init(uint64_t *cap_out)
 {
 	if (bar0_base == 0) {
 		puts("ERR: BAR0 base is 0. Use bar0 <addr> first.");
@@ -723,42 +815,28 @@ static int nvme_identify_run(uint16_t cid)
 		puts("WARN: CSTS.RDY did not assert.");
 	}
 
-	hostmem_fill(ACQ_ADDR, 16, 0);
+	nvme_admin_reset_queues();
+	hostmem_fill(ASQ_ADDR, ADMIN_Q_ENTRIES * 64, 0);
+	hostmem_fill(ACQ_ADDR, ADMIN_Q_ENTRIES * 16, 0);
+	if (cap_out)
+		*cap_out = cap;
+	return 0;
+}
+
+static int nvme_identify_run(uint16_t cid)
+{
+	uint64_t cap = 0;
+	if (nvme_admin_init(&cap))
+		return 1;
+	hostmem_fill(ACQ_ADDR, ADMIN_Q_ENTRIES * 16, 0);
 	hostmem_fill(ID_BUF_ADDR, 0x100, 0);
 
 	uint32_t cmd[16];
+	uint32_t cqe[4];
 	nvme_cmd_identify_controller(cid, (uint64_t)ID_BUF_ADDR, cmd);
-	for (int i = 0; i < 16; i++)
-		hostmem_wr32(ASQ_ADDR + i * 4, cmd[i]);
-
-	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 0, 0);
-	if (mmio_wr32(db, 1))
-		puts("ERR: SQ doorbell write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: SQ doorbell write err=1 (write may still be accepted).");
-
-	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
-	int cqe_ok = 0;
-	for (uint32_t loops = 0; loops < 2000000; loops++) {
-		d0 = hostmem_rd32(ACQ_ADDR + 0x0);
-		d1 = hostmem_rd32(ACQ_ADDR + 0x4);
-		d2 = hostmem_rd32(ACQ_ADDR + 0x8);
-		d3 = hostmem_rd32(ACQ_ADDR + 0xc);
-		if (((d3 >> 16) & 0x1) == 1)
-			{ cqe_ok = 1; break; }
-	}
-
-	printf("ACQ[0] raw: %08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n", d0, d1, d2, d3);
-	decode_cqe(d0, d1, d2, d3);
-
-	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 0, 1);
-	if (mmio_wr32(db_cq, 1))
-		puts("ERR: CQ doorbell write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: CQ doorbell write err=1 (write may still be accepted).");
-
-	if (!cqe_ok) {
-		puts("ERR: no completion observed.");
+	if (nvme_admin_submit(cap, cmd, cqe)) {
+		puts("ERR: Identify command failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
 		return 1;
 	}
 
@@ -766,6 +844,94 @@ static int nvme_identify_run(uint16_t cid)
 	hostmem_read_dwords(ID_BUF_ADDR, id_dws, 64);
 	identify_decode(id_dws, 64);
 	return 0;
+}
+
+static void nvme_admin_reset_queues(void)
+{
+	admin_sq_tail = 0;
+	admin_cq_head = 0;
+	admin_cq_phase = 1;
+}
+
+static void nvme_io_reset_queues(void)
+{
+	io_sq_tail = 0;
+	io_cq_head = 0;
+	io_cq_phase = 1;
+}
+
+static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
+{
+	uint32_t sqe_addr = ASQ_ADDR + admin_sq_tail * 64;
+	for (int i = 0; i < 16; i++)
+		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
+
+	admin_sq_tail = (admin_sq_tail + 1) % ADMIN_Q_ENTRIES;
+	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 0, 0);
+	if (mmio_wr32(db, admin_sq_tail))
+		puts("ERR: SQ doorbell write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: SQ doorbell write err=1 (write may still be accepted).");
+
+	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+	for (uint32_t loops = 0; loops < 2000000; loops++) {
+		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
+		d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
+		d2 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 8);
+		d3 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 12);
+		if (((d3 >> 16) & 0x1u) == admin_cq_phase)
+			break;
+	}
+
+	cqe[0] = d0; cqe[1] = d1; cqe[2] = d2; cqe[3] = d3;
+
+	admin_cq_head = (admin_cq_head + 1) % ADMIN_Q_ENTRIES;
+	if (admin_cq_head == 0)
+		admin_cq_phase ^= 1u;
+	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 0, 1);
+	if (mmio_wr32(db_cq, admin_cq_head))
+		puts("ERR: CQ doorbell write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: CQ doorbell write err=1 (write may still be accepted).");
+
+	return cqe_ok(cqe[3]) ? 0 : 1;
+}
+
+static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
+{
+	uint32_t sqe_addr = IO_SQ_ADDR + io_sq_tail * 64;
+	for (int i = 0; i < 16; i++)
+		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
+
+	io_sq_tail = (io_sq_tail + 1) % IO_Q_ENTRIES;
+	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
+	if (mmio_wr32(db, io_sq_tail))
+		puts("ERR: IO SQ doorbell write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: IO SQ doorbell write err=1 (write may still be accepted).");
+
+	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+	for (uint32_t loops = 0; loops < 2000000; loops++) {
+		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
+		d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
+		d2 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 8);
+		d3 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 12);
+		if (((d3 >> 16) & 0x1u) == io_cq_phase)
+			break;
+	}
+
+	cqe[0] = d0; cqe[1] = d1; cqe[2] = d2; cqe[3] = d3;
+
+	io_cq_head = (io_cq_head + 1) % IO_Q_ENTRIES;
+	if (io_cq_head == 0)
+		io_cq_phase ^= 1u;
+	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
+	if (mmio_wr32(db_cq, io_cq_head))
+		puts("ERR: IO CQ doorbell write timeout.");
+	else if (mmio_last_err)
+		puts("WARN: IO CQ doorbell write err=1 (write may still be accepted).");
+
+	return cqe_ok(cqe[3]) ? 0 : 1;
 }
 
 static void nvme_identify_cmd(char *str)
@@ -788,9 +954,141 @@ static void nvme_identify_cmd(char *str)
 	nvme_identify_run(cid);
 }
 
-static void todo_cmd(void)
+static int nvme_io_setup(uint64_t cap)
 {
-	puts("TODO: implement NVMe bring-up + IO commands in firmware.");
+	nvme_io_reset_queues();
+	hostmem_fill(IO_CQ_ADDR, IO_Q_ENTRIES * 16, 0);
+	hostmem_fill(IO_SQ_ADDR, IO_Q_ENTRIES * 64, 0);
+
+	uint32_t cmd[16];
+	uint32_t cqe[4];
+
+	nvme_cmd_set_features_num_queues(0x20, 1, 1, cmd);
+	if (nvme_admin_submit(cap, cmd, cqe)) {
+		puts("ERR: Set Features (Number of Queues) failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return 1;
+	}
+
+	nvme_cmd_create_iocq(0x21, (uint64_t)IO_CQ_ADDR, 1, IO_Q_ENTRIES - 1, 0, 0, 1, cmd);
+	if (nvme_admin_submit(cap, cmd, cqe)) {
+		puts("ERR: Create IO CQ failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return 1;
+	}
+
+	nvme_cmd_create_iosq(0x22, (uint64_t)IO_SQ_ADDR, 1, IO_Q_ENTRIES - 1, 1, 0, 1, cmd);
+	if (nvme_admin_submit(cap, cmd, cqe)) {
+		puts("ERR: Create IO SQ failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return 1;
+	}
+
+	return 0;
+}
+
+static void nvme_read_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 1;
+
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		char *c = get_token(&str);
+		char *d = get_token(&str);
+		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
+		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
+	}
+
+	if (nlb == 0) {
+		puts("ERR: nlb must be >= 1.");
+		return;
+	}
+	if (nlb > 8) {
+		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
+		return;
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return;
+
+	uint64_t cap = 0;
+	if (nvme_admin_init(&cap))
+		return;
+	if (nvme_io_setup(cap))
+		return;
+
+	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
+
+	uint32_t cmd[16];
+	uint32_t cqe[4];
+	nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, slba, (uint16_t)(nlb - 1), cmd);
+	if (nvme_io_submit(cap, cmd, cqe)) {
+		puts("ERR: Read command failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return;
+	}
+
+	uint32_t data[16];
+	hostmem_read_dwords(IO_RD_BUF_ADDR, data, 16);
+	printf("Read data (first 16 dwords):\n  ");
+	for (int i = 0; i < 16; i++)
+		printf("%08" PRIx32 "%s", data[i], (i == 15) ? "\n" : " ");
+}
+
+static void nvme_write_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 1;
+
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		char *c = get_token(&str);
+		char *d = get_token(&str);
+		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
+		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
+	}
+
+	if (nlb == 0) {
+		puts("ERR: nlb must be >= 1.");
+		return;
+	}
+	if (nlb > 8) {
+		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
+		return;
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return;
+
+	uint64_t cap = 0;
+	if (nvme_admin_init(&cap))
+		return;
+	if (nvme_io_setup(cap))
+		return;
+
+	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, 0xA5A5A5A5);
+
+	uint32_t cmd[16];
+	uint32_t cqe[4];
+	nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, slba, (uint16_t)(nlb - 1), cmd);
+	if (nvme_io_submit(cap, cmd, cqe)) {
+		puts("ERR: Write command failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return;
+	}
+
+	puts("Write completed.");
 }
 
 /*-----------------------------------------------------------------------*/
@@ -828,8 +1126,10 @@ static void console_service(void)
 		mmio_dump_cmd(str);
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
-	else if (strcmp(token, "todo") == 0)
-		todo_cmd();
+	else if (strcmp(token, "nvme_read") == 0)
+		nvme_read_cmd(str);
+	else if (strcmp(token, "nvme_write") == 0)
+		nvme_write_cmd(str);
 	prompt();
 }
 

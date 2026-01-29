@@ -40,6 +40,8 @@ Console commands (from the firmware prompt):
 - `mmio_rd <addr>` / `mmio_wr <addr> <val>` — absolute MMIO access
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
 - `nvme_identify [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify
+- `nvme_read [bar0] [nsid] [slba] [nlb]` — read NLB blocks into hostmem
+- `nvme_write [bar0] [nsid] [slba] [nlb]` — write NLB blocks from hostmem
 
 Notes:
 - The PCIe BDF is fixed in firmware (0:1:0). Update `cfg_bus/cfg_dev/cfg_fun` in `bench/firmware/main.c` if needed.
@@ -53,4 +55,9 @@ Suggested next step: add a small firmware that:
 One-shot Identify flow:
 ```
 nvme_identify 0xe0000000 1
+```
+
+One-shot Read flow:
+```
+nvme_read 0xe0000000 1 0 1
 ```
