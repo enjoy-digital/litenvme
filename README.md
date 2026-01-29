@@ -41,13 +41,24 @@ Hardware validated (end-to-end with a real NVMe SSD):
 * Admin Identify Controller (CNS=1) with decoded fields.
 * Set Features: Number of Queues (FID=0x07).
 * Create IO CQ/SQ (PC=1).
-* First successful I/O Reads with DMA into the host memory window (e.g. GPT header `"EFI PART"` at LBA1).
+* Successful I/O Reads with DMA into the host memory window.
+* Successful I/O Writes with readback verification.
+* Bring-up validated both from Python scripts and from an integrated SoftCPU running firmware.
 
 Bring-up components currently used:
 
 * LitePCIe in RootPort mode.
 * AXI-mapped BRAM host memory responder (stands in for system DRAM during bring-up).
-* UARTBone-driven test scripts for reproducible sequences and debug.
+* UARTBone-driven Python test scripts for reproducible sequences and debug.
+* SoftCPU firmware in the target design to run Identify/Read/Write directly on hardware.
+
+SoftCPU flow (current vs. target usage):
+
+* **Current bring-up**: the VexRiscv runs a small test firmware that exposes
+  manual NVMe commands over UART (Identify/Read/Write/Verify) for validation.
+* **Target usage**: the SoftCPU will be driven by user logic via control/status
+  registers (e.g. AXI-Lite), and will handle the internal NVMe sequencing
+  without requiring a human-operated UART shell.
 
 [> Validation steps (bring-up)
 -------------------------------
