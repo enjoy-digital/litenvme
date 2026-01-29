@@ -822,13 +822,9 @@ static int nvme_admin_init(uint64_t *cap_out)
 	for (int tries = 0; tries < NVME_CAP_TRIES; tries++) {
 		if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
 			puts("ERR: CAP read timeout.");
-		} else if (mmio_last_err && cap == 0) {
-			puts("WARN: CAP read err=1 (read may still be valid).");
 		}
 		if (mmio_rd32(bar0_base + NVME_CC, &cc)) {
 			puts("ERR: CC read timeout.");
-		} else if (mmio_last_err && cc == 0) {
-			puts("WARN: CC read err=1 (read may still be valid).");
 		}
 		if (cap != 0)
 			break;
@@ -838,13 +834,9 @@ static int nvme_admin_init(uint64_t *cap_out)
 		for (int tries = 0; tries < NVME_CAP_TRIES_SLOW; tries++) {
 			if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
 				puts("ERR: CAP read timeout.");
-			} else if (mmio_last_err && cap == 0) {
-				puts("WARN: CAP read err=1 (read may still be valid).");
 			}
 			if (mmio_rd32(bar0_base + NVME_CC, &cc)) {
 				puts("ERR: CC read timeout.");
-			} else if (mmio_last_err && cc == 0) {
-				puts("WARN: CC read err=1 (read may still be valid).");
 			}
 			if (cap != 0)
 				break;
@@ -856,10 +848,10 @@ static int nvme_admin_init(uint64_t *cap_out)
 		return 1;
 	}
 	if (cc_en(cc)) {
-		if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
-			puts("ERR: CC write timeout.");
-		else if (mmio_last_err)
-			puts("WARN: CC write err=1 (write may still be accepted).");
+				if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
+					puts("ERR: CC write timeout.");
+				else
+					mmio_warn_write("WARN: CC write err=1 (write may still be accepted).");
 		if (!nvme_wait_rdy(0, NVME_RDY_CLEAR_LOOPS))
 			puts("WARN: CSTS.RDY did not clear.");
 	}
