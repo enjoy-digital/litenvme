@@ -636,6 +636,9 @@ static int nvme_bar0_assign(uint64_t base_addr)
 	uint32_t bar0_orig = 0;
 	uint32_t id = 0;
 
+	if (bar0_base == base_addr && bar0_base != 0)
+		return 0;
+
 	if (cfg_rd32(0, &id)) {
 		puts("ERR: CFG read ID failed.");
 		return 1;
@@ -948,16 +951,24 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		mmio_warn_write("WARN: SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+	int got_cqe = 0;
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
 		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
 		d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
 		d2 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 8);
 		d3 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 12);
-		if (((d3 >> 16) & 0x1u) == admin_cq_phase)
+		if (((d3 >> 16) & 0x1u) == admin_cq_phase) {
+			got_cqe = 1;
 			break;
+		}
 	}
 
 	cqe[0] = d0; cqe[1] = d1; cqe[2] = d2; cqe[3] = d3;
+
+	if (!got_cqe) {
+		puts("ERR: Admin CQ timeout.");
+		return 1;
+	}
 
 	admin_cq_head = (admin_cq_head + 1) % ADMIN_Q_ENTRIES;
 	if (admin_cq_head == 0)
@@ -991,16 +1002,24 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		mmio_warn_write("WARN: IO SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+	int got_cqe = 0;
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
 		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
 		d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
 		d2 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 8);
 		d3 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 12);
-		if (((d3 >> 16) & 0x1u) == io_cq_phase)
+		if (((d3 >> 16) & 0x1u) == io_cq_phase) {
+			got_cqe = 1;
 			break;
+		}
 	}
 
 	cqe[0] = d0; cqe[1] = d1; cqe[2] = d2; cqe[3] = d3;
+
+	if (!got_cqe) {
+		puts("ERR: IO CQ timeout.");
+		return 1;
+	}
 
 	io_cq_head = (io_cq_head + 1) % IO_Q_ENTRIES;
 	if (io_cq_head == 0)
