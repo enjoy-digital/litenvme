@@ -138,12 +138,15 @@ static void help(void)
 	puts("nvme_reset         - Clear cached NVMe init state and disable controller");
 	puts("mmio_warn_writes <0|1> - Enable/disable warnings on MMIO writes (default 0)");
 	puts("nvme_debug <0|1>   - Enable/disable NVMe debug prints");
+	puts("nvme_fill <pattern> - Set write buffer fill pattern (hex)");
 	puts("mmio_rd <addr>     - MMIO read dword at absolute address");
 	puts("mmio_wr <addr> <v> - MMIO write dword at absolute address");
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
 	puts("nvme_identify [bar0] [cid] - Auto BAR0 assign + enable MEM/BME/INTx off + Identify");
 	puts("nvme_read [bar0] [nsid] [slba] [nlb]  - Read NLB blocks into hostmem");
 	puts("nvme_read_dump [bar0] [nsid] [slba] [nlb] [dwords] - Read + dump hostmem");
+	puts("nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords] - Write then read+dump");
+	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
 }
 
@@ -182,6 +185,7 @@ static int nvme_admin_ready = 0;
 static int nvme_io_ready = 0;
 static int mmio_warn_writes = 0;
 static int nvme_debug = 0;
+static uint32_t nvme_fill_pattern = 0xA5A5A5A5u;
 
 static void delay_cycles(unsigned int cycles)
 {
@@ -329,6 +333,12 @@ static void nvme_debug_cmd(char *str)
 {
 	nvme_debug = (int)strtoul(str, NULL, 0) ? 1 : 0;
 	printf("nvme_debug = %d\n", nvme_debug);
+}
+
+static void nvme_fill_cmd(char *str)
+{
+	nvme_fill_pattern = (uint32_t)strtoul(str, NULL, 0);
+	printf("nvme_fill = 0x%08" PRIx32 "\n", nvme_fill_pattern);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -638,6 +648,15 @@ static uint64_t bar_size_from_mask(uint64_t mask)
 	return (~mask + 1u) & 0xffffffffffffffffull;
 }
 
+static int cfg_rd32_retry(uint8_t reg, uint32_t *val, int tries)
+{
+	for (int i = 0; i < tries; i++) {
+		if (cfg_rd32(reg, val) == 0 && !cfg_last_err)
+			return 0;
+	}
+	return 1;
+}
+
 static int nvme_bar0_assign(uint64_t base_addr)
 {
 	uint32_t bar0 = 0, bar1 = 0;
@@ -647,7 +666,7 @@ static int nvme_bar0_assign(uint64_t base_addr)
 	if (bar0_base == base_addr && bar0_base != 0)
 		return 0;
 
-	if (cfg_rd32(0, &id)) {
+	if (cfg_rd32_retry(0, &id, 5)) {
 		puts("ERR: CFG read ID failed.");
 		return 1;
 	}
@@ -657,7 +676,7 @@ static int nvme_bar0_assign(uint64_t base_addr)
 	}
 	printf("VID/DID      = 0x%08" PRIx32 "\n", id);
 
-	if (cfg_rd32(4, &bar0_orig)) {
+	if (cfg_rd32_retry(4, &bar0_orig, 5)) {
 		puts("ERR: CFG read BAR0 failed.");
 		return 1;
 	}
@@ -670,17 +689,25 @@ static int nvme_bar0_assign(uint64_t base_addr)
 
 	printf("BAR0 orig    = 0x%08" PRIx32 " (64b=%d)\n", bar0_orig, is_64);
 
-	cfg_wr32(4, 0xffffffff);
-	if (cfg_rd32(4, &bar0)) {
-		puts("ERR: CFG read BAR0 mask failed.");
-		return 1;
+	if ((bar0_orig & 0xfffffff0u) == (uint32_t)(base_addr & 0xffffffffu)) {
+		bar0 = bar0_orig;
+	} else {
+		cfg_wr32(4, 0xffffffff);
+		if (cfg_rd32_retry(4, &bar0, 5)) {
+			puts("ERR: CFG read BAR0 mask failed.");
+			return 1;
+		}
 	}
 	uint64_t mask = (uint64_t)(bar0 & 0xfffffff0u);
 	if (is_64) {
-		cfg_wr32(5, 0xffffffff);
-		if (cfg_rd32(5, &bar1)) {
-			puts("ERR: CFG read BAR1 mask failed.");
-			return 1;
+		if ((bar0_orig & 0xfffffff0u) == (uint32_t)(base_addr & 0xffffffffu)) {
+			cfg_rd32_retry(5, &bar1, 5);
+		} else {
+			cfg_wr32(5, 0xffffffff);
+			if (cfg_rd32_retry(5, &bar1, 5)) {
+				puts("ERR: CFG read BAR1 mask failed.");
+				return 1;
+			}
 		}
 		mask |= ((uint64_t)bar1 << 32);
 	}
@@ -1134,6 +1161,24 @@ static int nvme_read_do(uint64_t base_addr, uint32_t nsid, uint64_t slba, uint32
 	return 0;
 }
 
+static void nvme_dump_buffer(uint32_t dwords)
+{
+	if (dwords == 0) {
+		puts("ERR: dwords must be >= 1.");
+		return;
+	}
+	if (dwords > 256)
+		dwords = 256;
+
+	printf("Read data (first %" PRIu32 " dwords):\n", dwords);
+	for (uint32_t i = 0; i < dwords; i++) {
+		uint32_t v = hostmem_rd32(IO_RD_BUF_ADDR + i * 4);
+		if ((i % 8) == 0)
+			printf("  ");
+		printf("%08" PRIx32 "%s", v, ((i % 8) == 7 || i == dwords - 1) ? "\n" : " ");
+	}
+}
+
 static void nvme_read_cmd(char *str)
 {
 	uint64_t base_addr = 0xe0000000ull;
@@ -1155,11 +1200,7 @@ static void nvme_read_cmd(char *str)
 	if (nvme_read_do(base_addr, nsid, slba, nlb))
 		return;
 
-	uint32_t data[16];
-	hostmem_read_dwords(IO_RD_BUF_ADDR, data, 16);
-	printf("Read data (first 16 dwords):\n  ");
-	for (int i = 0; i < 16; i++)
-		printf("%08" PRIx32 "%s", data[i], (i == 15) ? "\n" : " ");
+	nvme_dump_buffer(16);
 }
 
 static void nvme_read_dump_cmd(char *str)
@@ -1183,23 +1224,10 @@ static void nvme_read_dump_cmd(char *str)
 		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
 	}
 
-	if (dwords == 0) {
-		puts("ERR: dwords must be >= 1.");
-		return;
-	}
-	if (dwords > 256)
-		dwords = 256;
-
 	if (nvme_read_do(base_addr, nsid, slba, nlb))
 		return;
 
-	printf("Read data (first %" PRIu32 " dwords):\n", dwords);
-	for (uint32_t i = 0; i < dwords; i++) {
-		uint32_t v = hostmem_rd32(IO_RD_BUF_ADDR + i * 4);
-		if ((i % 8) == 0)
-			printf("  ");
-		printf("%08" PRIx32 "%s", v, ((i % 8) == 7 || i == dwords - 1) ? "\n" : " ");
-	}
+	nvme_dump_buffer(dwords);
 }
 
 static void nvme_write_cmd(char *str)
@@ -1257,6 +1285,136 @@ static void nvme_write_cmd(char *str)
 	puts("Write completed.");
 }
 
+static void nvme_write_readback_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 1;
+	uint32_t dwords = 64;
+
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		char *c = get_token(&str);
+		char *d = get_token(&str);
+		char *e = get_token(&str);
+		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
+		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
+		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
+	}
+
+	if (nlb == 0) {
+		puts("ERR: nlb must be >= 1.");
+		return;
+	}
+	if (nlb > 8) {
+		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
+		return;
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return;
+
+	uint64_t cap = 0;
+	if (nvme_admin_init(&cap))
+		return;
+	if (nvme_io_setup(cap))
+		return;
+
+	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
+	if (nvme_debug) {
+		uint32_t w0 = hostmem_rd32(IO_WR_BUF_ADDR + 0);
+		uint32_t w1 = hostmem_rd32(IO_WR_BUF_ADDR + 4);
+		printf("WR buf[0..1] = %08" PRIx32 " %08" PRIx32 "\n", w0, w1);
+	}
+
+	uint32_t cmd[16];
+	uint32_t cqe[4];
+	nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, slba, (uint16_t)(nlb - 1), cmd);
+	if (nvme_io_submit(cap, cmd, cqe)) {
+		puts("ERR: Write command failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return;
+	}
+
+	puts("Write completed. Readback:");
+	if (nvme_read_do(base_addr, nsid, slba, nlb))
+		return;
+	nvme_dump_buffer(dwords);
+}
+
+static void nvme_verify_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 1;
+	uint32_t dwords = 64;
+
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		char *c = get_token(&str);
+		char *d = get_token(&str);
+		char *e = get_token(&str);
+		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
+		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
+		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
+	}
+
+	if (nlb == 0) {
+		puts("ERR: nlb must be >= 1.");
+		return;
+	}
+	if (nlb > 8) {
+		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
+		return;
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return;
+
+	uint64_t cap = 0;
+	if (nvme_admin_init(&cap))
+		return;
+	if (nvme_io_setup(cap))
+		return;
+
+	int mismatch = 0;
+	uint32_t cmp_words = dwords;
+	if (cmp_words == 0)
+		cmp_words = 64;
+	if (cmp_words > 256)
+		cmp_words = 256;
+
+	for (uint32_t i = 0; i < nlb; i++) {
+		uint64_t lba = slba + i;
+		if (nvme_read_do(base_addr, nsid, lba, 1))
+			return;
+
+		for (uint32_t w = 0; w < cmp_words; w++) {
+			uint32_t v = hostmem_rd32(IO_RD_BUF_ADDR + w * 4);
+			if (v != nvme_fill_pattern) {
+				printf("VERIFY FAIL: LBA %" PRIu64 " word %" PRIu32 " = %08" PRIx32 "\n",
+				       lba, w, v);
+				mismatch = 1;
+				break;
+			}
+		}
+		if (mismatch)
+			break;
+	}
+
+	if (!mismatch)
+		printf("VERIFY OK: LBA %" PRIu64 " .. %" PRIu64 " (pattern 0x%08" PRIx32 ")\n",
+		       slba, slba + (uint64_t)nlb - 1, nvme_fill_pattern);
+}
+
 /*-----------------------------------------------------------------------*/
 /* Console service / Main                                                */
 /*-----------------------------------------------------------------------*/
@@ -1296,12 +1454,18 @@ static void console_service(void)
 		mmio_warn_writes_cmd(str);
 	else if (strcmp(token, "nvme_debug") == 0)
 		nvme_debug_cmd(str);
+	else if (strcmp(token, "nvme_fill") == 0)
+		nvme_fill_cmd(str);
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)
 		nvme_read_cmd(str);
 	else if (strcmp(token, "nvme_read_dump") == 0)
 		nvme_read_dump_cmd(str);
+	else if (strcmp(token, "nvme_write_readback") == 0)
+		nvme_write_readback_cmd(str);
+	else if (strcmp(token, "nvme_verify") == 0)
+		nvme_verify_cmd(str);
 	else if (strcmp(token, "nvme_write") == 0)
 		nvme_write_cmd(str);
 	prompt();

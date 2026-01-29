@@ -40,11 +40,14 @@ Console commands (from the firmware prompt):
 - `nvme_reset` — clear cached NVMe init state (forces re-init on next command)
 - `mmio_warn_writes <0|1>` — enable/disable warnings on MMIO writes (default 0)
 - `nvme_debug <0|1>` — enable/disable NVMe debug prints
+- `nvme_fill <pattern>` — set write buffer fill pattern (hex)
 - `mmio_rd <addr>` / `mmio_wr <addr> <val>` — absolute MMIO access
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
 - `nvme_identify [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify
 - `nvme_read [bar0] [nsid] [slba] [nlb]` — read NLB blocks into hostmem
 - `nvme_read_dump [bar0] [nsid] [slba] [nlb] [dwords]` — read + dump hostmem (cap at 256 dwords)
+- `nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords]` — write then read+dump
+- `nvme_verify [bar0] [nsid] [slba] [nlb] [dwords]` — verify pattern on LBA range
 - `nvme_write [bar0] [nsid] [slba] [nlb]` — write NLB blocks from hostmem
 
 Notes:
@@ -69,4 +72,16 @@ nvme_read 0xe0000000 1 0 1
 One-shot Read+Dump flow:
 ```
 nvme_read_dump 0xe0000000 1 0 1 64
+```
+
+Write + Readback flow:
+```
+nvme_fill 0xa5a5a5a5
+nvme_write_readback 0xe0000000 1 1024 1 64
+```
+
+Verify flow:
+```
+nvme_fill 0x12345678
+nvme_verify 0xe0000000 1 1024 4 64
 ```
