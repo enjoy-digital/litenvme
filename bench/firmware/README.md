@@ -35,7 +35,6 @@ Console commands (from the firmware prompt):
 
 - `status` — link status + hostmem counters
 - `bdf <b> <d> <f>` — set target BDF for config access
-- `mmio_use [pcie|mmio]` — select MMIO CSR block (default `pcie_mmio` if available)
 - `cfg_use [pcie|cfg]` — select CFG CSR block (`cfg` matches host scripts)
 - `cfg_rd <reg>` / `cfg_wr <reg> <val>` — config space access
 - Note: some CFG writes can return `err=1` but still take effect (posted/UR/CA). Always read back to confirm.
