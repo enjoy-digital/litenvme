@@ -137,6 +137,7 @@ static void help(void)
 	puts("cmd_disable        - Clear Command.MEM + Command.BME");
 	puts("nvme_reset         - Clear cached NVMe init state and disable controller");
 	puts("mmio_warn_writes <0|1> - Enable/disable warnings on MMIO writes (default 0)");
+	puts("nvme_debug <0|1>   - Enable/disable NVMe debug prints");
 	puts("mmio_rd <addr>     - MMIO read dword at absolute address");
 	puts("mmio_wr <addr> <v> - MMIO write dword at absolute address");
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
@@ -180,6 +181,7 @@ static uint64_t nvme_cap_cached = 0;
 static int nvme_admin_ready = 0;
 static int nvme_io_ready = 0;
 static int mmio_warn_writes = 0;
+static int nvme_debug = 0;
 
 static void delay_cycles(unsigned int cycles)
 {
@@ -321,6 +323,12 @@ static void mmio_warn_writes_cmd(char *str)
 {
 	mmio_warn_writes = (int)strtoul(str, NULL, 0) ? 1 : 0;
 	printf("mmio_warn_writes = %d\n", mmio_warn_writes);
+}
+
+static void nvme_debug_cmd(char *str)
+{
+	nvme_debug = (int)strtoul(str, NULL, 0) ? 1 : 0;
+	printf("nvme_debug = %d\n", nvme_debug);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -1020,6 +1028,10 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("ERR: IO CQ timeout.");
 		return 1;
 	}
+	if (nvme_debug) {
+		puts("IO CQE:");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+	}
 
 	io_cq_head = (io_cq_head + 1) % IO_Q_ENTRIES;
 	if (io_cq_head == 0)
@@ -1227,6 +1239,11 @@ static void nvme_write_cmd(char *str)
 		return;
 
 	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, 0xA5A5A5A5);
+	if (nvme_debug) {
+		uint32_t w0 = hostmem_rd32(IO_WR_BUF_ADDR + 0);
+		uint32_t w1 = hostmem_rd32(IO_WR_BUF_ADDR + 4);
+		printf("WR buf[0..1] = %08" PRIx32 " %08" PRIx32 "\n", w0, w1);
+	}
 
 	uint32_t cmd[16];
 	uint32_t cqe[4];
@@ -1277,6 +1294,8 @@ static void console_service(void)
 		mmio_dump_cmd(str);
 	else if (strcmp(token, "mmio_warn_writes") == 0)
 		mmio_warn_writes_cmd(str);
+	else if (strcmp(token, "nvme_debug") == 0)
+		nvme_debug_cmd(str);
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)
