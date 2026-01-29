@@ -136,6 +136,7 @@ static void help(void)
 	puts("cmd_enable         - Set Command.MEM + Command.BME");
 	puts("cmd_disable        - Clear Command.MEM + Command.BME");
 	puts("nvme_reset         - Clear cached NVMe init state and disable controller");
+	puts("mmio_warn_writes <0|1> - Enable/disable warnings on MMIO writes (default 0)");
 	puts("mmio_rd <addr>     - MMIO read dword at absolute address");
 	puts("mmio_wr <addr> <v> - MMIO write dword at absolute address");
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
@@ -178,6 +179,7 @@ static int mmio_last_err = 0;
 static uint64_t nvme_cap_cached = 0;
 static int nvme_admin_ready = 0;
 static int nvme_io_ready = 0;
+static int mmio_warn_writes = 0;
 
 static void delay_cycles(unsigned int cycles)
 {
@@ -190,6 +192,12 @@ static void mmio_set_addr(uint64_t addr)
 {
 	mmio_mem_adr_l_write((uint32_t)(addr & 0xffffffff));
 	mmio_mem_adr_h_write((uint32_t)((addr >> 32) & 0xffffffff));
+}
+
+static void mmio_warn_write(const char *msg)
+{
+	if (mmio_last_err && mmio_warn_writes)
+		puts(msg);
 }
 
 static void mmio_start(int we, uint8_t wsel, uint16_t length)
@@ -307,6 +315,12 @@ static void mmio_dump_cmd(char *str)
 		mmio_rd32(addr + off, &v);
 		printf("0x%08" PRIx32 ": 0x%08" PRIx32 "\n", off, v);
 	}
+}
+
+static void mmio_warn_writes_cmd(char *str)
+{
+	mmio_warn_writes = (int)strtoul(str, NULL, 0) ? 1 : 0;
+	printf("mmio_warn_writes = %d\n", mmio_warn_writes);
 }
 
 /*-----------------------------------------------------------------------*/
@@ -492,10 +506,10 @@ static void nvme_reset_cmd(void)
 		uint32_t cc = 0;
 		if (!mmio_rd32(bar0_base + NVME_CC, &cc)) {
 			if (cc_en(cc)) {
-				if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
-					puts("ERR: CC write timeout.");
-				else if (mmio_last_err)
-					puts("WARN: CC write err=1 (write may still be accepted).");
+	if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
+		puts("ERR: CC write timeout.");
+	else
+		mmio_warn_write("WARN: CC write err=1 (write may still be accepted).");
 				if (!nvme_wait_rdy(0, NVME_RDY_CLEAR_LOOPS))
 					puts("WARN: CSTS.RDY did not clear.");
 			}
@@ -808,12 +822,12 @@ static int nvme_admin_init(uint64_t *cap_out)
 	for (int tries = 0; tries < NVME_CAP_TRIES; tries++) {
 		if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
 			puts("ERR: CAP read timeout.");
-		} else if (mmio_last_err) {
+		} else if (mmio_last_err && cap == 0) {
 			puts("WARN: CAP read err=1 (read may still be valid).");
 		}
 		if (mmio_rd32(bar0_base + NVME_CC, &cc)) {
 			puts("ERR: CC read timeout.");
-		} else if (mmio_last_err) {
+		} else if (mmio_last_err && cc == 0) {
 			puts("WARN: CC read err=1 (read may still be valid).");
 		}
 		if (cap != 0)
@@ -824,12 +838,12 @@ static int nvme_admin_init(uint64_t *cap_out)
 		for (int tries = 0; tries < NVME_CAP_TRIES_SLOW; tries++) {
 			if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
 				puts("ERR: CAP read timeout.");
-			} else if (mmio_last_err) {
+			} else if (mmio_last_err && cap == 0) {
 				puts("WARN: CAP read err=1 (read may still be valid).");
 			}
 			if (mmio_rd32(bar0_base + NVME_CC, &cc)) {
 				puts("ERR: CC read timeout.");
-			} else if (mmio_last_err) {
+			} else if (mmio_last_err && cc == 0) {
 				puts("WARN: CC read err=1 (read may still be valid).");
 			}
 			if (cap != 0)
@@ -853,22 +867,22 @@ static int nvme_admin_init(uint64_t *cap_out)
 	uint32_t aqa = ((ADMIN_Q_ENTRIES - 1) & 0xfffu) | (((ADMIN_Q_ENTRIES - 1) & 0xfffu) << 16);
 	if (mmio_wr32(bar0_base + NVME_AQA, aqa))
 		puts("ERR: AQA write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: AQA write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: AQA write err=1 (write may still be accepted).");
 	if (mmio_wr64(bar0_base + NVME_ASQ, (uint64_t)ASQ_ADDR))
 		puts("ERR: ASQ write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: ASQ write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: ASQ write err=1 (write may still be accepted).");
 	if (mmio_wr64(bar0_base + NVME_ACQ, (uint64_t)ACQ_ADDR))
 		puts("ERR: ACQ write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: ACQ write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: ACQ write err=1 (write may still be accepted).");
 
 	cc = cc_make_en(4, 6, 0);
 	if (mmio_wr32(bar0_base + NVME_CC, cc))
 		puts("ERR: CC write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: CC write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: CC write err=1 (write may still be accepted).");
 
 	if (!nvme_wait_rdy(1, NVME_RDY_SET_LOOPS)) {
 		puts("WARN: CSTS.RDY did not assert.");
@@ -938,8 +952,8 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 0, 0);
 	if (mmio_wr32(db, admin_sq_tail))
 		puts("ERR: SQ doorbell write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: SQ doorbell write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
@@ -959,8 +973,8 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 0, 1);
 	if (mmio_wr32(db_cq, admin_cq_head))
 		puts("ERR: CQ doorbell write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: CQ doorbell write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: CQ doorbell write err=1 (write may still be accepted).");
 
 	return cqe_ok(cqe[3]) ? 0 : 1;
 }
@@ -981,8 +995,8 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
 	if (mmio_wr32(db, io_sq_tail))
 		puts("ERR: IO SQ doorbell write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: IO SQ doorbell write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: IO SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
@@ -1002,8 +1016,8 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
 	if (mmio_wr32(db_cq, io_cq_head))
 		puts("ERR: IO CQ doorbell write timeout.");
-	else if (mmio_last_err)
-		puts("WARN: IO CQ doorbell write err=1 (write may still be accepted).");
+	else
+		mmio_warn_write("WARN: IO CQ doorbell write err=1 (write may still be accepted).");
 
 	return cqe_ok(cqe[3]) ? 0 : 1;
 }
@@ -1250,6 +1264,8 @@ static void console_service(void)
 		mmio_wr_cmd(str);
 	else if (strcmp(token, "mmio_dump") == 0)
 		mmio_dump_cmd(str);
+	else if (strcmp(token, "mmio_warn_writes") == 0)
+		mmio_warn_writes_cmd(str);
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)
