@@ -928,6 +928,12 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	for (int i = 0; i < 16; i++)
 		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
 
+	/* Clear CQ slot to avoid matching stale phase/data. */
+	hostmem_wr32(ACQ_ADDR + admin_cq_head * 16 + 0, 0);
+	hostmem_wr32(ACQ_ADDR + admin_cq_head * 16 + 4, 0);
+	hostmem_wr32(ACQ_ADDR + admin_cq_head * 16 + 8, 0);
+	hostmem_wr32(ACQ_ADDR + admin_cq_head * 16 + 12, ((admin_cq_phase ^ 1u) & 0x1u) << 16);
+
 	admin_sq_tail = (admin_sq_tail + 1) % ADMIN_Q_ENTRIES;
 	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 0, 0);
 	if (mmio_wr32(db, admin_sq_tail))
@@ -964,6 +970,12 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint32_t sqe_addr = IO_SQ_ADDR + io_sq_tail * 64;
 	for (int i = 0; i < 16; i++)
 		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
+
+	/* Clear CQ slot to avoid matching stale phase/data. */
+	hostmem_wr32(IO_CQ_ADDR + io_cq_head * 16 + 0, 0);
+	hostmem_wr32(IO_CQ_ADDR + io_cq_head * 16 + 4, 0);
+	hostmem_wr32(IO_CQ_ADDR + io_cq_head * 16 + 8, 0);
+	hostmem_wr32(IO_CQ_ADDR + io_cq_head * 16 + 12, ((io_cq_phase ^ 1u) & 0x1u) << 16);
 
 	io_sq_tail = (io_sq_tail + 1) % IO_Q_ENTRIES;
 	uint64_t db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
