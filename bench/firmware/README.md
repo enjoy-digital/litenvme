@@ -37,6 +37,7 @@ Console commands (from the firmware prompt):
 - `cfg_rd <reg>` / `cfg_wr <reg> <val>` — config space access
 - Note: some CFG writes can return `err=1` but still take effect (posted/UR/CA). Always read back to confirm.
 - `cmd_enable` / `cmd_disable` — set/clear Command.MEM + Command.BME
+- `nvme_reset` — clear cached NVMe init state (forces re-init on next command)
 - `mmio_rd <addr>` / `mmio_wr <addr> <val>` — absolute MMIO access
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
 - `nvme_identify [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify

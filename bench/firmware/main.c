@@ -39,6 +39,14 @@
 #define ADMIN_Q_ENTRIES    2
 #define IO_Q_ENTRIES       4
 
+#define NVME_CAP_TRIES        2
+#define NVME_CAP_DELAY        5000
+#define NVME_CAP_TRIES_SLOW   5
+#define NVME_CAP_DELAY_SLOW   50000
+#define NVME_RDY_CLEAR_LOOPS  200000
+#define NVME_RDY_SET_LOOPS    500000
+#define NVME_CQE_POLL_MAX     200000
+
 #define NVME_CAP           0x0000u
 #define NVME_VS            0x0008u
 #define NVME_CC            0x0014u
@@ -127,6 +135,7 @@ static void help(void)
 	puts("cfg_wr <reg> <v>   - Write CFG dword (reg index)");
 	puts("cmd_enable         - Set Command.MEM + Command.BME");
 	puts("cmd_disable        - Clear Command.MEM + Command.BME");
+	puts("nvme_reset         - Clear cached NVMe init state and disable controller");
 	puts("mmio_rd <addr>     - MMIO read dword at absolute address");
 	puts("mmio_wr <addr> <v> - MMIO write dword at absolute address");
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
@@ -166,6 +175,9 @@ static void status_cmd(void)
 
 static uint64_t bar0_base = 0;
 static int mmio_last_err = 0;
+static uint64_t nvme_cap_cached = 0;
+static int nvme_admin_ready = 0;
+static int nvme_io_ready = 0;
 
 static void delay_cycles(unsigned int cycles)
 {
@@ -400,8 +412,6 @@ static int cfg_rd32(uint8_t reg, uint32_t *val)
 	cfg_ctrl_write(0);
 	if (cfg_wait_done(1000000))
 		return 1;
-	if (cfg_last_err)
-		return 1;
 	*val = cfg_rdata_read();
 	return 0;
 }
@@ -471,6 +481,30 @@ static void cmd_enable_cmd(void)
 static void cmd_disable_cmd(void)
 {
 	cmd_set_bits(0, 0, -1);
+}
+
+static uint32_t cc_en(uint32_t cc);
+static int nvme_wait_rdy(uint32_t want_rdy, uint32_t loops);
+
+static void nvme_reset_cmd(void)
+{
+	if (bar0_base != 0) {
+		uint32_t cc = 0;
+		if (!mmio_rd32(bar0_base + NVME_CC, &cc)) {
+			if (cc_en(cc)) {
+				if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
+					puts("ERR: CC write timeout.");
+				else if (mmio_last_err)
+					puts("WARN: CC write err=1 (write may still be accepted).");
+				if (!nvme_wait_rdy(0, NVME_RDY_CLEAR_LOOPS))
+					puts("WARN: CSTS.RDY did not clear.");
+			}
+		}
+	}
+	nvme_admin_ready = 0;
+	nvme_io_ready = 0;
+	nvme_cap_cached = 0;
+	puts("NVMe state reset.");
 }
 
 /*-----------------------------------------------------------------------*/
@@ -651,6 +685,9 @@ static int nvme_bar0_assign(uint64_t base_addr)
 	}
 
 	bar0_base = base_addr;
+	nvme_admin_ready = 0;
+	nvme_io_ready = 0;
+	nvme_cap_cached = 0;
 	return 0;
 }
 
@@ -759,11 +796,16 @@ static int nvme_admin_init(uint64_t *cap_out)
 		puts("ERR: BAR0 base is 0. Use bar0 <addr> first.");
 		return 1;
 	}
+	if (nvme_admin_ready) {
+		if (cap_out)
+			*cap_out = nvme_cap_cached;
+		return 0;
+	}
 	cmd_enable_cmd();
 
 	uint64_t cap = 0;
 	uint32_t cc = 0;
-	for (int tries = 0; tries < 5; tries++) {
+	for (int tries = 0; tries < NVME_CAP_TRIES; tries++) {
 		if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
 			puts("ERR: CAP read timeout.");
 		} else if (mmio_last_err) {
@@ -776,7 +818,24 @@ static int nvme_admin_init(uint64_t *cap_out)
 		}
 		if (cap != 0)
 			break;
-		delay_cycles(50000);
+		delay_cycles(NVME_CAP_DELAY);
+	}
+	if (cap == 0) {
+		for (int tries = 0; tries < NVME_CAP_TRIES_SLOW; tries++) {
+			if (mmio_rd64(bar0_base + NVME_CAP, &cap)) {
+				puts("ERR: CAP read timeout.");
+			} else if (mmio_last_err) {
+				puts("WARN: CAP read err=1 (read may still be valid).");
+			}
+			if (mmio_rd32(bar0_base + NVME_CC, &cc)) {
+				puts("ERR: CC read timeout.");
+			} else if (mmio_last_err) {
+				puts("WARN: CC read err=1 (read may still be valid).");
+			}
+			if (cap != 0)
+				break;
+			delay_cycles(NVME_CAP_DELAY_SLOW);
+		}
 	}
 	if (cap == 0) {
 		puts("ERR: CAP is 0 (BAR0 not responding).");
@@ -787,7 +846,7 @@ static int nvme_admin_init(uint64_t *cap_out)
 			puts("ERR: CC write timeout.");
 		else if (mmio_last_err)
 			puts("WARN: CC write err=1 (write may still be accepted).");
-		if (!nvme_wait_rdy(0, 1000000))
+		if (!nvme_wait_rdy(0, NVME_RDY_CLEAR_LOOPS))
 			puts("WARN: CSTS.RDY did not clear.");
 	}
 
@@ -811,13 +870,16 @@ static int nvme_admin_init(uint64_t *cap_out)
 	else if (mmio_last_err)
 		puts("WARN: CC write err=1 (write may still be accepted).");
 
-	if (!nvme_wait_rdy(1, 2000000)) {
+	if (!nvme_wait_rdy(1, NVME_RDY_SET_LOOPS)) {
 		puts("WARN: CSTS.RDY did not assert.");
 	}
 
 	nvme_admin_reset_queues();
 	hostmem_fill(ASQ_ADDR, ADMIN_Q_ENTRIES * 64, 0);
 	hostmem_fill(ACQ_ADDR, ADMIN_Q_ENTRIES * 16, 0);
+	nvme_admin_ready = 1;
+	nvme_cap_cached = cap;
+	nvme_io_ready = 0;
 	if (cap_out)
 		*cap_out = cap;
 	return 0;
@@ -874,7 +936,7 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("WARN: SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
-	for (uint32_t loops = 0; loops < 2000000; loops++) {
+	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
 		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
 		d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
 		d2 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 8);
@@ -911,7 +973,7 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("WARN: IO SQ doorbell write err=1 (write may still be accepted).");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
-	for (uint32_t loops = 0; loops < 2000000; loops++) {
+	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
 		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
 		d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
 		d2 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 8);
@@ -956,6 +1018,8 @@ static void nvme_identify_cmd(char *str)
 
 static int nvme_io_setup(uint64_t cap)
 {
+	if (nvme_io_ready)
+		return 0;
 	nvme_io_reset_queues();
 	hostmem_fill(IO_CQ_ADDR, IO_Q_ENTRIES * 16, 0);
 	hostmem_fill(IO_SQ_ADDR, IO_Q_ENTRIES * 64, 0);
@@ -984,6 +1048,7 @@ static int nvme_io_setup(uint64_t cap)
 		return 1;
 	}
 
+	nvme_io_ready = 1;
 	return 0;
 }
 
@@ -1165,6 +1230,8 @@ static void console_service(void)
 		cmd_enable_cmd();
 	else if (strcmp(token, "cmd_disable") == 0)
 		cmd_disable_cmd();
+	else if (strcmp(token, "nvme_reset") == 0)
+		nvme_reset_cmd();
 	else if (strcmp(token, "mmio_rd") == 0)
 		mmio_rd_cmd(str);
 	else if (strcmp(token, "mmio_wr") == 0)
