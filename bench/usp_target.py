@@ -296,7 +296,7 @@ def main():
     parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
     args = parser.parse_args()
 
-    def build_soc(cpu_firmware=None):
+    def build_soc(cpu_firmware=None, force_run=None):
         soc = BaseSoC(
             sys_clk_freq = args.sys_clk_freq,
             with_cpu     = args.with_cpu,
@@ -309,7 +309,9 @@ def main():
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
-            if getattr(args, "no_compile_gateware", False):
+            if force_run is not None:
+                toolchain_kwargs["run"] = force_run
+            elif getattr(args, "no_compile_gateware", False):
                 toolchain_kwargs["run"] = False
             else:
                 toolchain_kwargs.setdefault("run", cpu_firmware is not None)
@@ -318,17 +320,21 @@ def main():
 
     if args.with_cpu and args.cpu_firmware == "auto":
         # First build to generate software headers.
-        soc, builder = build_soc(cpu_firmware=None)
+        soc, builder = build_soc(cpu_firmware=None, force_run=False)
 
         # Compile firmware against generated headers.
         fw_dir = os.path.join(os.path.dirname(__file__), "firmware")
         build_dir = builder.output_dir
         os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} BOOT={args.cpu_boot} clean all")
 
-        # Second build with integrated ROM init (ROM boot only).
+        # Second build:
+        # - ROM boot: integrate firmware.bin into ROM init.
+        # - BIOS boot: rebuild gateware after firmware build.
         fw_bin = os.path.join(fw_dir, "firmware.bin")
         if args.cpu_boot == "rom":
-            soc, builder = build_soc(cpu_firmware=fw_bin)
+            soc, builder = build_soc(cpu_firmware=fw_bin, force_run=True)
+        else:
+            soc, builder = build_soc(cpu_firmware=None, force_run=True)
     else:
         soc, builder = build_soc(cpu_firmware=args.cpu_firmware)
 
