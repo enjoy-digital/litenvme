@@ -41,6 +41,7 @@ Console commands (from the firmware prompt):
 - `mmio_dump <addr> <len> [s]` — dump MMIO space
 - `nvme_identify [bar0] [cid]` — assign BAR0, enable MEM/BME/INTx-off, run Identify
 - `nvme_read [bar0] [nsid] [slba] [nlb]` — read NLB blocks into hostmem
+- `nvme_read_dump [bar0] [nsid] [slba] [nlb] [dwords]` — read + dump hostmem (cap at 256 dwords)
 - `nvme_write [bar0] [nsid] [slba] [nlb]` — write NLB blocks from hostmem
 
 Notes:
@@ -60,4 +61,9 @@ nvme_identify 0xe0000000 1
 One-shot Read flow:
 ```
 nvme_read 0xe0000000 1 0 1
+```
+
+One-shot Read+Dump flow:
+```
+nvme_read_dump 0xe0000000 1 0 1 64
 ```

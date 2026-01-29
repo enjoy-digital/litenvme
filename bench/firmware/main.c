@@ -132,8 +132,8 @@ static void help(void)
 	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
 	puts("nvme_identify [bar0] [cid] - Auto BAR0 assign + enable MEM/BME/INTx off + Identify");
 	puts("nvme_read [bar0] [nsid] [slba] [nlb]  - Read NLB blocks into hostmem");
+	puts("nvme_read_dump [bar0] [nsid] [slba] [nlb] [dwords] - Read + dump hostmem");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
-	puts("todo               - Placeholder for NVMe bring-up");
 }
 
 /*-----------------------------------------------------------------------*/
@@ -987,6 +987,39 @@ static int nvme_io_setup(uint64_t cap)
 	return 0;
 }
 
+static int nvme_read_do(uint64_t base_addr, uint32_t nsid, uint64_t slba, uint32_t nlb)
+{
+	if (nlb == 0) {
+		puts("ERR: nlb must be >= 1.");
+		return 1;
+	}
+	if (nlb > 8) {
+		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
+		return 1;
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return 1;
+
+	uint64_t cap = 0;
+	if (nvme_admin_init(&cap))
+		return 1;
+	if (nvme_io_setup(cap))
+		return 1;
+
+	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
+
+	uint32_t cmd[16];
+	uint32_t cqe[4];
+	nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, slba, (uint16_t)(nlb - 1), cmd);
+	if (nvme_io_submit(cap, cmd, cqe)) {
+		puts("ERR: Read command failed.");
+		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		return 1;
+	}
+	return 0;
+}
+
 static void nvme_read_cmd(char *str)
 {
 	uint64_t base_addr = 0xe0000000ull;
@@ -1005,40 +1038,54 @@ static void nvme_read_cmd(char *str)
 		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
 	}
 
-	if (nlb == 0) {
-		puts("ERR: nlb must be >= 1.");
+	if (nvme_read_do(base_addr, nsid, slba, nlb))
 		return;
-	}
-	if (nlb > 8) {
-		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
-		return;
-	}
-
-	if (nvme_bar0_assign(base_addr))
-		return;
-
-	uint64_t cap = 0;
-	if (nvme_admin_init(&cap))
-		return;
-	if (nvme_io_setup(cap))
-		return;
-
-	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
-
-	uint32_t cmd[16];
-	uint32_t cqe[4];
-	nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, slba, (uint16_t)(nlb - 1), cmd);
-	if (nvme_io_submit(cap, cmd, cqe)) {
-		puts("ERR: Read command failed.");
-		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
-		return;
-	}
 
 	uint32_t data[16];
 	hostmem_read_dwords(IO_RD_BUF_ADDR, data, 16);
 	printf("Read data (first 16 dwords):\n  ");
 	for (int i = 0; i < 16; i++)
 		printf("%08" PRIx32 "%s", data[i], (i == 15) ? "\n" : " ");
+}
+
+static void nvme_read_dump_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 1;
+	uint32_t dwords = 64;
+
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		char *c = get_token(&str);
+		char *d = get_token(&str);
+		char *e = get_token(&str);
+		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
+		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
+		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
+	}
+
+	if (dwords == 0) {
+		puts("ERR: dwords must be >= 1.");
+		return;
+	}
+	if (dwords > 256)
+		dwords = 256;
+
+	if (nvme_read_do(base_addr, nsid, slba, nlb))
+		return;
+
+	printf("Read data (first %" PRIu32 " dwords):\n", dwords);
+	for (uint32_t i = 0; i < dwords; i++) {
+		uint32_t v = hostmem_rd32(IO_RD_BUF_ADDR + i * 4);
+		if ((i % 8) == 0)
+			printf("  ");
+		printf("%08" PRIx32 "%s", v, ((i % 8) == 7 || i == dwords - 1) ? "\n" : " ");
+	}
 }
 
 static void nvme_write_cmd(char *str)
@@ -1128,6 +1175,8 @@ static void console_service(void)
 		nvme_identify_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)
 		nvme_read_cmd(str);
+	else if (strcmp(token, "nvme_read_dump") == 0)
+		nvme_read_dump_cmd(str);
 	else if (strcmp(token, "nvme_write") == 0)
 		nvme_write_cmd(str);
 	prompt();
