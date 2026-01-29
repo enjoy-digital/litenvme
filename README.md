@@ -87,6 +87,7 @@ SoftCPU flow (current vs. target usage):
 * Make MMIO/CFG accessors fully robust (sticky completion/clear semantics).
 * Extend command coverage (Identify Namespace, larger reads/writes, admin log pages, etc.).
 * Add higher-level software integration (driver/userspace tooling).
+* See `doc/NVME_ARCHITECTURE.md` for the full bring-up → proper-core plan.
 
 If you want to support these features, please contact us at florent [AT]
 enjoy-digital.fr.
