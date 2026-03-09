@@ -142,5 +142,8 @@ This reports:
 - average latency in microseconds
 - throughput in MB/s
 - IOPS
+- setup vs I/O timer ticks
+- MMIO read/write counts
+- admin/I/O CQ polling loop counts
 - payload bytes
 - hostmem DMA beat deltas

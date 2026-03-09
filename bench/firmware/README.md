@@ -105,10 +105,13 @@ Arguments:
 - `step` is the LBA increment between requests (`0` = fixed-LBA, `nlb` = sequential)
 
 The firmware benchmark reports:
-- total timer ticks for the batch
+- setup ticks, I/O ticks, and total timer ticks
 - average latency in microseconds
 - throughput in MB/s
 - IOPS
+- MMIO read/write counts
+- admin/I/O submit counts
+- admin/I/O CQ polling loop counts
 - payload bytes and hostmem DMA beat deltas
 
 Suggested next step: add a small firmware that:

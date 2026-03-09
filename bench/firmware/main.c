@@ -193,6 +193,12 @@ static int nvme_io_ready = 0;
 static int mmio_warn_writes = 0;
 static int nvme_debug = 0;
 static uint32_t nvme_fill_pattern = 0xA5A5A5A5u;
+static uint64_t bench_mmio_rd32_count = 0;
+static uint64_t bench_mmio_wr32_count = 0;
+static uint64_t bench_admin_submit_count = 0;
+static uint64_t bench_io_submit_count = 0;
+static uint64_t bench_admin_poll_loops = 0;
+static uint64_t bench_io_poll_loops = 0;
 
 // NVMe Request CSR opcodes.
 #define NVME_REQ_OP_READ     0
@@ -273,6 +279,7 @@ static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 static int mmio_rd32(uint64_t addr, uint32_t *val)
 {
 	uint32_t stat = 0;
+	bench_mmio_rd32_count++;
 	mmio_set_addr(addr);
 	mmio_start(0, 0xf, 1);
 	if (mmio_wait_done(1000000, &stat))
@@ -284,6 +291,7 @@ static int mmio_rd32(uint64_t addr, uint32_t *val)
 static int mmio_wr32(uint64_t addr, uint32_t val)
 {
 	uint32_t stat = 0;
+	bench_mmio_wr32_count++;
 	mmio_set_addr(addr);
 	mmio_mem_wdata_write(val);
 	mmio_start(1, 0xf, 1);
@@ -1006,6 +1014,7 @@ static void nvme_io_reset_queues(void)
 
 static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 {
+	bench_admin_submit_count++;
 	uint32_t sqe_addr = ASQ_ADDR + admin_sq_tail * 64;
 	for (int i = 0; i < 16; i++)
 		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
@@ -1026,6 +1035,7 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	int got_cqe = 0;
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
+		bench_admin_poll_loops++;
 		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
 		d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
 		d2 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 8);
@@ -1057,6 +1067,7 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 
 static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 {
+	bench_io_submit_count++;
 	uint32_t sqe_addr = IO_SQ_ADDR + io_sq_tail * 64;
 	for (int i = 0; i < 16; i++)
 		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
@@ -1077,6 +1088,7 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	int got_cqe = 0;
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
+		bench_io_poll_loops++;
 		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
 		d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
 		d2 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 8);
@@ -1224,11 +1236,18 @@ static void nvme_bench_cmd(char *str)
 	uint32_t count = 100;
 	uint32_t step = 0;
 	uint64_t cap = 0;
-	uint32_t tick_start, tick_end;
-	uint64_t cycle_total;
+	uint32_t setup_tick_start, setup_tick_end;
+	uint32_t io_tick_start, io_tick_end;
+	uint64_t setup_ticks, io_ticks, total_ticks;
 	uint64_t total_bytes;
 	uint64_t rd_before = 0, rd_after = 0;
 	uint64_t wr_before = 0, wr_after = 0;
+	uint64_t mmio_rd_before, mmio_rd_after;
+	uint64_t mmio_wr_before, mmio_wr_after;
+	uint64_t admin_submit_before, admin_submit_after;
+	uint64_t io_submit_before, io_submit_after;
+	uint64_t admin_poll_before, admin_poll_after;
+	uint64_t io_poll_before, io_poll_after;
 	uint64_t lba;
 	uint32_t cmd[16];
 	uint32_t cqe[4];
@@ -1275,12 +1294,22 @@ static void nvme_bench_cmd(char *str)
 		return;
 	}
 
+	mmio_rd_before       = bench_mmio_rd32_count;
+	mmio_wr_before       = bench_mmio_wr32_count;
+	admin_submit_before  = bench_admin_submit_count;
+	io_submit_before     = bench_io_submit_count;
+	admin_poll_before    = bench_admin_poll_loops;
+	io_poll_before       = bench_io_poll_loops;
+
+	setup_tick_start = bench_timer_get();
 	if (nvme_bar0_assign(base_addr))
 		return;
 	if (nvme_admin_init(&cap))
 		return;
 	if (nvme_io_setup(cap))
 		return;
+	setup_tick_end = bench_timer_get();
+	setup_ticks = bench_ticks_elapsed(setup_tick_start, setup_tick_end);
 
 	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
 	if (do_write)
@@ -1293,7 +1322,7 @@ static void nvme_bench_cmd(char *str)
 	wr_before = hostmem_csr_dma_wr_count_read();
 #endif
 
-	tick_start = bench_timer_get();
+	io_tick_start = bench_timer_get();
 	lba = slba;
 	for (uint32_t i = 0; i < count; i++) {
 		if (do_write)
@@ -1309,8 +1338,9 @@ static void nvme_bench_cmd(char *str)
 		}
 		lba += step;
 	}
-	tick_end = bench_timer_get();
-	cycle_total = bench_ticks_elapsed(tick_start, tick_end);
+	io_tick_end = bench_timer_get();
+	io_ticks = bench_ticks_elapsed(io_tick_start, io_tick_end);
+	total_ticks = setup_ticks + io_ticks;
 
 #ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
 	rd_after = hostmem_csr_dma_rd_count_read();
@@ -1318,16 +1348,30 @@ static void nvme_bench_cmd(char *str)
 #ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
 	wr_after = hostmem_csr_dma_wr_count_read();
 #endif
+	mmio_rd_after      = bench_mmio_rd32_count;
+	mmio_wr_after      = bench_mmio_wr32_count;
+	admin_submit_after = bench_admin_submit_count;
+	io_submit_after    = bench_io_submit_count;
+	admin_poll_after   = bench_admin_poll_loops;
+	io_poll_after      = bench_io_poll_loops;
 
 	total_bytes = (uint64_t)count * (uint64_t)nlb * 512ull;
 
 	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 "\n",
 	       op_name, count, nlb, slba, step);
-	printf("ticks_total: %" PRIu64 "\n", cycle_total);
-	print_fixed3_u64("latency_avg", cycle_total * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
-	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, cycle_total * 1000000ull, "MB/s");
-	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, cycle_total, "IOPS");
+	printf("ticks_setup: %" PRIu64 "\n", setup_ticks);
+	printf("ticks_io: %" PRIu64 "\n", io_ticks);
+	printf("ticks_total: %" PRIu64 "\n", total_ticks);
+	print_fixed3_u64("latency_avg", io_ticks * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
+	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, io_ticks * 1000000ull, "MB/s");
+	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, io_ticks, "IOPS");
 	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
+	printf("mmio_rd32: %" PRIu64 "\n", mmio_rd_after - mmio_rd_before);
+	printf("mmio_wr32: %" PRIu64 "\n", mmio_wr_after - mmio_wr_before);
+	printf("admin_submit: %" PRIu64 "\n", admin_submit_after - admin_submit_before);
+	printf("io_submit: %" PRIu64 "\n", io_submit_after - io_submit_before);
+	printf("admin_cq_poll_loops: %" PRIu64 "\n", admin_poll_after - admin_poll_before);
+	printf("io_cq_poll_loops: %" PRIu64 "\n", io_poll_after - io_poll_before);
 #ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
 	printf("hostmem_dma_rd_beats: %" PRIu64 "\n", rd_after - rd_before);
 #endif
