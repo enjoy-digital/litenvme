@@ -25,33 +25,15 @@ nvme_bench read 0xe0000000 1 0 1 100 0 1
 nvme_bench read 0xe0000000 1 0 8 100 0 1
 ```
 
-Representative post-fix results:
+Representative post-fix results before the benchmark window cleanup showed:
 
-### 1 block (512 B), first measured run after setup
+- steady-state latency on the order of `55-61 us`
+- steady-state throughput around `67-75 MB/s` for 4 KiB reads
+- steady-state IOPS around `16k-18k`
 
-- `ticks_setup`: about `12,928,991`
-- `ticks_io`: about `693,171`
-- `latency_avg`: about `55.5 us`
-- `throughput`: about `9.23 MB/s`
-- `iops`: about `18.0k`
-- `mmio_rd_ticks`: about `6,330,764`
-- `mmio_wr_ticks`: about `30,033`
-- `admin_submit`: `3`
-- `io_submit`: `100`
-- `io_cq_poll_loops`: about `1053`
-
-### 8 blocks (4096 B), steady-state
-
-- `ticks_setup`: about `565`
-- `ticks_io`: about `763,438`
-- `latency_avg`: about `61.1 us`
-- `throughput`: about `67.1 MB/s`
-- `iops`: about `16.4k`
-- `mmio_rd_ticks`: about `27,000`
-- `mmio_wr_ticks`: about `28,200`
-- `mmio_wr32`: `200`
-- `io_submit`: `100`
-- `io_cq_poll_loops`: about `1279`
+The benchmark now snapshots counters after setup and warmup, so the next rerun
+should be used to refresh the detailed per-counter baseline without setup/admin
+pollution.
 
 ## What the current data says
 
@@ -71,8 +53,9 @@ fixed control-path cost paid once per I/O.
 
 ### 3. Completion polling is now a visible cost
 
-In steady state, `io_cq_poll_loops` is about `1279` for `100` I/Os, or about
-`12.8` polls per request. That is no longer negligible.
+In the post-fix measurements, completion polling was no longer a single poll
+per request. That makes firmware CQ polling a visible part of the remaining
+control-path cost.
 
 ### 4. The data path is still not the dominant cost
 
@@ -87,13 +70,9 @@ current range.
 
 ### 5. MMIO is no longer dominant in steady state
 
-In the steady-state `nlb=8` case:
-
-- `mmio_rd_ticks + mmio_wr_ticks` is about `55,200`
-- `ticks_io` is about `763,438`
-
-So MMIO still costs something, but it is no longer the main source of the
-measured I/O latency.
+Post-fix measurements showed that MMIO timing was only a fraction of the total
+steady-state I/O timing. MMIO still costs something, but it is no longer the
+main source of the measured latency.
 
 The main remaining fixed cost is now more likely in:
 
@@ -105,9 +84,9 @@ The main remaining fixed cost is now more likely in:
 
 ### Short term
 
-1. Make warmup explicit in benchmark usage
-   - Exclude setup/admin overhead from steady-state reporting.
-   - Compare `nlb=1` and `nlb=8` with the same warmup count.
+1. Refresh the baseline with the cleaned-up benchmark window
+   - Re-run with explicit warmup.
+   - Record counters that now exclude setup/admin overhead.
 
 2. Reduce firmware-side fixed overhead
    - Avoid repeated work in the submit path where possible.

@@ -1350,16 +1350,6 @@ static void nvme_bench_cmd(char *str)
 		return;
 	}
 
-	mmio_rd_before       = bench_mmio_rd32_count;
-	mmio_wr_before       = bench_mmio_wr32_count;
-	mmio_wait_before     = bench_mmio_wait_loops;
-	mmio_rd_ticks_before = bench_mmio_rd_ticks;
-	mmio_wr_ticks_before = bench_mmio_wr_ticks;
-	admin_submit_before  = bench_admin_submit_count;
-	io_submit_before     = bench_io_submit_count;
-	admin_poll_before    = bench_admin_poll_loops;
-	io_poll_before       = bench_io_poll_loops;
-
 	setup_tick_start = bench_timer_get();
 	if (nvme_bar0_assign(base_addr))
 		return;
@@ -1390,6 +1380,16 @@ static void nvme_bench_cmd(char *str)
 		lba += step;
 	}
 
+	mmio_rd_before       = bench_mmio_rd32_count;
+	mmio_wr_before       = bench_mmio_wr32_count;
+	mmio_wait_before     = bench_mmio_wait_loops;
+	mmio_rd_ticks_before = bench_mmio_rd_ticks;
+	mmio_wr_ticks_before = bench_mmio_wr_ticks;
+	admin_submit_before  = bench_admin_submit_count;
+	io_submit_before     = bench_io_submit_count;
+	admin_poll_before    = bench_admin_poll_loops;
+	io_poll_before       = bench_io_poll_loops;
+
 #ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
 	rd_before = hostmem_csr_dma_rd_count_read();
 #endif
@@ -1398,7 +1398,7 @@ static void nvme_bench_cmd(char *str)
 #endif
 
 	io_tick_start = bench_timer_get();
-	lba = slba;
+	lba = slba + (uint64_t)warmup * step;
 	for (uint32_t i = 0; i < count; i++) {
 		if (do_write)
 			nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
