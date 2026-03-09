@@ -35,28 +35,67 @@ The benchmark now snapshots counters after setup and warmup, so the next rerun
 should be used to refresh the detailed per-counter baseline without setup/admin
 pollution.
 
-Clean steady-state 4 KiB read baseline (`warmup=1`, fixed LBA):
+Clean steady-state baselines (`warmup=1`):
 
 ```sh
 nvme_bench read 0xe0000000 1 0 8 100 0 1
+nvme_bench read 0xe0000000 1 0 8 100 8 1
+nvme_bench write 0xe0000000 1 1024 8 100 8 1
+nvme_bench read 0xe0000000 1 0 1 100 0 1
+nvme_bench read 0xe0000000 1 0 1 100 1 1
 ```
 
-- `ticks_setup`: about `12,751,823`
+### 4 KiB read, fixed LBA (`step=0`)
+
+- `ticks_setup`: about `12,751,823` on the first run, then about `569`
 - `ticks_io`: about `625,067`
 - `latency_avg`: about `50.0 us`
 - `throughput`: about `81.9 MB/s`
 - `iops`: about `20.0k`
-- `mmio_rd32`: `200`
-- `mmio_wr32`: `200`
-- `mmio_rd_ticks`: about `27,000`
-- `mmio_wr_ticks`: about `28,200`
-- `io_submit`: `100`
 - `io_cq_poll_loops`: about `834`
-- `hostmem_dma_rd_beats`: `400`
-- `hostmem_dma_wr_beats`: `25,700`
 
-This is the current best steady-state baseline for the firmware-driven,
-single-outstanding, PRP1-only bring-up path.
+### 4 KiB read, sequential (`step=8`)
+
+- `ticks_setup`: about `569`
+- `ticks_io`: about `490,296`
+- `latency_avg`: about `39.2 us`
+- `throughput`: about `104.4 MB/s`
+- `iops`: about `25.5k`
+- `io_cq_poll_loops`: about `400`
+
+### 4 KiB write, sequential (`step=8`)
+
+- `ticks_setup`: about `569`
+- `ticks_io`: about `396,184`
+- `latency_avg`: about `31.7 us`
+- `throughput`: about `129.2 MB/s`
+- `iops`: about `31.6k`
+- `io_cq_poll_loops`: about `100`
+
+### 512 B read, fixed LBA (`step=0`)
+
+- `ticks_setup`: about `569`
+- `ticks_io`: about `823,472`
+- `latency_avg`: about `65.9 us`
+- `throughput`: about `7.77 MB/s`
+- `iops`: about `15.2k`
+- `io_cq_poll_loops`: about `1472`
+
+### 512 B read, sequential (`step=1`)
+
+- `ticks_setup`: about `569`
+- `ticks_io`: about `410,823`
+- `latency_avg`: about `32.9 us`
+- `throughput`: about `15.6 MB/s`
+- `iops`: about `30.4k`
+- `io_cq_poll_loops`: about `145`
+
+The current best steady-state baseline for the firmware-driven,
+single-outstanding, PRP1-only bring-up path is sequential 4 KiB write:
+
+- about `31.7 us`
+- about `31.6k IOPS`
+- about `129.2 MB/s`
 
 ## What the current data says
 
@@ -65,7 +104,18 @@ single-outstanding, PRP1-only bring-up path.
 Steady-state latency dropped from about `16.8 ms` per I/O to about `55-61 us`
 per I/O after fixing posted writes and ordering in firmware.
 
-### 2. There is still meaningful fixed per-request overhead
+### 2. Access pattern now clearly matters
+
+Sequential traffic is substantially faster than fixed-LBA traffic.
+
+Examples:
+- 4 KiB read: about `81.9 MB/s` fixed-LBA vs about `104.4 MB/s` sequential
+- 512 B read: about `15.2k IOPS` fixed-LBA vs about `30.4k IOPS` sequential
+
+So the measured limit is no longer purely firmware overhead. Device-side
+completion behavior and access pattern now affect the results.
+
+### 3. There is still meaningful fixed per-request overhead
 
 `nlb=1`, `2`, `4`, and `8` all complete in almost exactly the same I/O time.
 Only throughput changes, because payload size changes while request time stays
@@ -74,13 +124,23 @@ flat.
 That means the current bottleneck is not payload transfer bandwidth. It is a
 fixed control-path cost paid once per I/O.
 
-### 3. Completion polling is now a visible cost
+### 4. Completion polling is now a visible cost
 
 In the clean steady-state baseline, `io_cq_poll_loops` is about `834` for
 `100` I/Os, or about `8.3` polls per request. That makes firmware CQ polling a
 visible part of the remaining control-path cost.
 
-### 4. The data path is still not the dominant cost
+The poll count also tracks the access pattern:
+
+- 4 KiB read fixed-LBA: about `834`
+- 4 KiB read sequential: about `400`
+- 512 B read fixed-LBA: about `1472`
+- 512 B read sequential: about `145`
+
+That strongly suggests completion arrival timing, not just firmware instruction
+count, is contributing to the observed differences.
+
+### 5. The data path is still not the dominant cost
 
 Host memory DMA beat counts scale with `nlb`, but total I/O time does not.
 
@@ -91,7 +151,7 @@ For reads:
 So moving more payload data does not materially change request time in the
 current range.
 
-### 5. MMIO is no longer dominant in steady state
+### 6. MMIO is no longer dominant in steady state
 
 Post-fix measurements showed that MMIO timing was only a fraction of the total
 steady-state I/O timing. MMIO still costs something, but it is no longer the
@@ -110,10 +170,14 @@ To compare steady-state access patterns:
 ```sh
 nvme_bench read 0xe0000000 1 0 8 100 0 1
 nvme_bench read 0xe0000000 1 0 8 100 8 1
+nvme_bench write 0xe0000000 1 1024 8 100 8 1
+nvme_bench read 0xe0000000 1 0 1 100 0 1
+nvme_bench read 0xe0000000 1 0 1 100 1 1
 ```
 
 - `step=0` keeps hitting the same LBA range
 - `step=8` walks sequentially in 4 KiB steps
+- `step=1` walks sequentially in 512 B steps
 
 This is useful to confirm whether the current limit is still dominated by the
 firmware/control path rather than by media or caching effects.
