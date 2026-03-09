@@ -77,7 +77,7 @@ For reads:
 So moving more payload data does not materially change request time in the
 current range.
 
-### 4. The likely bottleneck is the MMIO control path
+### 4. The bottleneck is the MMIO write path
 
 In steady state, each I/O uses:
 - one SQ tail doorbell write
@@ -91,22 +91,31 @@ Since:
 - payload size is not dominant,
 - and the fixed work per I/O is mostly doorbell handling,
 
-the most likely bottleneck is the latency of the current MMIO path:
+the bottleneck is the latency of the current MMIO path:
 
 - firmware -> CSR accessor
 - CSR accessor -> PCIe MMIO transaction
 - completion of that accessor transaction
 
-This conclusion is an inference from the current counters.
+The measured counters show that almost all steady-state time is spent inside
+`mmio_wr32()`. Investigation of the MMIO accessor confirmed the root cause:
+
+- MMIO reads correctly wait for a completion TLP.
+- MMIO writes are posted transactions and should not wait for a completion.
+- The accessor was waiting for a completion even on writes.
+- As a result, each posted write ran until its watchdog timeout before returning.
+
+Since each I/O performs two posted doorbell writes, the benchmark ended up
+paying roughly one write-timeout for SQ tail and one write-timeout for CQ head
+on every request.
 
 ## Most likely improvement path
 
 ### Short term
 
-1. Use the added per-MMIO timing counters
-   - Measure ticks spent in `mmio_wr32()` and `mmio_rd32()`.
-   - Use `mmio_wait_done()` loop counts to see whether accessor wait time dominates.
-   - Confirm whether doorbell writes dominate total I/O time.
+1. Re-run the benchmark after the posted-write fix
+   - Confirm that steady-state latency drops sharply.
+   - Re-check whether another fixed cost becomes dominant.
 
 2. Reduce firmware-side fixed overhead
    - Avoid repeated work in the submit path where possible.

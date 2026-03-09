@@ -20,7 +20,8 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
     reusing the shared REQUEST layout.
 
     Notes:
-    - Only a single outstanding transaction is supported (one completion expected).
+    - Only a single outstanding transaction is supported.
+    - Reads wait for a completion; writes are posted and complete once accepted.
     - For now, only full DWORD writes are supported (wsel=0xf).
     """
     def __init__(self, port, tag=0x44, timeout=2**20, with_csr=False):
@@ -106,8 +107,16 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
             req_sink.channel.eq(port.channel),
 
             If(req_sink.ready,
-                NextState("WAIT"),
+                If(self.we,
+                    NextState("WRITE-LATCH"),
+                ).Else(
+                    NextState("WAIT"),
+                )
             )
+        )
+        fsm.act("WRITE-LATCH",
+            NextValue(done_r, 1),
+            NextState("IDLE"),
         )
         fsm.act("WAIT",
             cmp_source.ready.eq(1),

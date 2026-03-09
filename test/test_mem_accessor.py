@@ -5,9 +5,10 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 # Unit tests for LiteNVMePCIeMmioAccessor:
-# - Read/write request fields and completion handling.
+# - Read handling with completions.
+# - Posted write completion after request acceptance.
 # - Invalid wsel handling.
-# - Timeout behavior.
+# - Read timeout behavior.
 
 import unittest
 
@@ -143,13 +144,6 @@ class TestMemAccessor(unittest.TestCase):
                     captured["we"] = (yield port.source.we)
                     captured["adr"] = (yield port.source.adr)
                     captured["dat"] = (yield port.source.dat)
-                    for _ in range(2):
-                        yield
-                    yield port.sink.valid.eq(1)
-                    while (yield port.sink.ready) == 0:
-                        yield
-                    yield
-                    yield port.sink.valid.eq(0)
                     return
                 yield
 
