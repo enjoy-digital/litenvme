@@ -13,6 +13,7 @@
 #include <libbase/uart.h>
 #include <libbase/console.h>
 #include <generated/csr.h>
+#include <generated/soc.h>
 
 /*-----------------------------------------------------------------------*/
 /* CSR feature flags                                                      */
@@ -148,6 +149,7 @@ static void help(void)
 	puts("nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords] - Write then read+dump");
 	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
+	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] - Run IOPS/MBps benchmark");
 }
 
 /*-----------------------------------------------------------------------*/
@@ -1181,6 +1183,141 @@ static int nvme_read_do(uint64_t base_addr, uint32_t nsid, uint64_t slba, uint32
 	return 0;
 }
 
+static void print_fixed3_u64(const char *label, uint64_t numer, uint64_t denom, const char *unit)
+{
+	uint64_t whole, frac;
+
+	if (denom == 0) {
+		printf("%s: n/a %s\n", label, unit);
+		return;
+	}
+
+	whole = numer / denom;
+	frac  = ((numer % denom) * 1000ull) / denom;
+	printf("%s: %" PRIu64 ".%03" PRIu64 " %s\n", label, whole, frac, unit);
+}
+
+static void nvme_bench_cmd(char *str)
+{
+	const char *op_name = "read";
+	int do_write = 0;
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 1;
+	uint32_t count = 100;
+	uint32_t step = 0;
+	uint64_t cap = 0;
+	uint64_t cycle_start, cycle_total;
+	uint64_t total_bytes;
+	uint64_t rd_before = 0, rd_after = 0;
+	uint64_t wr_before = 0, wr_after = 0;
+	uint64_t lba;
+	uint32_t cmd[16];
+	uint32_t cqe[4];
+
+	if (str == NULL || strlen(str) == 0) {
+		puts("usage: nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step]");
+		return;
+	}
+
+	char *a = get_token(&str);
+	char *b = get_token(&str);
+	char *c = get_token(&str);
+	char *d = get_token(&str);
+	char *e = get_token(&str);
+	char *f = get_token(&str);
+	char *g = get_token(&str);
+
+	if (a && strlen(a)) {
+		if (strcmp(a, "write") == 0) {
+			do_write = 1;
+			op_name = "write";
+		} else if (strcmp(a, "read") != 0) {
+			puts("ERR: op must be 'read' or 'write'.");
+			return;
+		}
+	}
+	if (b && strlen(b)) base_addr = strtoull(b, NULL, 0);
+	if (c && strlen(c)) nsid = (uint32_t)strtoul(c, NULL, 0);
+	if (d && strlen(d)) slba = strtoull(d, NULL, 0);
+	if (e && strlen(e)) nlb  = (uint32_t)strtoul(e, NULL, 0);
+	if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
+	if (g && strlen(g)) step = (uint32_t)strtoul(g, NULL, 0);
+
+	if (nlb == 0) {
+		puts("ERR: nlb must be >= 1.");
+		return;
+	}
+	if (nlb > 8) {
+		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
+		return;
+	}
+	if (count == 0) {
+		puts("ERR: count must be >= 1.");
+		return;
+	}
+
+	if (nvme_bar0_assign(base_addr))
+		return;
+	if (nvme_admin_init(&cap))
+		return;
+	if (nvme_io_setup(cap))
+		return;
+
+	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
+	if (do_write)
+		hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
+
+#ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
+	rd_before = hostmem_csr_dma_rd_count_read();
+#endif
+#ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
+	wr_before = hostmem_csr_dma_wr_count_read();
+#endif
+
+	cycle_start = cpu_cycle_get();
+	lba = slba;
+	for (uint32_t i = 0; i < count; i++) {
+		if (do_write)
+			nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
+		else
+			nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
+
+		if (nvme_io_submit(cap, cmd, cqe)) {
+			printf("ERR: benchmark %s failed at iter %" PRIu32 " lba %" PRIu64 "\n",
+			       op_name, i, lba);
+			decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+			return;
+		}
+		lba += step;
+	}
+	cycle_total = cpu_cycle_get() - cycle_start;
+
+#ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
+	rd_after = hostmem_csr_dma_rd_count_read();
+#endif
+#ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
+	wr_after = hostmem_csr_dma_wr_count_read();
+#endif
+
+	total_bytes = (uint64_t)count * (uint64_t)nlb * 512ull;
+
+	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 "\n",
+	       op_name, count, nlb, slba, step);
+	printf("cycles_total: %" PRIu64 "\n", cycle_total);
+	print_fixed3_u64("latency_avg", cycle_total * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
+	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, cycle_total * 1000000ull, "MB/s");
+	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY * 1000ull, cycle_total, "IOPS");
+	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
+#ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
+	printf("hostmem_dma_rd_beats: %" PRIu64 "\n", rd_after - rd_before);
+#endif
+#ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
+	printf("hostmem_dma_wr_beats: %" PRIu64 "\n", wr_after - wr_before);
+#endif
+}
+
 static void nvme_dump_buffer(uint32_t dwords)
 {
 	if (dwords == 0) {
@@ -1586,6 +1723,8 @@ static void console_service(void)
 		nvme_verify_cmd(str);
 	else if (strcmp(token, "nvme_write") == 0)
 		nvme_write_cmd(str);
+	else if (strcmp(token, "nvme_bench") == 0)
+		nvme_bench_cmd(str);
 	prompt();
 }
 

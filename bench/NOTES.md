@@ -131,3 +131,16 @@ Example batch run:
 ./bench_req.py --op write --nsid 1 --lba 1024 --nlb 1 --buf 0x10006000 --bar0 0xe0000000 --count 100
 ./bench_req.py --op write --nsid 1 --lba 1024 --nlb 8 --buf 0x10006000 --bar0 0xe0000000 --count 100
 ```
+
+Firmware-side benchmark:
+```sh
+nvme_bench read  0xe0000000 1 0    8 100 0
+nvme_bench write 0xe0000000 1 1024 8 100 8
+```
+
+This reports:
+- average latency in microseconds
+- throughput in MB/s
+- IOPS
+- payload bytes
+- hostmem DMA beat deltas
