@@ -134,8 +134,8 @@ Example batch run:
 
 Firmware-side benchmark:
 ```sh
-nvme_bench read  0xe0000000 1 0    8 100 0
-nvme_bench write 0xe0000000 1 1024 8 100 8
+nvme_bench read  0xe0000000 1 0    8 100 0 1
+nvme_bench write 0xe0000000 1 1024 8 100 8 1
 ```
 
 This reports:

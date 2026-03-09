@@ -17,40 +17,50 @@ queue ownership and DMA management into more capable hardware blocks.
 
 ## Baseline measurements
 
-Measured with the firmware-side benchmark:
+Measured with the firmware-side benchmark. Use a warmup run so setup/admin
+overhead is not mixed into steady-state I/O timing:
 
 ```sh
-nvme_bench read 0xe0000000 1 0 1 100 0
-nvme_bench read 0xe0000000 1 0 2 100 0
-nvme_bench read 0xe0000000 1 0 4 100 0
-nvme_bench read 0xe0000000 1 0 8 100 0
+nvme_bench read 0xe0000000 1 0 1 100 0 1
+nvme_bench read 0xe0000000 1 0 8 100 0 1
 ```
 
-Representative results:
+Representative post-fix results:
 
-### 1 block (512 B)
+### 1 block (512 B), first measured run after setup
 
-- `ticks_io`: about `210,001,357`
-- `latency_avg`: about `16,800 us`
-- `throughput`: about `0.030 MB/s`
-- `iops`: about `59.5`
+- `ticks_setup`: about `12,928,991`
+- `ticks_io`: about `693,171`
+- `latency_avg`: about `55.5 us`
+- `throughput`: about `9.23 MB/s`
+- `iops`: about `18.0k`
+- `mmio_rd_ticks`: about `6,330,764`
+- `mmio_wr_ticks`: about `30,033`
+- `admin_submit`: `3`
+- `io_submit`: `100`
+- `io_cq_poll_loops`: about `1053`
+
+### 8 blocks (4096 B), steady-state
+
+- `ticks_setup`: about `565`
+- `ticks_io`: about `763,438`
+- `latency_avg`: about `61.1 us`
+- `throughput`: about `67.1 MB/s`
+- `iops`: about `16.4k`
+- `mmio_rd_ticks`: about `27,000`
+- `mmio_wr_ticks`: about `28,200`
 - `mmio_wr32`: `200`
 - `io_submit`: `100`
-- `io_cq_poll_loops`: `100`
-
-### 8 blocks (4096 B)
-
-- `ticks_io`: about `210,001,355`
-- `latency_avg`: about `16,800 us`
-- `throughput`: about `0.243 MB/s`
-- `iops`: about `59.5`
-- `mmio_wr32`: `200`
-- `io_submit`: `100`
-- `io_cq_poll_loops`: `100`
+- `io_cq_poll_loops`: about `1279`
 
 ## What the current data says
 
-### 1. The bottleneck is fixed per-request overhead
+### 1. The old MMIO write-timeout bottleneck is gone
+
+Steady-state latency dropped from about `16.8 ms` per I/O to about `55-61 us`
+per I/O after fixing posted writes and ordering in firmware.
+
+### 2. There is still meaningful fixed per-request overhead
 
 `nlb=1`, `2`, `4`, and `8` all complete in almost exactly the same I/O time.
 Only throughput changes, because payload size changes while request time stays
@@ -59,14 +69,12 @@ flat.
 That means the current bottleneck is not payload transfer bandwidth. It is a
 fixed control-path cost paid once per I/O.
 
-### 2. Completion polling is not the dominant cost
+### 3. Completion polling is now a visible cost
 
-`io_cq_poll_loops = 100` for `100` I/Os means the completion queue is observed
-as ready on the first poll iteration for nearly every request.
+In steady state, `io_cq_poll_loops` is about `1279` for `100` I/Os, or about
+`12.8` polls per request. That is no longer negligible.
 
-So the firmware is not spending most of its time spinning on CQE polling.
-
-### 3. The data path is not the dominant cost
+### 4. The data path is still not the dominant cost
 
 Host memory DMA beat counts scale with `nlb`, but total I/O time does not.
 
@@ -77,62 +85,37 @@ For reads:
 So moving more payload data does not materially change request time in the
 current range.
 
-### 4. The bottleneck is the MMIO write path
+### 5. MMIO is no longer dominant in steady state
 
-In steady state, each I/O uses:
-- one SQ tail doorbell write
-- one CQ head doorbell write
+In the steady-state `nlb=8` case:
 
-The benchmark shows `mmio_wr32 = 200` for `100` I/Os, which matches those two
-doorbell writes per request.
+- `mmio_rd_ticks + mmio_wr_ticks` is about `55,200`
+- `ticks_io` is about `763,438`
 
-Since:
-- CQ polling is not dominant,
-- payload size is not dominant,
-- and the fixed work per I/O is mostly doorbell handling,
+So MMIO still costs something, but it is no longer the main source of the
+measured I/O latency.
 
-the bottleneck is the latency of the current MMIO path:
+The main remaining fixed cost is now more likely in:
 
-- firmware -> CSR accessor
-- CSR accessor -> PCIe MMIO transaction
-- completion of that accessor transaction
-
-The measured counters show that almost all steady-state time is spent inside
-`mmio_wr32()`. Investigation of the MMIO accessor confirmed the root cause:
-
-- MMIO reads correctly wait for a completion TLP.
-- MMIO writes are posted transactions and should not wait for a completion.
-- The accessor was waiting for a completion even on writes.
-- As a result, each posted write ran until its watchdog timeout before returning.
-
-Since each I/O performs two posted doorbell writes, the benchmark ended up
-paying roughly one write-timeout for SQ tail and one write-timeout for CQ head
-on every request.
-
-The posted-write fix also exposed a second issue:
-
-- CQ timeout was based on a fixed CPU loop count rather than elapsed time.
-- Once the accidental MMIO-write delay disappeared, CQ polling started much earlier.
-- The old loop-count timeout could now expire before the SSD completed the command.
-
-The firmware submit path therefore needs a time-based CQ timeout, not just a raw
-poll-loop budget.
+- firmware CQ polling
+- hostmem polling reads
+- queue bookkeeping / command build / submit overhead
 
 ## Most likely improvement path
 
 ### Short term
 
-1. Use a time-based CQ timeout
-   - Poll CQEs against elapsed timer ticks, not just a raw loop count.
-   - Keep the loop counter as a diagnostic, not as the real timeout source.
+1. Make warmup explicit in benchmark usage
+   - Exclude setup/admin overhead from steady-state reporting.
+   - Compare `nlb=1` and `nlb=8` with the same warmup count.
 
-2. Re-run the benchmark after the posted-write fix
-   - Confirm that steady-state latency drops sharply.
-   - Re-check whether another fixed cost becomes dominant.
-
-3. Reduce firmware-side fixed overhead
+2. Reduce firmware-side fixed overhead
    - Avoid repeated work in the submit path where possible.
    - Keep queue state hot and avoid unnecessary debug/clear operations.
+
+3. Reduce CQ polling cost
+   - Consider less aggressive firmware polling patterns.
+   - Consider interrupt or hardware-owned completion handling later.
 
 4. Batch or decouple request submission
    - Add a small request FIFO.
@@ -159,8 +142,8 @@ The current benchmark is doing its job:
 
 - protocol flow looks correct
 - the benchmark numbers are now self-consistent
-- the measured limit is clearly not SSD bandwidth
-- the present limit is the bring-up control path
+- the measured limit is no longer a fake MMIO timeout artifact
+- the present limit is still the bring-up control path, but now much closer to the real one
 
 This is a good point to treat the firmware path as the correctness baseline and
 start reducing the control-path cost, first by measuring MMIO transaction time

@@ -49,7 +49,7 @@ Console commands (from the firmware prompt):
 - `nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords]` — write then read+dump
 - `nvme_verify [bar0] [nsid] [slba] [nlb] [dwords]` — verify pattern on LBA range
 - `nvme_write [bar0] [nsid] [slba] [nlb]` — write NLB blocks from hostmem
-- `nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step]` — repeated I/O benchmark with latency, MB/s and IOPS
+- `nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup]` — repeated I/O benchmark with latency, MB/s and IOPS
 
 Notes:
 - The PCIe BDF is fixed in firmware (0:1:0). Update `cfg_bus/cfg_dev/cfg_fun` in `bench/firmware/main.c` if needed.
@@ -94,8 +94,8 @@ The benchmark reports:
 
 Firmware-side benchmark:
 ```sh
-nvme_bench read  0xe0000000 1 0    8 100 0
-nvme_bench write 0xe0000000 1 1024 8 100 8
+nvme_bench read  0xe0000000 1 0    8 100 0 1
+nvme_bench write 0xe0000000 1 1024 8 100 8 1
 ```
 
 Arguments:
@@ -103,6 +103,7 @@ Arguments:
 - `bar0`, `nsid`, `slba`, `nlb` match the existing read/write commands
 - `count` is the number of requests to issue
 - `step` is the LBA increment between requests (`0` = fixed-LBA, `nlb` = sequential)
+- `warmup` is the number of unmeasured requests to issue before timing starts
 
 The firmware benchmark reports:
 - setup ticks, I/O ticks, and total timer ticks

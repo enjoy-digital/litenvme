@@ -155,7 +155,7 @@ static void help(void)
 	puts("nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords] - Write then read+dump");
 	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
-	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] - Run IOPS/MBps benchmark");
+	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] - Run IOPS/MBps benchmark");
 }
 
 /*-----------------------------------------------------------------------*/
@@ -316,6 +316,12 @@ static int mmio_wr32(uint64_t addr, uint32_t val)
 	tick_end = bench_timer_get();
 	bench_mmio_wr_ticks += bench_ticks_elapsed(tick_start, tick_end);
 	return 0;
+}
+
+static int mmio_posted_flush(uint64_t addr)
+{
+	uint32_t v;
+	return mmio_rd32(addr, &v);
 }
 
 static int mmio_rd64(uint64_t addr, uint64_t *val)
@@ -587,14 +593,16 @@ static void nvme_reset_cmd(void)
 	if (bar0_base != 0) {
 		uint32_t cc = 0;
 		if (!mmio_rd32(bar0_base + NVME_CC, &cc)) {
-			if (cc_en(cc)) {
-	if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
-		puts("ERR: CC write timeout.");
-	else
-		mmio_warn_write("WARN: CC write err=1 (write may still be accepted).");
-				if (!nvme_wait_rdy(0, NVME_RDY_CLEAR_LOOPS))
-					puts("WARN: CSTS.RDY did not clear.");
-			}
+		if (cc_en(cc)) {
+					if (mmio_wr32(bar0_base + NVME_CC, cc & ~1u))
+						puts("ERR: CC write timeout.");
+					else
+						mmio_warn_write("WARN: CC write err=1 (write may still be accepted).");
+			if (mmio_posted_flush(bar0_base + NVME_CSTS))
+				puts("ERR: CC flush read timeout.");
+			if (!nvme_wait_rdy(0, NVME_RDY_CLEAR_LOOPS))
+				puts("WARN: CSTS.RDY did not clear.");
+		}
 		}
 	}
 	nvme_admin_ready = 0;
@@ -971,12 +979,16 @@ static int nvme_admin_init(uint64_t *cap_out)
 		puts("ERR: ACQ write timeout.");
 	else
 		mmio_warn_write("WARN: ACQ write err=1 (write may still be accepted).");
+	if (mmio_posted_flush(bar0_base + NVME_CSTS))
+		puts("ERR: admin queue flush read timeout.");
 
 	cc = cc_make_en(4, 6, 0);
 	if (mmio_wr32(bar0_base + NVME_CC, cc))
 		puts("ERR: CC write timeout.");
 	else
 		mmio_warn_write("WARN: CC write err=1 (write may still be accepted).");
+	if (mmio_posted_flush(bar0_base + NVME_CSTS))
+		puts("ERR: CC enable flush read timeout.");
 
 	if (!nvme_wait_rdy(1, NVME_RDY_SET_LOOPS)) {
 		puts("WARN: CSTS.RDY did not assert.");
@@ -1050,11 +1062,13 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("ERR: SQ doorbell write timeout.");
 	else
 		mmio_warn_write("WARN: SQ doorbell write err=1 (write may still be accepted).");
+	if (mmio_posted_flush(bar0_base + NVME_CSTS))
+		puts("ERR: SQ doorbell flush read timeout.");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	int got_cqe = 0;
 	timeout_start = bench_timer_get();
-	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
+	for (uint32_t loops = 0;; loops++) {
 		bench_admin_poll_loops++;
 		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
 		d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
@@ -1065,6 +1079,8 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 			break;
 		}
 		if (bench_timeout_expired(timeout_start, NVME_CQE_TIMEOUT_TICKS))
+			break;
+		if (loops == 0xffffffffu)
 			break;
 	}
 
@@ -1083,6 +1099,8 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("ERR: CQ doorbell write timeout.");
 	else
 		mmio_warn_write("WARN: CQ doorbell write err=1 (write may still be accepted).");
+	if (mmio_posted_flush(bar0_base + NVME_CSTS))
+		puts("ERR: CQ doorbell flush read timeout.");
 
 	return cqe_ok(cqe[3]) ? 0 : 1;
 }
@@ -1107,11 +1125,13 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("ERR: IO SQ doorbell write timeout.");
 	else
 		mmio_warn_write("WARN: IO SQ doorbell write err=1 (write may still be accepted).");
+	if (mmio_posted_flush(bar0_base + NVME_CSTS))
+		puts("ERR: IO SQ doorbell flush read timeout.");
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	int got_cqe = 0;
 	timeout_start = bench_timer_get();
-	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
+	for (uint32_t loops = 0;; loops++) {
 		bench_io_poll_loops++;
 		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
 		d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
@@ -1122,6 +1142,8 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 			break;
 		}
 		if (bench_timeout_expired(timeout_start, NVME_CQE_TIMEOUT_TICKS))
+			break;
+		if (loops == 0xffffffffu)
 			break;
 	}
 
@@ -1144,6 +1166,8 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 		puts("ERR: IO CQ doorbell write timeout.");
 	else
 		mmio_warn_write("WARN: IO CQ doorbell write err=1 (write may still be accepted).");
+	if (mmio_posted_flush(bar0_base + NVME_CSTS))
+		puts("ERR: IO CQ doorbell flush read timeout.");
 
 	return cqe_ok(cqe[3]) ? 0 : 1;
 }
@@ -1261,6 +1285,7 @@ static void nvme_bench_cmd(char *str)
 	uint32_t nlb  = 1;
 	uint32_t count = 100;
 	uint32_t step = 0;
+	uint32_t warmup = 1;
 	uint64_t cap = 0;
 	uint32_t setup_tick_start, setup_tick_end;
 	uint32_t io_tick_start, io_tick_end;
@@ -1282,7 +1307,7 @@ static void nvme_bench_cmd(char *str)
 	uint32_t cqe[4];
 
 	if (str == NULL || strlen(str) == 0) {
-		puts("usage: nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step]");
+		puts("usage: nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup]");
 		return;
 	}
 
@@ -1293,6 +1318,7 @@ static void nvme_bench_cmd(char *str)
 	char *e = get_token(&str);
 	char *f = get_token(&str);
 	char *g = get_token(&str);
+	char *h = get_token(&str);
 
 	if (a && strlen(a)) {
 		if (strcmp(a, "write") == 0) {
@@ -1309,6 +1335,7 @@ static void nvme_bench_cmd(char *str)
 	if (e && strlen(e)) nlb  = (uint32_t)strtoul(e, NULL, 0);
 	if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
 	if (g && strlen(g)) step = (uint32_t)strtoul(g, NULL, 0);
+	if (h && strlen(h)) warmup = (uint32_t)strtoul(h, NULL, 0);
 
 	if (nlb == 0) {
 		puts("ERR: nlb must be >= 1.");
@@ -1346,6 +1373,22 @@ static void nvme_bench_cmd(char *str)
 	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
 	if (do_write)
 		hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
+
+	lba = slba;
+	for (uint32_t i = 0; i < warmup; i++) {
+		if (do_write)
+			nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
+		else
+			nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
+
+		if (nvme_io_submit(cap, cmd, cqe)) {
+			printf("ERR: warmup %s failed at iter %" PRIu32 " lba %" PRIu64 "\n",
+			       op_name, i, lba);
+			decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+			return;
+		}
+		lba += step;
+	}
 
 #ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
 	rd_before = hostmem_csr_dma_rd_count_read();
@@ -1394,6 +1437,7 @@ static void nvme_bench_cmd(char *str)
 
 	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 "\n",
 	       op_name, count, nlb, slba, step);
+	printf("warmup: %" PRIu32 "\n", warmup);
 	printf("ticks_setup: %" PRIu64 "\n", setup_ticks);
 	printf("ticks_io: %" PRIu64 "\n", io_ticks);
 	printf("ticks_total: %" PRIu64 "\n", total_ticks);
