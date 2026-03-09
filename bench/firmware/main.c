@@ -104,6 +104,11 @@ static char *get_token(char **str)
 {
 	char *c, *d;
 
+	while (**str == ' ')
+		(*str)++;
+	if (**str == 0)
+		return *str;
+
 	c = (char *)strchr(*str, ' ');
 	if (c == NULL) {
 		d = *str;
