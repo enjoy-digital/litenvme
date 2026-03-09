@@ -1,4 +1,4 @@
-BUILD_DIR?=../build/usp_platform
+BUILD_DIR?=../build/alibaba_xcku3p
 BOOT?=bios
 
 include $(BUILD_DIR)/software/include/generated/variables.mak

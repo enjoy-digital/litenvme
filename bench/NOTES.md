@@ -5,15 +5,15 @@ See `bench/firmware/README.md` for the soft-CPU firmware build flow.
 
 BIOS load quickstart:
 ```
-./alibaba_xcku3p.py --with-cpu --cpu-boot=bios --build --no-compile-gateware
+./alibaba_xcku3p.py --with-etherbone --with-cpu --cpu-boot=bios --build --no-compile-gateware
 litex_term /dev/ttyUSBX --kernel bench/firmware/firmware.bin
 ```
 
 ## 0) Build + load bitstream
-./alibaba_xcku3p.py --csr-csv=csr.csv --build --load
+./alibaba_xcku3p.py --with-cpu --cpu-boot=bios --csr-csv=csr.csv --with-etherbone --libc=full --build --load
 
 ## 1) Start LiteX server
-litex_server --uart --uart-port=/dev/ttyUSBX --uart-baudrate=2e6
+litex_server --udp
 
 ## 2) PCIe config / BAR0
 # Inspect config space

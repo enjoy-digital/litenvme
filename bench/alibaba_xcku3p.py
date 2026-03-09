@@ -110,6 +110,15 @@ class BaseSoC(SoCCore):
             ip_name    = "pcie4_uscale_plus",
             mode       = "RootPort",
         )
+        self.pcie_phy.update_config({
+            "mode_selection"   : "Advanced",
+            "en_gt_selection"  : "true",
+            "select_quad"      : "GTY_Quad_225",
+            "pcie_blk_locn"    : "X0Y0",
+            "gen_x0y0"         : "true",
+            "gen_x1y0"         : "false",
+            "plltype"          : "QPLL1",
+        })
         self.pcie_endpoint = LitePCIeRootPort(
             phy        = self.pcie_phy,
             max_pending_requests = 8,
@@ -120,13 +129,6 @@ class BaseSoC(SoCCore):
 
         # Timing constraints.
         self.platform.add_false_path_constraints(self.crg.cd_sys.clk, self.pcie_phy.cd_pcie.clk)
-
-        # Set manual locations to avoid Vivado to remap lanes.
-        platform.toolchain.pre_placement_commands.append("reset_property LOC [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*GTYE4_CHANNEL_PRIM_INST}}]")
-        platform.toolchain.pre_placement_commands.append("set_property LOC GTYE4_CHANNEL_X0Y7 [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*gtye4_channel_gen.gen_gtye4_channel_inst[3].GTYE4_CHANNEL_PRIM_INST}}]")
-        platform.toolchain.pre_placement_commands.append("set_property LOC GTYE4_CHANNEL_X0Y6 [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*gtye4_channel_gen.gen_gtye4_channel_inst[2].GTYE4_CHANNEL_PRIM_INST}}]")
-        platform.toolchain.pre_placement_commands.append("set_property LOC GTYE4_CHANNEL_X0Y5 [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*gtye4_channel_gen.gen_gtye4_channel_inst[1].GTYE4_CHANNEL_PRIM_INST}}]")
-        platform.toolchain.pre_placement_commands.append("set_property LOC GTYE4_CHANNEL_X0Y4 [get_cells -hierarchical -filter {{NAME=~*pcie_usp_i/*gtye4_channel_gen.gen_gtye4_channel_inst[0].GTYE4_CHANNEL_PRIM_INST}}]")
 
         # OneShot Reset.
         from litex.gen.genlib.misc import WaitTimer
