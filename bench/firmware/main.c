@@ -195,6 +195,9 @@ static int nvme_debug = 0;
 static uint32_t nvme_fill_pattern = 0xA5A5A5A5u;
 static uint64_t bench_mmio_rd32_count = 0;
 static uint64_t bench_mmio_wr32_count = 0;
+static uint64_t bench_mmio_wait_loops = 0;
+static uint64_t bench_mmio_rd_ticks = 0;
+static uint64_t bench_mmio_wr_ticks = 0;
 static uint64_t bench_admin_submit_count = 0;
 static uint64_t bench_io_submit_count = 0;
 static uint64_t bench_admin_poll_loops = 0;
@@ -264,6 +267,7 @@ static void mmio_start(int we, uint8_t wsel, uint16_t length)
 static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 {
 	while (timeout--) {
+		bench_mmio_wait_loops++;
 		uint32_t stat = mmio_mem_stat_read();
 		if (stat & 0x1) {
 			if (stat_out)
@@ -279,11 +283,15 @@ static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 static int mmio_rd32(uint64_t addr, uint32_t *val)
 {
 	uint32_t stat = 0;
+	uint32_t tick_start, tick_end;
 	bench_mmio_rd32_count++;
+	tick_start = bench_timer_get();
 	mmio_set_addr(addr);
 	mmio_start(0, 0xf, 1);
 	if (mmio_wait_done(1000000, &stat))
 		return 1;
+	tick_end = bench_timer_get();
+	bench_mmio_rd_ticks += bench_ticks_elapsed(tick_start, tick_end);
 	*val = mmio_mem_rdata_read();
 	return 0;
 }
@@ -291,12 +299,16 @@ static int mmio_rd32(uint64_t addr, uint32_t *val)
 static int mmio_wr32(uint64_t addr, uint32_t val)
 {
 	uint32_t stat = 0;
+	uint32_t tick_start, tick_end;
 	bench_mmio_wr32_count++;
+	tick_start = bench_timer_get();
 	mmio_set_addr(addr);
 	mmio_mem_wdata_write(val);
 	mmio_start(1, 0xf, 1);
 	if (mmio_wait_done(1000000, &stat))
 		return 1;
+	tick_end = bench_timer_get();
+	bench_mmio_wr_ticks += bench_ticks_elapsed(tick_start, tick_end);
 	return 0;
 }
 
@@ -1244,6 +1256,9 @@ static void nvme_bench_cmd(char *str)
 	uint64_t wr_before = 0, wr_after = 0;
 	uint64_t mmio_rd_before, mmio_rd_after;
 	uint64_t mmio_wr_before, mmio_wr_after;
+	uint64_t mmio_wait_before, mmio_wait_after;
+	uint64_t mmio_rd_ticks_before, mmio_rd_ticks_after;
+	uint64_t mmio_wr_ticks_before, mmio_wr_ticks_after;
 	uint64_t admin_submit_before, admin_submit_after;
 	uint64_t io_submit_before, io_submit_after;
 	uint64_t admin_poll_before, admin_poll_after;
@@ -1296,6 +1311,9 @@ static void nvme_bench_cmd(char *str)
 
 	mmio_rd_before       = bench_mmio_rd32_count;
 	mmio_wr_before       = bench_mmio_wr32_count;
+	mmio_wait_before     = bench_mmio_wait_loops;
+	mmio_rd_ticks_before = bench_mmio_rd_ticks;
+	mmio_wr_ticks_before = bench_mmio_wr_ticks;
 	admin_submit_before  = bench_admin_submit_count;
 	io_submit_before     = bench_io_submit_count;
 	admin_poll_before    = bench_admin_poll_loops;
@@ -1350,6 +1368,9 @@ static void nvme_bench_cmd(char *str)
 #endif
 	mmio_rd_after      = bench_mmio_rd32_count;
 	mmio_wr_after      = bench_mmio_wr32_count;
+	mmio_wait_after    = bench_mmio_wait_loops;
+	mmio_rd_ticks_after = bench_mmio_rd_ticks;
+	mmio_wr_ticks_after = bench_mmio_wr_ticks;
 	admin_submit_after = bench_admin_submit_count;
 	io_submit_after    = bench_io_submit_count;
 	admin_poll_after   = bench_admin_poll_loops;
@@ -1368,6 +1389,9 @@ static void nvme_bench_cmd(char *str)
 	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
 	printf("mmio_rd32: %" PRIu64 "\n", mmio_rd_after - mmio_rd_before);
 	printf("mmio_wr32: %" PRIu64 "\n", mmio_wr_after - mmio_wr_before);
+	printf("mmio_wait_loops: %" PRIu64 "\n", mmio_wait_after - mmio_wait_before);
+	printf("mmio_rd_ticks: %" PRIu64 "\n", mmio_rd_ticks_after - mmio_rd_ticks_before);
+	printf("mmio_wr_ticks: %" PRIu64 "\n", mmio_wr_ticks_after - mmio_wr_ticks_before);
 	printf("admin_submit: %" PRIu64 "\n", admin_submit_after - admin_submit_before);
 	printf("io_submit: %" PRIu64 "\n", io_submit_after - io_submit_before);
 	printf("admin_cq_poll_loops: %" PRIu64 "\n", admin_poll_after - admin_poll_before);

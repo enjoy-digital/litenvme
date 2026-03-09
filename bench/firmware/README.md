@@ -109,7 +109,7 @@ The firmware benchmark reports:
 - average latency in microseconds
 - throughput in MB/s
 - IOPS
-- MMIO read/write counts
+- MMIO read/write counts, wait-loop counts, and MMIO timing ticks
 - admin/I/O submit counts
 - admin/I/O CQ polling loop counts
 - payload bytes and hostmem DMA beat deltas

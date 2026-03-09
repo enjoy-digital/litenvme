@@ -143,7 +143,7 @@ This reports:
 - throughput in MB/s
 - IOPS
 - setup vs I/O timer ticks
-- MMIO read/write counts
+- MMIO read/write counts and MMIO timing ticks
 - admin/I/O CQ polling loop counts
 - payload bytes
 - hostmem DMA beat deltas

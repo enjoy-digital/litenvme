@@ -88,6 +88,7 @@ SoftCPU flow (current vs. target usage):
 * Extend command coverage (Identify Namespace, larger reads/writes, admin log pages, etc.).
 * Add higher-level software integration (driver/userspace tooling).
 * See `doc/NVME_ARCHITECTURE.md` for the full bring-up → proper-core plan.
+* See `doc/NVME_PERFORMANCE.md` for the current bring-up performance baseline and bottleneck analysis.
 
 If you want to support these features, please contact us at florent [AT]
 enjoy-digital.fr.
