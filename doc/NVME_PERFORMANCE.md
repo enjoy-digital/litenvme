@@ -35,6 +35,29 @@ The benchmark now snapshots counters after setup and warmup, so the next rerun
 should be used to refresh the detailed per-counter baseline without setup/admin
 pollution.
 
+Clean steady-state 4 KiB read baseline (`warmup=1`, fixed LBA):
+
+```sh
+nvme_bench read 0xe0000000 1 0 8 100 0 1
+```
+
+- `ticks_setup`: about `12,751,823`
+- `ticks_io`: about `625,067`
+- `latency_avg`: about `50.0 us`
+- `throughput`: about `81.9 MB/s`
+- `iops`: about `20.0k`
+- `mmio_rd32`: `200`
+- `mmio_wr32`: `200`
+- `mmio_rd_ticks`: about `27,000`
+- `mmio_wr_ticks`: about `28,200`
+- `io_submit`: `100`
+- `io_cq_poll_loops`: about `834`
+- `hostmem_dma_rd_beats`: `400`
+- `hostmem_dma_wr_beats`: `25,700`
+
+This is the current best steady-state baseline for the firmware-driven,
+single-outstanding, PRP1-only bring-up path.
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone
@@ -53,9 +76,9 @@ fixed control-path cost paid once per I/O.
 
 ### 3. Completion polling is now a visible cost
 
-In the post-fix measurements, completion polling was no longer a single poll
-per request. That makes firmware CQ polling a visible part of the remaining
-control-path cost.
+In the clean steady-state baseline, `io_cq_poll_loops` is about `834` for
+`100` I/Os, or about `8.3` polls per request. That makes firmware CQ polling a
+visible part of the remaining control-path cost.
 
 ### 4. The data path is still not the dominant cost
 
@@ -79,6 +102,21 @@ The main remaining fixed cost is now more likely in:
 - firmware CQ polling
 - hostmem polling reads
 - queue bookkeeping / command build / submit overhead
+
+## Recommended comparison runs
+
+To compare steady-state access patterns:
+
+```sh
+nvme_bench read 0xe0000000 1 0 8 100 0 1
+nvme_bench read 0xe0000000 1 0 8 100 8 1
+```
+
+- `step=0` keeps hitting the same LBA range
+- `step=8` walks sequentially in 4 KiB steps
+
+This is useful to confirm whether the current limit is still dominated by the
+firmware/control path rather than by media or caching effects.
 
 ## Most likely improvement path
 
