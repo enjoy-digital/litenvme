@@ -64,7 +64,9 @@ def req_submit(bus, op, nsid, lba, nlb, buf, bar0, timeout_s=1.0):
         time.sleep(0.01)
 
     cqe_status = regs.nvme_req_req_cqe_status.read()
-    return status, cqe_status
+    cycles = regs.nvme_req_req_cycles.read() if hasattr(regs, "nvme_req_req_cycles") else None
+    bytes_done = regs.nvme_req_req_bytes_done.read() if hasattr(regs, "nvme_req_req_bytes_done") else None
+    return status, cqe_status, cycles, bytes_done
 
 
 def main():
@@ -86,7 +88,7 @@ def main():
     bus = RemoteClient(host=args.host, port=args.port, csr_csv=args.csr_csv)
     bus.open()
     try:
-        status, cqe = req_submit(
+        status, cqe, cycles, bytes_done = req_submit(
             bus,
             op=op,
             nsid=args.nsid,
@@ -97,7 +99,13 @@ def main():
             timeout_s=args.timeout,
         )
         err = "yes" if (status & REQ_STATUS_ERROR) else "no"
-        print(f"done: status=0x{status:08x} err={err} cqe=0x{cqe:08x}")
+        extra = []
+        if cycles is not None:
+            extra.append(f"cycles={cycles}")
+        if bytes_done is not None:
+            extra.append(f"bytes={bytes_done}")
+        suffix = f" {' '.join(extra)}" if extra else ""
+        print(f"done: status=0x{status:08x} err={err} cqe=0x{cqe:08x}{suffix}")
     finally:
         bus.close()
 

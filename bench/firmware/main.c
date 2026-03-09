@@ -192,6 +192,21 @@ static uint32_t nvme_fill_pattern = 0xA5A5A5A5u;
 #define NVME_REQ_OP_WRITE    1
 #define NVME_REQ_OP_IDENTIFY 2
 
+static uint64_t cpu_cycle_get(void)
+{
+#if defined(__riscv)
+	uint32_t hi0, lo, hi1;
+	do {
+		__asm__ __volatile__("rdcycleh %0" : "=r"(hi0));
+		__asm__ __volatile__("rdcycle %0"  : "=r"(lo));
+		__asm__ __volatile__("rdcycleh %0" : "=r"(hi1));
+	} while (hi0 != hi1);
+	return ((uint64_t)hi1 << 32) | lo;
+#else
+	return 0;
+#endif
+}
+
 static void delay_cycles(unsigned int cycles)
 {
 	volatile unsigned int i;
@@ -1440,8 +1455,13 @@ static void nvme_req_service(void)
 		printf("REQ buf=0x%016" PRIx64 " bar0=0x%016" PRIx64 "\n", buf, bar0);
 	}
 
+	uint64_t cycle_start = cpu_cycle_get();
+	uint32_t bytes_done = 0;
+
 	nvme_req_req_status_write(1); // busy=1, done=0, error=0
 	nvme_req_req_cqe_status_write(0);
+	nvme_req_req_cycles_write(0);
+	nvme_req_req_bytes_done_write(0);
 
 	int err = 0;
 	uint32_t cqe[4] = {0, 0, 0, 0};
@@ -1463,6 +1483,8 @@ static void nvme_req_service(void)
 			nvme_cmd_identify_controller(1, (uint64_t)ID_BUF_ADDR, cmd);
 			if (nvme_admin_submit(cap, cmd, cqe))
 				err = 1;
+			else
+				bytes_done = 0x100;
 		} else if (op == NVME_REQ_OP_READ || op == NVME_REQ_OP_WRITE) {
 			if (nvme_io_setup(cap)) {
 				err = 1;
@@ -1479,11 +1501,22 @@ static void nvme_req_service(void)
 						nvme_cmd_write(0x31, nsid, buf, lba, (uint16_t)(nlb - 1), cmd);
 					if (nvme_io_submit(cap, cmd, cqe))
 						err = 1;
+					else
+						bytes_done = nlb * 512u;
 				}
 			}
 		} else {
 			err = 1;
 		}
+	}
+
+	{
+		uint64_t cycle_end = cpu_cycle_get();
+		uint64_t cycle_delta = cycle_end - cycle_start;
+		if (cycle_delta > 0xffffffffull)
+			cycle_delta = 0xffffffffull;
+		nvme_req_req_cycles_write((uint32_t)cycle_delta);
+		nvme_req_req_bytes_done_write(bytes_done);
 	}
 
 	if (err) {

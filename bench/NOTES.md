@@ -86,3 +86,48 @@ litex_server --udp
   --nsid 1 \
   --slba 0 \
   --nlb 1
+
+## 6) First performance measurements
+Use the current firmware-driven CSR request path as the baseline.
+
+What this measures well:
+- end-to-end request latency
+- effective throughput for small `PRP1` transfers
+- firmware/setup overhead vs host memory DMA activity
+
+Current limits:
+- single outstanding request
+- polling completion path
+- `PRP1` only
+- `nlb <= 8`
+
+Recommended sweep:
+```sh
+./test_req.py --op read  --nsid 1 --lba 0    --nlb 1 --buf 0x10005000 --bar0 0xe0000000
+./test_req.py --op read  --nsid 1 --lba 0    --nlb 2 --buf 0x10005000 --bar0 0xe0000000
+./test_req.py --op read  --nsid 1 --lba 0    --nlb 4 --buf 0x10005000 --bar0 0xe0000000
+./test_req.py --op read  --nsid 1 --lba 0    --nlb 8 --buf 0x10005000 --bar0 0xe0000000
+./test_req.py --op write --nsid 1 --lba 1024 --nlb 1 --buf 0x10006000 --bar0 0xe0000000
+./test_req.py --op write --nsid 1 --lba 1024 --nlb 2 --buf 0x10006000 --bar0 0xe0000000
+./test_req.py --op write --nsid 1 --lba 1024 --nlb 4 --buf 0x10006000 --bar0 0xe0000000
+./test_req.py --op write --nsid 1 --lba 1024 --nlb 8 --buf 0x10006000 --bar0 0xe0000000
+```
+
+Recommended procedure:
+1. Use `status` at the firmware console before and after a batch to capture `hostmem_wr_count` and `hostmem_rd_count`.
+2. Separate cold measurements from steady-state measurements.
+3. Run each point many times and time the whole batch from the host side.
+4. Compute average latency per request and effective MB/s.
+
+Next improvements for performance work:
+- use the new `req_cycles` and `req_bytes_done` CSRs
+- automate repeated runs with `bench_req.py`
+- add a small request FIFO before moving queue management into RTL
+
+Example batch run:
+```sh
+./bench_req.py --op read  --nsid 1 --lba 0    --nlb 1 --buf 0x10005000 --bar0 0xe0000000 --count 100
+./bench_req.py --op read  --nsid 1 --lba 0    --nlb 8 --buf 0x10005000 --bar0 0xe0000000 --count 100
+./bench_req.py --op write --nsid 1 --lba 1024 --nlb 1 --buf 0x10006000 --bar0 0xe0000000 --count 100
+./bench_req.py --op write --nsid 1 --lba 1024 --nlb 8 --buf 0x10006000 --bar0 0xe0000000 --count 100
+```

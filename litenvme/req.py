@@ -37,3 +37,5 @@ class LiteNVMeRequestCSR(Module):
             CSRField("error", size=1, offset=2, description="Request error (firmware-owned)."),
         ])
         self._req_cqe_status = CSRStorage(32, description="CQE DW3 status (firmware-owned).")
+        self._req_cycles     = CSRStorage(32, description="CPU cycles spent servicing the request (firmware-owned).")
+        self._req_bytes_done = CSRStorage(32, description="Transferred payload bytes for the completed request (firmware-owned).")

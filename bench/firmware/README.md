@@ -57,6 +57,40 @@ CSR request flow (firmware-driven, no UART):
 - The gateware exposes `nvme_req_*` CSRs (op/nsid/lba/nlb/buf/bar0 + start/status).
 - Firmware polls `req_start`, executes the request, then updates `req_status` and `req_cqe_status`.
 
+Performance testing, current scope:
+- The current request path is still single-shot and firmware-polled.
+- I/O requests are limited to `PRP1` only and `nlb <= 8`.
+- This means the first measurements should focus on request latency and effective throughput of the existing path, not peak NVMe bandwidth.
+
+Recommended first measurements:
+- Compare `read` vs `write` for `nlb=1,2,4,8`.
+- Measure both cold runs (first request after reset/init) and steady-state runs.
+- Record host memory DMA counter deltas with `status` before/after a batch.
+- Repeat the same request many times to separate firmware/setup overhead from data movement time.
+
+Suggested benchmark loop:
+1. Reset the firmware state with `nvme_reset`.
+2. Run one request to capture cold-start behavior.
+3. Run 100-1000 identical requests through the CSR request path.
+4. Capture elapsed host-side time and the `hostmem_wr_count` / `hostmem_rd_count` deltas.
+5. Sweep `nlb` from 1 to 8 and compare scaling.
+
+What to add next for better measurements:
+- Request instrumentation CSRs such as `req_cycles` and `req_bytes_done` are now exposed by the firmware-owned request block.
+- Use `bench/bench_req.py` to automate repeated runs and report MB/s and average latency.
+- After that, the next architectural step is a small request FIFO so the CPU is not idle between back-to-back submissions.
+
+Benchmark helper:
+```sh
+./bench_req.py --op read --nsid 1 --lba 0 --nlb 8 --buf 0x10005000 --bar0 0xe0000000 --count 100 --warmup 1
+./bench_req.py --op write --nsid 1 --lba 1024 --nlb 8 --buf 0x10006000 --bar0 0xe0000000 --count 100 --warmup 1
+```
+
+The benchmark reports:
+- host-side average latency and payload rate
+- firmware-side average cycles and derived latency/rate
+- hostmem DMA beat deltas when the counters are present
+
 Suggested next step: add a small firmware that:
 - polls PCIe link status,
 - configures BAR0 and Command.MEM/BME,
