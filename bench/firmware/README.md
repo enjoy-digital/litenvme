@@ -105,7 +105,7 @@ Arguments:
 - `step` is the LBA increment between requests (`0` = fixed-LBA, `nlb` = sequential)
 
 The firmware benchmark reports:
-- total cycles for the batch
+- total timer ticks for the batch
 - average latency in microseconds
 - throughput in MB/s
 - IOPS

@@ -199,19 +199,30 @@ static uint32_t nvme_fill_pattern = 0xA5A5A5A5u;
 #define NVME_REQ_OP_WRITE    1
 #define NVME_REQ_OP_IDENTIFY 2
 
-static uint64_t cpu_cycle_get(void)
+static void bench_timer_init(void)
 {
-#if defined(__riscv)
-	uint32_t hi0, lo, hi1;
-	do {
-		__asm__ __volatile__("rdcycleh %0" : "=r"(hi0));
-		__asm__ __volatile__("rdcycle %0"  : "=r"(lo));
-		__asm__ __volatile__("rdcycleh %0" : "=r"(hi1));
-	} while (hi0 != hi1);
-	return ((uint64_t)hi1 << 32) | lo;
+#ifdef CSR_TIMER0_EN_ADDR
+	timer0_en_write(0);
+	timer0_reload_write(0xffffffffu);
+	timer0_load_write(0xffffffffu);
+	timer0_update_value_write(1);
+	timer0_en_write(1);
+#endif
+}
+
+static uint32_t bench_timer_get(void)
+{
+#ifdef CSR_TIMER0_VALUE_ADDR
+	timer0_update_value_write(1);
+	return timer0_value_read();
 #else
 	return 0;
 #endif
+}
+
+static uint64_t bench_ticks_elapsed(uint32_t start, uint32_t end)
+{
+	return (uint64_t)((start - end) & 0xffffffffu);
 }
 
 static void delay_cycles(unsigned int cycles)
@@ -1213,7 +1224,8 @@ static void nvme_bench_cmd(char *str)
 	uint32_t count = 100;
 	uint32_t step = 0;
 	uint64_t cap = 0;
-	uint64_t cycle_start, cycle_total;
+	uint32_t tick_start, tick_end;
+	uint64_t cycle_total;
 	uint64_t total_bytes;
 	uint64_t rd_before = 0, rd_after = 0;
 	uint64_t wr_before = 0, wr_after = 0;
@@ -1281,7 +1293,7 @@ static void nvme_bench_cmd(char *str)
 	wr_before = hostmem_csr_dma_wr_count_read();
 #endif
 
-	cycle_start = cpu_cycle_get();
+	tick_start = bench_timer_get();
 	lba = slba;
 	for (uint32_t i = 0; i < count; i++) {
 		if (do_write)
@@ -1297,7 +1309,8 @@ static void nvme_bench_cmd(char *str)
 		}
 		lba += step;
 	}
-	cycle_total = cpu_cycle_get() - cycle_start;
+	tick_end = bench_timer_get();
+	cycle_total = bench_ticks_elapsed(tick_start, tick_end);
 
 #ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
 	rd_after = hostmem_csr_dma_rd_count_read();
@@ -1310,10 +1323,10 @@ static void nvme_bench_cmd(char *str)
 
 	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 "\n",
 	       op_name, count, nlb, slba, step);
-	printf("cycles_total: %" PRIu64 "\n", cycle_total);
+	printf("ticks_total: %" PRIu64 "\n", cycle_total);
 	print_fixed3_u64("latency_avg", cycle_total * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
 	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, cycle_total * 1000000ull, "MB/s");
-	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY * 1000ull, cycle_total, "IOPS");
+	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, cycle_total, "IOPS");
 	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
 #ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
 	printf("hostmem_dma_rd_beats: %" PRIu64 "\n", rd_after - rd_before);
@@ -1740,6 +1753,7 @@ int main(void)
 	irq_setie(1);
 #endif
 	uart_init();
+	bench_timer_init();
 
 	help();
 	prompt();
