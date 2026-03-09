@@ -109,19 +109,32 @@ Since each I/O performs two posted doorbell writes, the benchmark ended up
 paying roughly one write-timeout for SQ tail and one write-timeout for CQ head
 on every request.
 
+The posted-write fix also exposed a second issue:
+
+- CQ timeout was based on a fixed CPU loop count rather than elapsed time.
+- Once the accidental MMIO-write delay disappeared, CQ polling started much earlier.
+- The old loop-count timeout could now expire before the SSD completed the command.
+
+The firmware submit path therefore needs a time-based CQ timeout, not just a raw
+poll-loop budget.
+
 ## Most likely improvement path
 
 ### Short term
 
-1. Re-run the benchmark after the posted-write fix
+1. Use a time-based CQ timeout
+   - Poll CQEs against elapsed timer ticks, not just a raw loop count.
+   - Keep the loop counter as a diagnostic, not as the real timeout source.
+
+2. Re-run the benchmark after the posted-write fix
    - Confirm that steady-state latency drops sharply.
    - Re-check whether another fixed cost becomes dominant.
 
-2. Reduce firmware-side fixed overhead
+3. Reduce firmware-side fixed overhead
    - Avoid repeated work in the submit path where possible.
    - Keep queue state hot and avoid unnecessary debug/clear operations.
 
-3. Batch or decouple request submission
+4. Batch or decouple request submission
    - Add a small request FIFO.
    - Let firmware consume queued requests without CSR submission gaps.
 

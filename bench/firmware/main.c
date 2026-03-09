@@ -47,6 +47,7 @@
 #define NVME_RDY_CLEAR_LOOPS  200000
 #define NVME_RDY_SET_LOOPS    500000
 #define NVME_CQE_POLL_MAX     200000
+#define NVME_CQE_TIMEOUT_TICKS (CONFIG_CLOCK_FREQUENCY/10)
 
 #define NVME_CAP           0x0000u
 #define NVME_VS            0x0008u
@@ -232,6 +233,11 @@ static uint32_t bench_timer_get(void)
 static uint64_t bench_ticks_elapsed(uint32_t start, uint32_t end)
 {
 	return (uint64_t)((start - end) & 0xffffffffu);
+}
+
+static int bench_timeout_expired(uint32_t start, uint32_t timeout_ticks)
+{
+	return bench_ticks_elapsed(start, bench_timer_get()) >= timeout_ticks;
 }
 
 static void delay_cycles(unsigned int cycles)
@@ -1028,6 +1034,7 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 {
 	bench_admin_submit_count++;
 	uint32_t sqe_addr = ASQ_ADDR + admin_sq_tail * 64;
+	uint32_t timeout_start;
 	for (int i = 0; i < 16; i++)
 		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
 
@@ -1046,6 +1053,7 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	int got_cqe = 0;
+	timeout_start = bench_timer_get();
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
 		bench_admin_poll_loops++;
 		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
@@ -1056,6 +1064,8 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 			got_cqe = 1;
 			break;
 		}
+		if (bench_timeout_expired(timeout_start, NVME_CQE_TIMEOUT_TICKS))
+			break;
 	}
 
 	cqe[0] = d0; cqe[1] = d1; cqe[2] = d2; cqe[3] = d3;
@@ -1081,6 +1091,7 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 {
 	bench_io_submit_count++;
 	uint32_t sqe_addr = IO_SQ_ADDR + io_sq_tail * 64;
+	uint32_t timeout_start;
 	for (int i = 0; i < 16; i++)
 		hostmem_wr32(sqe_addr + i * 4, cmd[i]);
 
@@ -1099,6 +1110,7 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 
 	uint32_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
 	int got_cqe = 0;
+	timeout_start = bench_timer_get();
 	for (uint32_t loops = 0; loops < NVME_CQE_POLL_MAX; loops++) {
 		bench_io_poll_loops++;
 		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
@@ -1109,6 +1121,8 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 			got_cqe = 1;
 			break;
 		}
+		if (bench_timeout_expired(timeout_start, NVME_CQE_TIMEOUT_TICKS))
+			break;
 	}
 
 	cqe[0] = d0; cqe[1] = d1; cqe[2] = d2; cqe[3] = d3;
