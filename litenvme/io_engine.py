@@ -81,6 +81,7 @@ from migen import *
 from litex.gen import *
 
 from litex.soc.interconnect import stream
+from litex.soc.interconnect import axi
 from litex.soc.interconnect.csr import *
 
 # Constants ----------------------------------------------------------------------------------------
@@ -139,13 +140,16 @@ class LiteNVMeIOEngine(LiteXModule):
     (CSR or constructor wiring) so the same gateware works regardless of the layout the
     admin/setup code chose.
     """
-    def __init__(self, qid=1, qsize=64, qd=None, mem_adr_width=32, with_csr=True):
+    def __init__(self, qid=1, qsize=64, qd=None, mem_adr_width=32, with_csr=True,
+                 lba_shift=9, page_shift=12):
         if qd is None:
             qd = qsize - 1
         assert qd <= qsize - 1, "qd must be <= qsize-1 (one slot reserved to disambiguate full/empty)"
-        self.qid   = qid
-        self.qsize = qsize
-        self.qd    = qd
+        self.qid        = qid
+        self.qsize      = qsize
+        self.qd         = qd
+        self.lba_shift  = lba_shift    # log2(LBA size in bytes), default 512 B.
+        self.page_shift = page_shift   # log2(MPS, NVMe memory page size), default 4 KiB.
 
         # Streams.
         self.sink   = stream.Endpoint(request_layout())
@@ -168,6 +172,10 @@ class LiteNVMeIOEngine(LiteXModule):
         self.cq_base     = Signal(64)   # IO CQ base (host-memory byte address).
         self.sq_db_adr   = Signal(64)   # SQ doorbell (BAR0 byte address).
         self.cq_db_adr   = Signal(64)   # CQ doorbell (BAR0 byte address).
+        # PRP-list region (host byte address): one page-aligned list page per SQ slot,
+        # used when a transfer spans >2 pages. Each list page holds up to (page/8)
+        # 64-bit page-address entries. Only consulted for such transfers.
+        self.prp_list_base = Signal(64)
 
         # Status.
         self.inflight    = Signal(max=qsize + 1)
@@ -190,6 +198,45 @@ class LiteNVMeIOEngine(LiteXModule):
         req_buf  = Signal(64)
         req_cid  = Signal(16)
 
+        # PRP fields (computed at LATCH-REQ, then latched). Assumes the data buffer is
+        # physically contiguous and page-aligned starting at `buf`:
+        #   nbytes  = nlb << lba_shift                  (nlb is a 1-based block count)
+        #   npages  = ceil(nbytes / page)               (page-aligned => exact)
+        #   PRP1    = buf                               (always)
+        #   PRP2    = 0                 if npages == 1  (single page)
+        #             buf + page        if npages == 2  (two pages)
+        #             prp_list_slot     if npages >= 3  (page list)
+        # For the list case, list[i] = buf + (i+1)*page for i in 0..npages-2, written as
+        # 64-bit entries into the slot's list page before the SQE.
+        req_prp2      = Signal(64)
+        req_need_list = Signal()
+        req_nlist     = Signal(16)   # number of 64-bit list entries (= npages - 1).
+        req_list_slot = Signal(64)   # byte address of this command's PRP list page.
+
+        page_bytes = 1 << page_shift
+
+        # Combinational PRP computation from the incoming sink fields + current sq_tail.
+        s_nbytes  = Signal(32)
+        s_npages  = Signal(32)
+        s_list_slot = Signal(64)
+        self.comb += [
+            s_nbytes.eq(self.sink.nlb << lba_shift),
+            s_npages.eq((s_nbytes + (page_bytes - 1)) >> page_shift),
+            s_list_slot.eq(self.prp_list_base + (sq_tail << page_shift)),
+        ]
+        s_prp2      = Signal(64)
+        s_need_list = Signal()
+        self.comb += [
+            s_need_list.eq(s_npages >= 3),
+            If(s_npages <= 1,
+                s_prp2.eq(0),
+            ).Elif(s_npages == 2,
+                s_prp2.eq(self.sink.buf + page_bytes),
+            ).Else(
+                s_prp2.eq(s_list_slot),
+            ),
+        ]
+
         # SQE dword index + value (combinational build from latched request).
         dw_idx = Signal(max=SQE_DWORDS)
         sqe_dw = Signal(32)
@@ -200,11 +247,26 @@ class LiteNVMeIOEngine(LiteXModule):
             1:  sqe_dw.eq(req_nsid),
             6:  sqe_dw.eq(req_buf[0:32]),
             7:  sqe_dw.eq(req_buf[32:64]),
+            8:  sqe_dw.eq(req_prp2[0:32]),
+            9:  sqe_dw.eq(req_prp2[32:64]),
             10: sqe_dw.eq(req_lba[0:32]),
             11: sqe_dw.eq(req_lba[32:64]),
             12: sqe_dw.eq((req_nlb - 1)[0:16]),
             "default": sqe_dw.eq(0),
         })
+
+        # PRP-list entry build: dword `list_dw` covers entry (list_dw>>1), low/high half.
+        list_dw   = Signal(16)
+        list_entry = Signal(16)
+        list_half  = Signal()
+        ent_addr   = Signal(64)
+        list_dw_val = Signal(32)
+        self.comb += [
+            list_entry.eq(list_dw >> 1),
+            list_half.eq(list_dw[0]),
+            ent_addr.eq(req_buf + ((list_entry + 1) << page_shift)),
+            list_dw_val.eq(Mux(list_half, ent_addr[32:64], ent_addr[0:32])),
+        ]
 
         # CQE capture (named dwords; dynamic Array index as a NextValue target is avoided).
         cqe0 = Signal(32)
@@ -255,7 +317,8 @@ class LiteNVMeIOEngine(LiteXModule):
             )
         )
 
-        # Latch the request and allocate a CID (== SQ slot index).
+        # Latch the request and allocate a CID (== SQ slot index). Also latch the PRP
+        # fields computed combinationally from the incoming request.
         fsm.act("LATCH-REQ",
             NextValue(req_op,   self.sink.op),
             NextValue(req_nsid, self.sink.nsid),
@@ -263,8 +326,33 @@ class LiteNVMeIOEngine(LiteXModule):
             NextValue(req_nlb,  self.sink.nlb),
             NextValue(req_buf,  self.sink.buf),
             NextValue(req_cid,  sq_tail),
+            NextValue(req_prp2,      s_prp2),
+            NextValue(req_need_list, s_need_list),
+            NextValue(req_nlist,     s_npages - 1),
+            NextValue(req_list_slot, s_list_slot),
             NextValue(dw_idx,   0),
-            NextState("SUBMIT-WRITE"),
+            NextValue(list_dw,  0),
+            If(s_need_list,
+                NextState("PRP-LIST-WRITE"),
+            ).Else(
+                NextState("SUBMIT-WRITE"),
+            )
+        )
+
+        # Build the PRP list in host memory (only for transfers spanning >2 pages):
+        # write `req_nlist` 64-bit entries (2 dwords each) to req_list_slot.
+        fsm.act("PRP-LIST-WRITE",
+            self.mem.stb.eq(1),
+            self.mem.we.eq(1),
+            self.mem.adr.eq((req_list_slot >> 2) + list_dw),
+            self.mem.dat_w.eq(list_dw_val),
+            If(self.mem.ack,
+                If(list_dw == ((req_nlist << 1) - 1),
+                    NextState("SUBMIT-WRITE"),
+                ).Else(
+                    NextValue(list_dw, list_dw + 1),
+                )
+            )
         )
 
         # Write the 16 SQE dwords into host memory.
@@ -404,6 +492,8 @@ class LiteNVMeIOEngine(LiteXModule):
         self._sq_db_hi   = CSRStorage(32, description="SQ doorbell (BAR0 byte addr) high.")
         self._cq_db_lo   = CSRStorage(32, description="CQ doorbell (BAR0 byte addr) low.")
         self._cq_db_hi   = CSRStorage(32, description="CQ doorbell (BAR0 byte addr) high.")
+        self._prp_list_lo = CSRStorage(32, description="PRP-list region (host byte addr) low.")
+        self._prp_list_hi = CSRStorage(32, description="PRP-list region (host byte addr) high.")
         self._status = CSRStatus(fields=[
             CSRField("busy",     size=1,  offset=0),
             CSRField("inflight", size=8,  offset=8),
@@ -417,8 +507,189 @@ class LiteNVMeIOEngine(LiteXModule):
             self.cq_base.eq(Cat(self._cq_base_lo.storage, self._cq_base_hi.storage)),
             self.sq_db_adr.eq(Cat(self._sq_db_lo.storage, self._sq_db_hi.storage)),
             self.cq_db_adr.eq(Cat(self._cq_db_lo.storage, self._cq_db_hi.storage)),
+            self.prp_list_base.eq(Cat(self._prp_list_lo.storage, self._prp_list_hi.storage)),
             self._status.fields.busy.eq(self.busy),
             self._status.fields.inflight.eq(self.inflight),
             self._submitted.status.eq(self.submitted),
             self._completed.status.eq(self.completed),
         ]
+
+
+# Mem-port -> AXI bridge ---------------------------------------------------------------------------
+
+class LiteNVMeMemPortToAXI(LiteXModule):
+    """Adapt a dword `LiteNVMeMemPort` to an AXI master (single-beat, dword-lane).
+
+    The engine accesses host memory at dword granularity, but the hostmem backend is
+    beat-wide (data_width) with byte strobes. This bridge maps each dword access to a
+    single-beat AXI transaction on the enclosing beat:
+
+      word_adr = dword_adr >> beat_dwords_shift     # beat (AXI word) index
+      lane     = dword_adr & (beat_dwords - 1)       # dword lane within the beat
+      byte_adr = word_adr << beat_bytes_shift        # AXI byte address
+
+    - Write: AW + W with data placed in `lane` and strb = 0xf on that lane's bytes
+      (the backend uses byte strobes, so only the addressed dword is modified — no RMW).
+    - Read : AR (len=0); on R, extract the `lane` dword into `mem.dat_r`.
+
+    `mem.ack` is asserted for exactly one cycle when the AXI response arrives, with
+    `mem.dat_r` valid that cycle (matching the engine's mem-port contract). One IDLE
+    bubble separates consecutive transfers.
+    """
+    def __init__(self, mem, data_width=128, address_width=32):
+        self.mem = mem
+        self.axi = axi.AXIInterface(
+            data_width    = data_width,
+            address_width = address_width,
+            id_width      = 1,
+            mode          = "rw",
+        )
+
+        beat_bytes        = data_width // 8
+        beat_dwords       = data_width // 32
+        beat_bytes_shift  = _bit_width(beat_bytes - 1)
+        beat_dwords_shift = _bit_width(beat_dwords - 1)
+
+        # # #
+
+        word_adr = Signal(address_width)
+        lane     = Signal(max=max(2, beat_dwords))
+        byte_adr = Signal(address_width)
+        self.comb += [
+            word_adr.eq(mem.adr >> beat_dwords_shift),
+            lane.eq(mem.adr[:beat_dwords_shift] if beat_dwords_shift else 0),
+            byte_adr.eq(word_adr << beat_bytes_shift),
+        ]
+
+        # Write data/strobe: place the dword in its lane, strobe only that lane.
+        wdata = Signal(data_width)
+        wstrb = Signal(beat_bytes)
+        if beat_dwords == 1:
+            self.comb += [wdata.eq(mem.dat_w), wstrb.eq(2**beat_bytes - 1)]
+        else:
+            self.comb += Case(lane, {
+                i: [
+                    wdata[32*i:32*(i+1)].eq(mem.dat_w),
+                    wstrb[4*i:4*(i+1)].eq(0xf),
+                ] for i in range(beat_dwords)
+            })
+
+        # Read data: extract the addressed lane.
+        rdata_lane = Signal(32)
+        if beat_dwords == 1:
+            self.comb += rdata_lane.eq(self.axi.r.data[0:32])
+        else:
+            self.comb += Case(lane, {
+                i: rdata_lane.eq(self.axi.r.data[32*i:32*(i+1)]) for i in range(beat_dwords)
+            })
+
+        aw_done = Signal()
+        w_done  = Signal()
+
+        self.fsm = fsm = FSM(reset_state="IDLE")
+        fsm.act("IDLE",
+            If(mem.stb,
+                If(mem.we,
+                    NextValue(aw_done, 0),
+                    NextValue(w_done,  0),
+                    NextState("WRITE"),
+                ).Else(
+                    NextState("READ-AR"),
+                )
+            )
+        )
+        fsm.act("WRITE",
+            self.axi.aw.valid.eq(~aw_done),
+            self.axi.aw.addr.eq(byte_adr),
+            self.axi.aw.len.eq(0),
+            self.axi.aw.size.eq(axi.AXSIZE[beat_bytes]),
+            self.axi.aw.burst.eq(axi.BURST_INCR),
+            self.axi.aw.id.eq(0),
+
+            self.axi.w.valid.eq(~w_done),
+            self.axi.w.data.eq(wdata),
+            self.axi.w.strb.eq(wstrb),
+            self.axi.w.last.eq(1),
+
+            If(self.axi.aw.valid & self.axi.aw.ready, NextValue(aw_done, 1)),
+            If(self.axi.w.valid  & self.axi.w.ready,  NextValue(w_done,  1)),
+            If((aw_done | (self.axi.aw.valid & self.axi.aw.ready)) &
+               (w_done  | (self.axi.w.valid  & self.axi.w.ready)),
+                NextState("WRITE-B"),
+            )
+        )
+        fsm.act("WRITE-B",
+            self.axi.b.ready.eq(1),
+            If(self.axi.b.valid,
+                mem.ack.eq(1),
+                NextState("IDLE"),
+            )
+        )
+        fsm.act("READ-AR",
+            self.axi.ar.valid.eq(1),
+            self.axi.ar.addr.eq(byte_adr),
+            self.axi.ar.len.eq(0),
+            self.axi.ar.size.eq(axi.AXSIZE[beat_bytes]),
+            self.axi.ar.burst.eq(axi.BURST_INCR),
+            self.axi.ar.id.eq(0),
+            If(self.axi.ar.ready,
+                NextState("READ-R"),
+            )
+        )
+        fsm.act("READ-R",
+            self.axi.r.ready.eq(1),
+            If(self.axi.r.valid,
+                mem.dat_r.eq(rdata_lane),
+                mem.ack.eq(1),
+                NextState("IDLE"),
+            )
+        )
+
+
+def _bit_width(x):
+    """Number of bits needed to hold x (>=0). _bit_width(0)=0, _bit_width(3)=2."""
+    w = 0
+    while x > 0:
+        x >>= 1
+        w += 1
+    return w
+
+
+# Engine + AXI bridge wrapper ----------------------------------------------------------------------
+
+class LiteNVMeIOEngineAXI(LiteXModule):
+    """LiteNVMeIOEngine + LiteNVMeMemPortToAXI, exposing a single AXI master (`.axi`).
+
+    Drop-in for wiring the engine into the hostmem responder's AXI arbiter alongside the
+    PCIe DMA and CSR-debug masters. The engine's request/completion streams, MMIO
+    doorbell port, config and status signals are re-exported.
+    """
+    def __init__(self, qid=1, qsize=64, qd=None, data_width=128, with_csr=True):
+        self.submodules.engine = engine = LiteNVMeIOEngine(
+            qid=qid, qsize=qsize, qd=qd, mem_adr_width=32, with_csr=with_csr)
+        self.submodules.bridge = bridge = LiteNVMeMemPortToAXI(
+            engine.mem, data_width=data_width, address_width=32)
+
+        # Re-export.
+        self.axi        = bridge.axi
+        self.sink       = engine.sink
+        self.source     = engine.source
+        self.mmio_start = engine.mmio_start
+        self.mmio_we    = engine.mmio_we
+        self.mmio_adr   = engine.mmio_adr
+        self.mmio_wdata = engine.mmio_wdata
+        self.mmio_done  = engine.mmio_done
+        self.mmio_err   = engine.mmio_err
+        self.enable     = engine.enable
+        self.sq_base    = engine.sq_base
+        self.cq_base    = engine.cq_base
+        self.sq_db_adr  = engine.sq_db_adr
+        self.cq_db_adr  = engine.cq_db_adr
+        self.prp_list_base = engine.prp_list_base
+        self.inflight   = engine.inflight
+        self.submitted  = engine.submitted
+        self.completed  = engine.completed
+        self.busy       = engine.busy
+
+    def connect_mmio(self, mmio):
+        return self.engine.connect_mmio(mmio)
