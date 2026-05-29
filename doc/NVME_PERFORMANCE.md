@@ -97,6 +97,73 @@ single-outstanding, PRP1-only bring-up path is sequential 4 KiB write:
 - about `31.6k IOPS`
 - about `129.2 MB/s`
 
+## Queue-depth sweep (firmware, PRP1, 4 KiB sequential) — measured 2026-05-29
+
+The firmware `nvme_bench` was extended with a sliding-window queue-depth path
+(`nvme_io_bench_window`): submit up to `qd` commands with distinct per-slot 4 KiB PRP1
+buffers, ring the SQ doorbell once per batch (coalesced), then drain all phase-matching
+CQEs and ring the CQ doorbell once per batch; refill as slots free. Driven from the host
+with `bench/qd_sweep.py` (single Etherbone process over the crossover UART).
+
+Measured on the Alibaba KU3P board (PCIe Gen2 x4), 4 KiB sequential, `count=1000`, all
+runs `errors=0`:
+
+| QD | read MB/s | read kIOPS | write MB/s | write kIOPS |
+|----|-----------|------------|------------|-------------|
+| 1  | 115.2     | 28.1       | 141.7      | 34.6        |
+| 2  | 160.5     | 39.2       | 167.8      | 41.0        |
+| 4  | 190.7     | 46.6       | 184.9      | 45.1        |
+| 8  | 207.5     | 50.6       | 197.1      | 48.1        |
+| 16 | 217.7     | 53.1       | 210.9      | 51.5        |
+| 32 | 221.7     | 54.1       | 218.1      | 53.2        |
+| 63 | 223.6     | 54.6       | 221.9      | 54.2        |
+
+(Run-to-run variance is a few %, e.g. a repeat measured QD=16 read at ~263 MB/s; the
+table above is one full sweep.)
+
+### What the QD sweep shows
+
+1. **Queue depth helps, ~1.6–1.9×, then plateaus.** Read rises 115 → 224 MB/s and write
+   142 → 222 MB/s across QD 1→63, flattening by QD≈16–32 at ~220 MB/s.
+
+2. **It overlaps device latency (so QD=1 was partly latency-bound).** Detailed read
+   counters (`count=1000`):
+
+   | QD | ticks_io | io_submit | io_cq_poll | mmio_wr32 | dma_wr_beats |
+   |----|----------|-----------|------------|-----------|--------------|
+   | 1  | 435,783  | 1000      | 1011       | 2002      | 25600        |
+   | 4  | 263,299  | 1000      | 1006       | 1184      | 25600        |
+   | 16 | 190,581  | 1000      | 1007       | 1135      | 25600        |
+   | 63 | 224,298  | 1000      | 1007       | 1132      | 25600        |
+
+   `ticks_io` more than halves from QD=1 to QD=16 — queue depth does overlap the device
+   completion latency. Doorbell coalescing works (`mmio_wr32` 2002 → ~1132, ~2/cmd →
+   ~1.1/cmd) and CQ polling is at its floor (~1 poll/cmd). The slight regression at
+   QD=63 vs QD=16 is run-to-run device-timing variance, not a trend.
+
+3. **But it plateaus ~7× below the link.** ~220 MB/s is far from the usable PCIe Gen2 x4
+   ceiling (~1.5–1.6 GB/s). Once device latency is hidden by queue depth, the limit
+   becomes the firmware's serial per-command submit work — building each 64-byte SQE in
+   host memory one dword at a time through the **CSR debug read-modify-write port**
+   (`hostmem_csr_csr_*`, 16 writes/SQE). The soft CPU cannot construct SQEs fast enough
+   to fill the link.
+
+### Conclusion / next lever
+
+Firmware queue depth is a real but limited win (~2×). To approach the link, the
+steady-state path must build SQEs / manage the SQ-CQ rings **in hardware at bus rate**,
+removing the per-command CPU cost. That is the role of the RTL I/O command engine
+(`litenvme/io_engine.py`, sim-validated in `test/test_io_engine.py`): it writes SQEs
+through the hostmem AXI backend and reaps CQEs in a tight FSM. A secondary lever is
+larger transfers per command (PRP2 / PRP list, >4 KiB) to amortize the fixed
+per-command construction cost.
+
+Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench/`:
+
+```sh
+python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone

@@ -110,6 +110,27 @@ Record last-known-good state below before stopping.
 
 ## Log
 
+### 2026-05-29 (evening, later) — QD sweep MEASURED (board recovered)
+
+Recovered the board (killed a stale wait-loop that was masquerading as Vivado in pgrep;
+killed the wedged litex_server; reloaded bitstream; fresh server; booted firmware under
+a pty via `script`). The QD sweep then ran clean in one process (`bench/qd_sweep.py`),
+all `errors=0`. **Real measured result (this supersedes the earlier "board wedged" note
+below):**
+
+- read : 115 → 224 MB/s across qd 1→63 (~1.9×), plateau ~220 MB/s by qd≈16–32.
+- write: 142 → 222 MB/s (~1.6×), same plateau.
+- Detailed read counters: `ticks_io` 435,783 (qd1) → 190,581 (qd16) — queue depth DOES
+  overlap device latency (so QD=1 was partly latency-bound). `mmio_wr32` 2002→~1132
+  (doorbell coalescing works), `io_cq_poll`≈1000 (floor), `dma_wr_beats`=25600 const.
+- Interpretation: firmware QD is a real but limited ~2× win; it plateaus ~7× below the
+  ~1.5 GB/s link because the firmware builds each 64-byte SQE one dword at a time through
+  the slow CSR hostmem debug port. The next lever is the RTL IO engine (build SQEs / reap
+  CQEs at bus rate) + larger transfers (PRP2/PRP-list). Full table in NVME_PERFORMANCE.md.
+- NOTE: my earlier guess that QD would be "flat/no gain" was WRONG and was never
+  committed with numbers; the measured curve above is the truth. Tasks P0/P1 done.
+- NEXT: P2-int — integrate `LiteNVMeIOEngine` into the SoC and measure vs this baseline.
+
 ### 2026-05-29 (evening) — STOPPED: board wedged, QD sweep NOT measured
 
 Honest status. The firmware QD>1 path (e13620e) compiles and the gateware builds/loads,
