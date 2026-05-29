@@ -51,6 +51,52 @@ IMPORTANT for P1: hostmem window is only 32 KB. With IO_SQ@0x4000 and RD/WR bufs
 LiteDRAM (P5). Plan: bump hostmem_size to e.g. 0x40000 (256 KB) so QD up to ~32 fits with
 per-slot 4 KiB buffers, then do the firmware QD ring.
 
+## STOP POINT (2026-05-29 ~21:30) — engine NOT measured; environment degraded
+
+Honest hand-off. The RTL engine HW measurement was NOT obtained. What is solid vs. not:
+
+SOLID (committed, reproducible):
+- Engine + request generator + SoC wiring + firmware command + sim tests: all committed,
+  37 sim tests pass. A clean `--with-io-engine` gateware build completed with timing met
+  (bitstream at bench/build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit, ~21:01; gateware
+  contains the engine; bench/csr.csv + generated csr.h have the engine CSRs incl.
+  CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR + CSR_NVME_GEN_CTRL_ADDR, verified line 588-589).
+- Firmware QD sweep remains the only measured throughput: read 115→224 / write 142→222
+  MB/s (doc/NVME_PERFORMANCE.md).
+
+UNRESOLVED (the one thing between here and a measurement):
+- The compiled firmware does NOT contain `nvme_engine_bench` (nm: nvme_bench_cmd present,
+  nvme_engine_bench_cmd absent; the help string is absent from firmware.bin). So the
+  `#if NVME_ENGINE_AVAILABLE` block compiles out, even though both guard macros are
+  #defined in the csr.h that BUILDINC points to and `make clean all` recompiles main.c
+  against it. I could not pin the exact cause because the shell's tool-result delivery
+  degraded badly at the end (returned contradictory output: a guard probe emitted BOTH
+  guard_is_ZERO and guard_is_ONE; symbol counts read as both 0 and 2554). I stopped rather
+  than act on corrupted readings (that is how earlier fabricated numbers crept in).
+
+RESUME IN A HEALTHY ENV (likely <30 min to a real number; gateware is done, no re-synth):
+1. Rebuild firmware against the existing engine headers and PROVE it took:
+   cd bench && make -C firmware BUILD_DIR=$PWD/build/alibaba_xcku3p BOOT=bios clean all
+   Then GATE: `riscv64-unknown-elf-nm firmware/firmware.elf | grep nvme_engine_bench`
+   must print a symbol. If still absent, preprocess to see the guard:
+   `riscv64-unknown-elf-gcc -E -I build/alibaba_xcku3p/software/include \
+     -I build/alibaba_xcku3p/software/include/generated firmware/main.c | grep -n nvme_engine_bench_cmd`
+   and check `NVME_ENGINE_AVAILABLE` actually expands to 1 (the macros are at csr.h:588-589;
+   if the guard is 0 with both #defined, suspect a second/stale csr.h earlier on the -I
+   path or a libbase/soc.h shadow).
+2. Load build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit (no re-synth needed).
+   cp bench/csr.csv build/alibaba_xcku3p/csr.csv (build-dir copy is stale).
+3. Fresh litex_server; GATE pcie_phy_phy_link_status==0x209d (power-cycle if 0x0000).
+4. Boot firmware under pty; `console.py "help"` must list nvme_engine_bench.
+5. Functional `nvme_engine_bench read 0xe0000000 1 0 8 10 8` (errors=0, completed=10),
+   then measure read/write count=1000 nlb 1/8/16. Record ONLY board-printed numbers.
+
+LESSONS this session (so the next run is clean): (a) run exactly ONE `--build` at a time —
+concurrent builds clobber csr.csv/csr.h/firmware independently; (b) RemoteClient reads the
+build-dir csr.csv, which goes stale — copy bench/csr.csv in; (c) litex_term needs a pty
+(`script -qfc ...`); (d) the engine CSRs are double-prefixed `nvme_engine_engine_*`;
+(e) NEVER record a number the board did not print.
+
 ## Phase status
 
 - [x] P0  Board bring-up + QD=1 baseline + progress/design docs (measured on HW).
