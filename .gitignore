@@ -1,0 +1,22 @@
+# Python.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Build outputs.
+bench/build/
+bench/csr.csv
+
+# Firmware build artifacts.
+bench/firmware/*.o
+bench/firmware/*.d
+bench/firmware/firmware.bin
+bench/firmware/firmware.elf
+bench/firmware/firmware.elf.map
+
+# Simulation / capture outputs.
+*.vcd
+
+# Agent / editor.
+.claude/

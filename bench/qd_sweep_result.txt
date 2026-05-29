@@ -1,0 +1,14 @@
+read  qd=1   tp=115.23 MB/s  iops=28132.433  err=0
+read  qd=2   tp=160.52 MB/s  iops=39189.584  err=0
+read  qd=4   tp=190.741 MB/s  iops=46567.665  err=0
+read  qd=8   tp=207.461 MB/s  iops=50649.796  err=0
+read  qd=16  tp=217.683 MB/s  iops=53145.445  err=0
+read  qd=32  tp=221.712 MB/s  iops=54129.05  err=0
+read  qd=63  tp=223.601 MB/s  iops=54590.206  err=0
+write qd=1   tp=141.699 MB/s  iops=34594.654  err=0
+write qd=2   tp=167.826 MB/s  iops=40973.249  err=0
+write qd=4   tp=184.869 MB/s  iops=45134.093  err=0
+write qd=8   tp=197.129 MB/s  iops=48127.364  err=0
+write qd=16  tp=210.892 MB/s  iops=51487.515  err=0
+write qd=32  tp=218.053 MB/s  iops=53235.731  err=0
+write qd=63  tp=221.872 MB/s  iops=54168.105  err=0

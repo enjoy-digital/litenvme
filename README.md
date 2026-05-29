@@ -45,6 +45,32 @@ Hardware validated (end-to-end with a real NVMe SSD):
 * Successful I/O Writes with readback verification.
 * Bring-up validated both from Python scripts and from an integrated SoftCPU running firmware.
 
+[> Throughput & core (in progress)
+----------------------------------
+
+Beyond the bring-up, LiteNVMe now has a hardware I/O path and a packaged core:
+
+* **Firmware queue-depth sweep (measured, Alibaba KU3P, PCIe Gen2 x4, 4 KiB seq):**
+  read 115 → 224 MB/s, write 142 → 222 MB/s across QD 1→63 (~2×), plateauing
+  ~7× below the link. Detailed counters show queue depth overlaps device latency, but the
+  soft CPU building each 64-byte SQE one dword at a time through the CSR host-memory
+  debug port caps it — the path is *submission-bound*, not the throughput lever.
+  See `doc/NVME_PERFORMANCE.md`.
+
+* **`LiteNVMeIOEngine` (RTL I/O command engine):** builds SQEs into host memory, rings
+  SQ/CQ doorbells via the MMIO accessor, and reaps CQEs by phase bit in a tight FSM,
+  keeping up to `qd` commands outstanding — removing the per-command CPU cost. Supports
+  PRP1 / PRP2 / PRP-list (up to ~2 MiB per command). Sim-validated end to end against the
+  real host-memory backend (`test/test_io_engine*.py`).
+
+* **`LiteNVMe` core (`litenvme/core.py`):** drop-in for a LiteX/LitePCIe RootPort SoC —
+  CSR/AXI-Lite config + request submission, stream request/completion endpoints, and an
+  addressed host-memory data window (pluggable BRAM or, as a board step, LiteDRAM for
+  DDR-backed large buffers). Wired into the bench SoC behind `--with-io-engine`.
+
+* See `doc/THROUGHPUT_DESIGN.md` for the design (engine, dword↔AXI bridge, PRP, core API,
+  AXI-MM vs AXI-Stream rationale) and `doc/PROGRESS.md` for the development log.
+
 Bring-up components currently used:
 
 * LitePCIe in RootPort mode.

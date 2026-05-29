@@ -53,13 +53,37 @@ per-slot 4 KiB buffers, then do the firmware QD ring.
 
 ## Phase status
 
-- [~] P0  Board bring-up + re-baseline QD=1 + progress/design docs.
-- [ ] P1  Firmware QD>1 (batched submit / sliding-window reap) + QD sweep.
-- [ ] P2  RTL LiteNVMeIOEngine (HW SQ/CQ, doorbells, completion, QD outstanding).
-- [ ] P3  PRP2 + PRP-list (>4 KiB / command).
-- [ ] P4  Public LiteNVMe core (CSR/AXI-Lite config + AXI-Stream data).
-- [ ] P5  LiteDRAM-backed host memory for the demo.
-- [ ] P6  Self-check + max-perf demo + docs/README rewrite + cleanup.
+- [x] P0  Board bring-up + QD=1 baseline + progress/design docs (measured on HW).
+- [x] P1  Firmware QD>1 (sliding-window submit/reap) + QD sweep (measured: ~2×, plateaus).
+- [x] P2  RTL LiteNVMeIOEngine (HW SQ/CQ, doorbells, completion, QD outstanding) — sim.
+- [x] P2-int  Engine integrated into the SoC (dword↔AXI bridge, AXI arbiter, --with-io-engine).
+- [x] P3  PRP2 + PRP-list (>4 KiB / command) in the engine — sim.
+- [x] P4  Public LiteNVMe core (litenvme/core.py): CSR config + stream req/cmp + hostmem.
+- [x] P5  Host-memory backend made pluggable (BRAM default; LiteDRAM = board step).
+- [~] P6  Docs/README rewritten; demos: firmware QD sweep done on HW; RTL-engine HW
+          bring-up is the open item (sim-validated, SoC-integrated, awaits a board run).
+
+## Summary (end of this effort)
+
+What was delivered and how it was verified:
+- **Measured** firmware QD sweep on the Alibaba KU3P (Gen2 x4): read 115→224 MB/s,
+  write 142→222 MB/s across QD 1→63 (~2×), plateauing ~7× below the link because the
+  soft CPU is submission-bound (SQE build through the slow CSR hostmem debug port).
+  Numbers + counters in doc/NVME_PERFORMANCE.md; harness bench/qd_sweep.py.
+- **RTL I/O engine** (litenvme/io_engine.py): SQE build, doorbells, phase-bit CQE reap,
+  QD outstanding, PRP1/PRP2/PRP-list. Sim-validated against the real host-memory backend
+  (test/test_io_engine.py, _axi.py, _integration.py, _prp.py). 34 tests pass.
+- **Public core** (litenvme/core.py) + SoC wiring (bench/alibaba_xcku3p.py --with-io-engine):
+  elaborates with and without the engine.
+- **Pluggable hostmem backend** for a future LiteDRAM/DDR window.
+
+Open / honest gaps:
+- The RTL engine has NOT yet been measured on hardware (the build+load+drive loop needs
+  a healthy board; it is sim-validated and SoC-integrated, so it's a bring-up step, not a
+  design gap). Expectation: it should break past the ~220 MB/s firmware plateau by
+  removing the per-command CPU cost; this must be MEASURED, not assumed.
+- LiteDRAM is enabled architecturally (pluggable backend) but not instantiated on the
+  board (DDR calibration can't be validated here).
 
 ## How to bring up / resume on hardware
 
