@@ -1769,18 +1769,13 @@ static void nvme_engine_diag_cmd(char *str)
 	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
 	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write, prp_list);
 
-	puts("== engine config (write -> readback) ==");
-	printf("sq_base : want=0x%08x got=0x%08x%08x\n", (unsigned)(uint32_t)IO_SQ_ADDR,
-	       (unsigned)nvme_engine_engine_sq_base_hi_read(), (unsigned)nvme_engine_engine_sq_base_lo_read());
-	printf("cq_base : want=0x%08x got=0x%08x%08x\n", (unsigned)(uint32_t)IO_CQ_ADDR,
+	puts("== engine cfg (rd-back) ==");
+	printf("sq_base=%08x%08x cq_base=%08x%08x\n",
+	       (unsigned)nvme_engine_engine_sq_base_hi_read(), (unsigned)nvme_engine_engine_sq_base_lo_read(),
 	       (unsigned)nvme_engine_engine_cq_base_hi_read(), (unsigned)nvme_engine_engine_cq_base_lo_read());
-	printf("sq_db   : want=0x%08x%08x got=0x%08x%08x\n",
-	       (unsigned)(uint32_t)(sq_db >> 32), (unsigned)(uint32_t)sq_db,
-	       (unsigned)nvme_engine_engine_sq_db_hi_read(), (unsigned)nvme_engine_engine_sq_db_lo_read());
-	printf("cq_db   : want=0x%08x%08x got=0x%08x%08x\n",
-	       (unsigned)(uint32_t)(cq_db >> 32), (unsigned)(uint32_t)cq_db,
-	       (unsigned)nvme_engine_engine_cq_db_hi_read(), (unsigned)nvme_engine_engine_cq_db_lo_read());
-	printf("prp_list: want=0x%08x got=0x%08x%08x\n", (unsigned)(uint32_t)prp_list,
+	printf("sq_db=%08x%08x cq_db=%08x%08x prp=%08x%08x\n",
+	       (unsigned)nvme_engine_engine_sq_db_hi_read(), (unsigned)nvme_engine_engine_sq_db_lo_read(),
+	       (unsigned)nvme_engine_engine_cq_db_hi_read(), (unsigned)nvme_engine_engine_cq_db_lo_read(),
 	       (unsigned)nvme_engine_engine_prp_list_hi_read(), (unsigned)nvme_engine_engine_prp_list_lo_read());
 
 	/* Clear the IO CQ so the phase bits start at 0 (engine expects phase 1 on first pass). */
@@ -1805,20 +1800,16 @@ static void nvme_engine_diag_cmd(char *str)
 	nvme_gen_buf_stride_write(0x1000);
 	nvme_gen_qmod_write(IO_Q_ENTRIES);
 
-	puts("== generator config (write -> readback) ==");
-	printf("op=%u nsid=%u nlb=%u count=%u step=%u\n",
-	       (unsigned)nvme_gen_op_read(), (unsigned)nvme_gen_nsid_read(),
-	       (unsigned)nvme_gen_nlb_read(), (unsigned)nvme_gen_count_read(),
-	       (unsigned)nvme_gen_lba_step_read());
-	printf("buf_base=0x%08x%08x stride=0x%x qmod=%u\n",
-	       (unsigned)nvme_gen_buf_base_hi_read(), (unsigned)nvme_gen_buf_base_lo_read(),
+	printf("gen op=%u nlb=%u count=%u buf=%08x stride=%x qmod=%u\n",
+	       (unsigned)nvme_gen_op_read(), (unsigned)nvme_gen_nlb_read(),
+	       (unsigned)nvme_gen_count_read(), (unsigned)nvme_gen_buf_base_lo_read(),
 	       (unsigned)nvme_gen_buf_stride_read(), (unsigned)nvme_gen_qmod_read());
 
 	/* Enable engine, then kick the generator. */
 	nvme_engine_engine_enable_write(1);
 	nvme_gen_ctrl_write(1);
 
-	puts("== run trace (engine submitted/busy/inflight/completed | gen done/completed/errors) ==");
+	puts("== run trace ==");
 	uint32_t start = bench_timer_get();
 	for (int i = 0; i < 20; i++) {
 		uint32_t est  = nvme_engine_engine_status_read();
@@ -1843,6 +1834,28 @@ static void nvme_engine_diag_cmd(char *str)
 	printf("final: gen_completed=%u gen_errors=%u eng_submitted=%u cycles=%u last_cqe_status=0x%04x\n",
 	       (unsigned)nvme_gen_completed_read(), (unsigned)nvme_gen_errors_read(),
 	       (unsigned)nvme_engine_engine_submitted_read(), (unsigned)cycles, (unsigned)last_status);
+
+	/*
+	 * Doorbell-rescue probe: if the engine submitted SQEs but got no completions, ring the
+	 * SQ doorbell HERE via the firmware's known-good MMIO path (the same pcie_mmio accessor
+	 * that admin/io setup used successfully). If the SSD then completes, the engine's own
+	 * doorbell write (via the separate mmio_db crossbar master) is not reaching the device.
+	 */
+	uint32_t submitted_now = nvme_engine_engine_submitted_read();
+	if (submitted_now != 0 && nvme_engine_engine_completed_read() == 0) {
+		puts("== doorbell-rescue: ringing SQ doorbell via firmware MMIO path ==");
+		(void)mmio_wr32(sq_db, submitted_now);   /* new SQ tail = #submitted */
+		mmio_posted_flush(bar0_base + NVME_CSTS);
+		uint32_t rstart = bench_timer_get();
+		while (!bench_timeout_expired(rstart, CONFIG_CLOCK_FREQUENCY))  /* up to ~1s */
+			if (nvme_engine_engine_completed_read() != 0)
+				break;
+		uint32_t cqe_after[4];
+		hostmem_read_dwords(IO_CQ_ADDR, cqe_after, 4);
+		printf("rescue: eng_completed=%u gen_completed=%u CQ[0].dw3=0x%08x (phase=%u)\n",
+		       (unsigned)nvme_engine_engine_completed_read(), (unsigned)nvme_gen_completed_read(),
+		       (unsigned)cqe_after[3], (unsigned)((cqe_after[3] >> 16) & 0x1u));
+	}
 
 	nvme_engine_engine_enable_write(0);
 
