@@ -226,12 +226,27 @@ have read/write access like a wishbone/axi interface." So the facade is a block 
 the user issues (op, lba, length) and supplies/consumes data via AXI-Stream (or points
 at a host-memory address); the core handles queues, doorbells, PRP, completion.
 
-## 5. P5 — LiteDRAM host memory
+## 5. P5 — LiteDRAM host memory  [backend made pluggable; DDR wiring = board step]
 
-Replace/augment the BRAM AXI backend in `litenvme/hostmem.py` with a LiteDRAM AXI/
-native port so the SSD DMAs into DDR (large buffers, sustained high-QD streaming).
-Keep BRAM as a fallback/sim backend. On the Alibaba KU3P demo, instantiate LiteDRAM
-and point the hostmem responder's backend at it.
+The host-memory backend is now **pluggable**. `LiteNVMeHostMemResponder` and the public
+`LiteNVMe` core take a `backend=` / `hostmem_backend=` argument:
+
+- `None` (default): instantiate on-FPGA BRAM (`LiteNVMeHostMemAXIRAM`) — used today and
+  in all sim tests.
+- a pre-built backend exposing a matching `.axi` slave: e.g. a LiteDRAM AXI port wrapper,
+  so the SSD DMAs into DDR (large buffers, sustained high-QD streaming).
+
+The responder guards the BRAM-only CSR-debug *read* port with `hasattr(backend, "dbg_en")`
+so an external backend without it still elaborates (CSR writes still work via the CSR's
+own AXI master; large-buffer data access goes through the engine/DMA, not the debug port).
+
+Remaining for an actual DDR demo (board integration, not done here): on a board with
+usable DRAM, instantiate LiteDRAM, obtain an AXI port at the core's `data_width`, wrap it
+to the responder's backend AXI contract, and pass it as `hostmem_backend`. This was not
+completed on the Alibaba KU3P target because that step needs DDR PHY bring-up/calibration
+which can't be validated in simulation here; the pluggable interface is the reusable
+enabler and is sim-validated (default + injected backend both elaborate, responder
+regression green).
 
 ## 6. P6 — Demos
 

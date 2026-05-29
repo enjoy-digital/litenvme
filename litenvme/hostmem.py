@@ -690,7 +690,8 @@ class LiteNVMeHostMemResponder(LiteXModule):
       - DMA frontend (PCIe MemRd/MemWr handling).
       - Optional CSR debug frontend.
     """
-    def __init__(self, port, base=0x10000000, size=0x20000, data_width=128, with_csr=True):
+    def __init__(self, port, base=0x10000000, size=0x20000, data_width=128, with_csr=True,
+                 extra_axi_masters=None, backend=None):
         self.port = port
         self.base = base
         self.size = size
@@ -704,10 +705,18 @@ class LiteNVMeHostMemResponder(LiteXModule):
 
         # # #
 
-        self.backend = backend = LiteNVMeHostMemAXIRAM(
-            size       = size,
-            data_width = data_width,
-        )
+        # Host-memory backend. Default: on-FPGA BRAM (LiteNVMeHostMemAXIRAM). A caller can
+        # inject any backend exposing a matching `.axi` slave (e.g. a LiteDRAM AXI port,
+        # for a DDR-backed host-memory window with large buffers). Such an external
+        # backend typically has no BRAM-style debug read port (`dbg_*`); the CSR-debug
+        # read path is then skipped (writes still work via the CSR's own AXI master).
+        if backend is None:
+            self.backend = backend = LiteNVMeHostMemAXIRAM(
+                size       = size,
+                data_width = data_width,
+            )
+        else:
+            self.backend = backend
 
         self.dma = dma = LiteNVMeHostMemDMA(
             port              = port,
@@ -732,16 +741,25 @@ class LiteNVMeHostMemResponder(LiteXModule):
                 csr._dma_rd_count.status.eq(dma.rd_count),
             ]
 
-        # CSR debug read port hookup.
-        if csr is not None:
+        # CSR debug read port hookup (only when the backend provides a BRAM-style debug
+        # read port; an external backend such as LiteDRAM may not).
+        if csr is not None and hasattr(backend, "dbg_en"):
             self.comb += [
                 backend.dbg_en.eq(csr.dbg_r_en),
                 backend.dbg_adr.eq(csr.dbg_r_adr),
                 csr.dbg_r_data.eq(backend.dbg_data),
             ]
 
-        # AXI arbitration (DMA + optional CSR).
+        # AXI arbitration. Masters: PCIe DMA, optional CSR-debug, plus any extra masters
+        # (e.g. the hardware I/O command engine via LiteNVMeIOEngineAXI). With a single
+        # master, connect directly; otherwise arbitrate onto the backend.
+        masters = [dma.axi]
         if csr is not None:
-            self.submodules.axi_arbiter = axi.AXIArbiter([dma.axi, csr.axi], backend.axi)
+            masters.append(csr.axi)
+        if extra_axi_masters:
+            masters += list(extra_axi_masters)
+
+        if len(masters) == 1:
+            self.comb += masters[0].connect(backend.axi)
         else:
-            self.comb += dma.axi.connect(backend.axi)
+            self.submodules.axi_arbiter = axi.AXIArbiter(masters, backend.axi)
