@@ -76,11 +76,17 @@ class LiteNVMe(LiteXModule):
     """
     def __init__(self, pcie_endpoint, hostmem_base=0x1000_0000, hostmem_size=0x8_0000,
                  data_width=None, qid=1, qsize=64, qd=32, requester_id=0x0000,
-                 hostmem_backend=None):
+                 hostmem_backend=None, with_request_gen=False):
         # hostmem_backend: optional pre-built host-memory backend exposing a matching
         # `.axi` slave. Default (None) instantiates on-FPGA BRAM. Pass a LiteDRAM AXI
         # port wrapper here for a DDR-backed host-memory window with large buffers
         # (sustained high-QD streaming). See doc/THROUGHPUT_DESIGN.md section 5.
+        #
+        # with_request_gen: instantiate a hardware request generator (LiteNVMeRequestGen)
+        # bound to the engine's request/completion streams, so the core can self-drive at
+        # full rate for benchmarking (no CPU in the steady-state loop). The user request
+        # stream is then owned by the generator (see self.request_gen); leave False to
+        # drive `self.request`/`self.completion` from your own logic.
         self.pcie_endpoint = pcie_endpoint
         endpoint = pcie_endpoint
 
@@ -135,9 +141,21 @@ class LiteNVMe(LiteXModule):
         # Drive the engine's doorbells through the dedicated MMIO accessor.
         self.comb += io_engine.connect_mmio(self.mmio_db)
 
-        # Re-export the request/completion streams as the core's data-command interface.
-        self.request    = io_engine.sink
-        self.completion = io_engine.source
+        # Optional hardware request generator (benchmark self-driver).
+        if with_request_gen:
+            from litenvme.request_gen import LiteNVMeRequestGen
+            self.request_gen = request_gen = LiteNVMeRequestGen(with_csr=True)
+            self.comb += [
+                request_gen.source.connect(io_engine.sink),
+                io_engine.source.connect(request_gen.sink),
+            ]
+            # Streams are owned by the generator in this mode.
+            self.request    = None
+            self.completion = None
+        else:
+            # Re-export the request/completion streams as the core's data-command interface.
+            self.request    = io_engine.sink
+            self.completion = io_engine.source
 
     def add_csrs(self, soc, name="nvme"):
         """Register the core's sub-blocks as CSR modules on `soc` with a common prefix.

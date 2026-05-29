@@ -34,7 +34,8 @@ from litenvme.cfg       import LiteNVMePCIeCfgAccessor
 from litenvme.mem       import LiteNVMePCIeMmioAccessor
 from litenvme.hostmem   import LiteNVMeHostMemResponder
 from litenvme.req       import LiteNVMeRequestCSR
-from litenvme.io_engine import LiteNVMeIOEngineAXI
+from litenvme.io_engine   import LiteNVMeIOEngineAXI
+from litenvme.request_gen import LiteNVMeRequestGen
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -198,6 +199,15 @@ class BaseSoC(SoCCore):
             self.mmio_db = LiteNVMePCIeMmioAccessor(port=io_db_port, tag=0x45, with_csr=False)
             self.comb += io_engine.connect_mmio(self.mmio_db)
             io_engine_masters = [io_engine.axi]
+
+            # Hardware request generator: drives the engine at full rate (no CPU in the
+            # steady-state loop) and counts completions/cycles/errors, so the engine's
+            # true throughput can be measured. Firmware programs it via nvme_gen_* CSRs.
+            self.nvme_gen = nvme_gen = LiteNVMeRequestGen(with_csr=True)
+            self.comb += [
+                nvme_gen.source.connect(io_engine.sink),
+                io_engine.source.connect(nvme_gen.sink),
+            ]
 
         self.hostmem_port = endpoint.crossbar.get_slave_port(address_decoder=hostmem_decoder)
         self.hostmem = LiteNVMeHostMemResponder(
