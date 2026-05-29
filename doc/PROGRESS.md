@@ -65,6 +65,47 @@ per-slot 4 KiB buffers, then do the firmware QD ring.
 - [~] E1  Engine HW measurement harness DONE + sim-validated; HW run PENDING the
           `--with-io-engine` gateware build (in progress). NO engine HW number yet.
 
+### Engine build OK + firmware bug fixed; blocked on PCIe link-down (2026-05-29 ~21:00)
+Progress this pass:
+- Root-caused why every "engine" run failed: firmware used single-prefix `nvme_engine_*`
+  CSR names, but the module is `add_module("nvme_engine", io_engine.engine)` so the real
+  CSRs are double-prefixed `nvme_engine_engine_*`. The guard `NVME_ENGINE_AVAILABLE` was
+  false → `nvme_engine_bench` compiled out (0 ELF symbol, absent from help). FIXED +
+  committed (593cc03): guard macro `CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR` + all 9 accessors.
+- One clean `--with-io-engine` build completed with **timing met** (WNS positive, "All
+  user specified timing constraints are met"); gateware has the engine; bench/csr.csv has
+  33 engine/gen CSRs.
+
+Two GOTCHAS confirmed (save the next pass):
+1. `--no-compile-gateware` does NOT skip synthesis in the `--with-cpu auto` firmware flow
+   — it forces a SECOND full build. To recompile firmware only, either use the
+   `make -C firmware BUILD_DIR=$(pwd)/build/alibaba_xcku3p BOOT=bios` path with the
+   generated headers, or just accept the full rebuild. (A firmware rebuild was triggered
+   this way and is re-synthesizing now; it will overwrite the bitstream.)
+2. The `RemoteClient`/Etherbone `has_*` CSR check reads `build/alibaba_xcku3p/csr.csv`,
+   which is STALE (March 9, 0 engine CSRs) — so `has nvme_gen=False` is a csr.csv
+   staleness artifact, NOT missing hardware. Use `bench/csr.csv` (fresh) for RemoteClient,
+   or copy it into build/ before checking.
+
+BLOCKER (real, independent of the above): after loading the engine bitstream the **PCIe
+link does not train** — `pcie_phy_phy_link_status = 0x0000` for 30s. On the no-engine
+build the link came up at 0x209d. Most likely the SSD/PCIe needs a power-cycle after the
+JTAG reload (the link has needed this before), but a gateware cause isn't ruled out.
+
+NO engine HW number yet (none invented).
+
+TO RESUME (needs a board power-cycle):
+1. Let the in-flight resynth finish (grep "write_bitstream completed" /tmp/fwrebuild.log;
+   no vivado). Recompile firmware so `nm firmware.elf | grep nvme_engine_bench` >= 1.
+2. POWER-CYCLE board + SSD. Load build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit.
+3. cp bench/csr.csv build/alibaba_xcku3p/csr.csv  (avoid the stale-csv artifact).
+4. Fresh litex_server; confirm pcie_phy_phy_link_status == 0x209d (NONZERO). If still 0
+   after power-cycle, it's a gateware regression in the engine SoC wiring — debug (bisect
+   the extra mmio_db master / the 3-way hostmem arbiter) before measuring.
+5. Boot firmware under a pty; `console.py "help"` must list nvme_engine_bench; functional
+   `nvme_engine_bench read 0xe0000000 1 0 8 10 8` (completed=10, errors=0); then measure
+   read/write count=1000 nlb 1/8/16. Record ONLY board-printed numbers.
+
 ### Engine HW measurement — harness ready, NO engine bitstream produced yet (2026-05-29 night)
 - DONE + committed + sim-tested (31 pass): `litenvme/request_gen.py` (RTL request
   generator, drives engine.sink at full rate, counts completed/cycles/errors, zero CPU in
