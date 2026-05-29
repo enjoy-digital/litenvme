@@ -1,5 +1,41 @@
 # LiteNVMe — Development Progress Log
 
+## STATUS (2026-05-29) — engine runs on HW (errors=0); throughput NOT yet finalized
+
+The RTL I/O engine is built into the SoC (`--with-io-engine`), driven by the RTL request
+generator, and **runs end-to-end on hardware**: a functional run (`nvme_engine_bench read
+... count=10`) completed with `completed=10, errors=0` and success CQEs — the engine
+genuinely builds SQEs, rings doorbells, and reaps CQEs in hardware. That functional result
+was seen directly on the board.
+
+Throughput was *observed* (via the `nvme_gen_*` hardware counters) at roughly ~88 MB/s for
+4 KiB and ~12 MB/s for 512 B, read ≈ write — i.e. **below** the firmware QD path
+(~220 MB/s). **These throughput figures are deliberately NOT recorded as final** (not in
+doc/NVME_PERFORMANCE.md): the board's network went offline (no ping) before I could do a
+clean re-capture this session, and the tool channel was unreliable, so I will not commit
+numbers I cannot re-verify right now. The standing rule is: only record what the board
+demonstrably prints.
+
+TO FINALIZE the numbers (board needs a power-cycle first — its network is down):
+1. Power-cycle the board+SSD.
+2. `openFPGALoader --fpga-part xcku3p-ffvb676 --cable digilent_hs2 \
+     bench/build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit` (gateware is built, timing met).
+3. `cp bench/csr.csv bench/build/alibaba_xcku3p/csr.csv`; one `litex_server --udp --udp-ip
+   192.168.1.50`; GATE `pcie_phy_phy_link_status==0x209d`.
+4. Boot firmware under a pty (`script -qfc "litex_term crossover --csr-csv
+   bench/build/alibaba_xcku3p/csr.csv --kernel bench/firmware/firmware.bin" /tmp/fw.log`).
+5. From `bench/`: `python3 engine_measure.py read 0 8 1000 /tmp/r.txt && cat /tmp/r.txt`
+   (and write/512B/8KiB variants). The script reads the nvme_gen counters directly and
+   writes a `MARK_A ... MARK_END` line — record those printed numbers in
+   doc/NVME_PERFORMANCE.md.
+
+Likely result + root cause (architectural, to confirm with the finalized numbers): the
+engine FSM serializes submit and reap and blocks on every MMIO doorbell, so `qd=32` buys
+no overlap (effectively QD=1). Optimization follow-up: overlap submit/reap, coalesce/
+non-blocking doorbells, burst the 16-dword SQE write. `bench/engine_measure.py` makes
+re-measuring after each change a one-command check.
+
+
 This is the resumable progress log for the throughput / clean-core effort. Update it
 after every meaningful step so work can continue after a crash, context reset, or
 board power-cycle. Newest entry on top within each section.
