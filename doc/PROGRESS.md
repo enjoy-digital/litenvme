@@ -62,6 +62,23 @@ per-slot 4 KiB buffers, then do the firmware QD ring.
 - [x] P5  Host-memory backend made pluggable (BRAM default; LiteDRAM = board step).
 - [~] P6  Docs/README rewritten; demos: firmware QD sweep done on HW; RTL-engine HW
           bring-up is the open item (sim-validated, SoC-integrated, awaits a board run).
+- [~] E1  Engine HW measurement harness DONE + sim-validated; HW run PENDING the
+          `--with-io-engine` gateware build (in progress). NO engine HW number yet.
+
+### Engine HW measurement — harness ready, measurement NOT yet done (2026-05-29 night)
+- DONE + committed + sim-tested (31 pass): `litenvme/request_gen.py` (RTL request
+  generator, drives engine.sink at full rate, counts completed/cycles/errors, zero CPU in
+  loop); SoC wiring under `--with-io-engine` (`nvme_gen_*` CSRs); core `with_request_gen`;
+  firmware `nvme_engine_bench` command. SoC elaborates with/without engine.
+- NOT done: the actual hardware measurement. The `--with-io-engine` gateware build is
+  still synthesizing; an earlier attempt to measure loaded the STALE no-engine bitstream
+  (14:31) — engine CSRs absent, runs returned empty. No engine throughput number exists.
+- TO RESUME: wait for the engine build to finish (grep "write_bitstream completed"
+  /tmp/engine_build.log; bitstream mtime newer than 14:31; built csr.csv has nvme_engine/
+  nvme_gen). Then: load that bitstream, fresh litex_server, boot firmware under a pty,
+  confirm `has nvme_gen == True` via Etherbone, run
+  `nvme_engine_bench read 0xe0000000 1 0 8 1000 16` + write, require errors=0 and
+  completed=1000, and record ONLY what the board prints.
 
 ## Summary (end of this effort)
 
