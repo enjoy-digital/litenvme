@@ -168,6 +168,70 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## RTL I/O engine on hardware — measured 2026-05-29
+
+The hardware I/O command engine (`litenvme/io_engine.py`, qd=32) built into the SoC
+(`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`, zero
+CPU in the steady-state loop), run via the firmware `nvme_engine_bench` command (firmware
+does one-time admin/queue setup only; the engine builds SQEs, rings doorbells and reaps
+CQEs in hardware). Numbers are read directly from the generator's hardware counters
+(`nvme_gen_cycles/completed/errors`) with `bench/engine_measure.py`. Each value was taken
+on a freshly power-cycled board, validated by a unique-value Etherbone roundtrip, and
+reproduced across independent runs (read 4 KiB was bit-identical on two runs).
+
+Alibaba KU3P, PCIe Gen2 x4, 125 MHz, `count=1000`; every run `completed=1000`, `errors=0`,
+success CQEs:
+
+| op    | nlb | transfer | cycles      | cyc/cmd | throughput |
+|-------|-----|----------|-------------|---------|------------|
+| read  | 1   | 512 B    | 4,427,160   | 4,427   | 14.5 MB/s  |
+| read  | 8   | 4 KiB    | 13,042,008  | 13,042  | 39.3 MB/s  |
+| read  | 16  | 8 KiB    | 24,594,169  | 24,594  | 41.6 MB/s  |
+| write | 8   | 4 KiB    | 13,045,276  | 13,045  | 39.3 MB/s  |
+
+(Functional sanity at `count=10`, read 4 KiB: 152,027 cycles, `completed=10`, `errors=0`.)
+
+### Result: the engine is correct but, as built, SLOWER than the firmware path
+
+A real, precise, negative result:
+
+1. **Correct** — every run completes all 1000 commands with `errors=0` and success CQEs.
+   The RTL engine genuinely drives NVMe I/O end to end on hardware.
+2. **read ≈ write** (39.3 vs 39.3 MB/s at 4 KiB) — device read/write latency is not the
+   limit; the bottleneck is host-side (the engine itself).
+3. **It is slower than *every* firmware data point**, including QD=1. Engine 4 KiB read is
+   13,042 cyc/cmd (~104 µs) vs firmware QD=1 ~4,900 cyc/cmd (~39 µs) and firmware QD=63
+   ~2,295 cyc/cmd. Engine peak ~41.6 MB/s (8 KiB) vs firmware ~104–115 MB/s (QD=1, 4 KiB)
+   and ~220 MB/s (QD≥16). The engine plateau is ~5× below the firmware QD plateau.
+4. **Engine cyc/cmd grows with transfer size** (4,427 → 13,042 → 24,594 for nlb 1/8/16),
+   unlike firmware QD=1 where `ticks_io` was flat vs nlb. The engine serializes the whole
+   build→submit→wait→reap chain per command, so larger transfers directly extend each
+   command's wall-clock instead of being overlapped.
+
+Why (consistent with the FSM in `io_engine.py`): a **single FSM serializes submit and reap
+and blocks on every MMIO doorbell** (`SUBMIT-DOORBELL-WAIT`, `REAP-DOORBELL-WAIT`). Despite
+`qd=32`, nothing is kept genuinely in flight — it runs effectively QD=1 with a long
+per-command path (each 64-byte SQE is 16 *single-beat* AXI writes through the
+bridge+arbiter, and each doorbell is a waited-on MMIO transaction). Queue depth buys
+nothing here, and the soft-CPU firmware path — which coalesces doorbells and overlaps
+device latency across the queue — is faster.
+
+### Next step to make the engine fast (architectural, not a tuning knob)
+
+- **Overlap submit and reap** (concurrent/pipelined scheduler) so up to `qd` commands are
+  actually outstanding and device latency is hidden — the firmware QD sweep proves that is
+  where the win is.
+- **Coalesce + don't block on doorbells** (ring SQ once per burst, posted; same for CQ).
+- **Burst the SQE write** (one multi-beat AXI write instead of 16 single-beat dwords).
+
+Until then the firmware QD path (~220 MB/s) remains the fastest measured option. The engine
+is the right *architecture* but this first cut is unoptimized; the `nvme_engine_bench` +
+`bench/engine_measure.py` harness makes re-measuring after each change a one-command check:
+
+```sh
+python3 engine_measure.py read 0 8 1000 /tmp/r.txt && cat /tmp/r.txt
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone
