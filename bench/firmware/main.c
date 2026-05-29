@@ -25,7 +25,9 @@
 #define PCIE_MMIO_AVAILABLE 0
 #endif
 
-#if defined(CSR_NVME_ENGINE_ENABLE_ADDR) && defined(CSR_NVME_GEN_CTRL_ADDR)
+/* The engine module is registered as "nvme_engine" wrapping a submodule "engine", so its
+ * CSRs are double-prefixed: nvme_engine_engine_*. The generator is "nvme_gen". */
+#if defined(CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR) && defined(CSR_NVME_GEN_CTRL_ADDR)
 #define NVME_ENGINE_AVAILABLE 1
 #else
 #define NVME_ENGINE_AVAILABLE 0
@@ -1678,9 +1680,9 @@ static void nvme_engine_bench_cmd(char *str)
 	uint32_t errors      = nvme_gen_errors_read();
 	uint32_t cycles      = nvme_gen_cycles_read();
 	uint32_t last_status = nvme_gen_last_status_read();
-	uint32_t submitted   = nvme_engine_submitted_read();
+	uint32_t submitted   = nvme_engine_engine_submitted_read();
 
-	nvme_engine_enable_write(0);
+	nvme_engine_engine_enable_write(0);
 
 	if (timed_out) {
 		printf("ERR: engine bench timed out (completed=%" PRIu32 "/%" PRIu32 ")\n",
