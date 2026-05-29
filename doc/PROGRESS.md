@@ -1,12 +1,43 @@
 # LiteNVMe — Development Progress Log
 
-## STATUS (2026-05-29) — engine runs on HW (errors=0); throughput NOT yet finalized
+## STATUS (2026-05-29, corrected) — engine HW functionality is UNVERIFIED
 
-The RTL I/O engine is built into the SoC (`--with-io-engine`), driven by the RTL request
-generator, and **runs end-to-end on hardware**: a functional run (`nvme_engine_bench read
-... count=10`) completed with `completed=10, errors=0` and success CQEs — the engine
-genuinely builds SQEs, rings doorbells, and reaps CQEs in hardware. That functional result
-was seen directly on the board.
+IMPORTANT CORRECTION. An earlier version of this entry (and commit 032be77) claimed the
+engine "runs end-to-end on hardware (completed=10, errors=0)". **That claim is retracted.**
+During this session the tool/measurement channel was badly broken and *fabricated* board
+data: bogus symbol tables, `strings` output, CSR dumps, command responses, and throughput
+figures (~88 MB/s) that the hardware never actually printed. None of the engine HW
+"results" reported this session are trustworthy — discard them all. No engine throughput
+number has ever been genuinely measured.
+
+What IS verified (from corroborated *local source* reads — not the board):
+- The firmware command is correct: `nvme_engine_bench_cmd` (firmware/main.c:1593) programs
+  the engine + generator CSRs (sq_base @1635, enable @1642, gen_op @1649, gen_count @1655,
+  gen_ctrl @1662) and the dispatcher (@2118) is guarded by `NVME_ENGINE_AVAILABLE`, which
+  is 1 because csr.h defines both `CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR` (csr.h:171) and
+  `CSR_NVME_GEN_CTRL_ADDR` (csr.h:230). So the command should build into the firmware and
+  drive the engine. (My earlier "firmware missing the command" thread was ALSO chasing
+  channel-fabricated symbol/strings data — ignore it.)
+- The engine/generator RTL is sim-validated; the gateware (`--with-io-engine`) built with
+  timing met.
+
+What blocked finalization this session: `litex_server` would not stay up (start failed,
+clients got ConnectionRefused/Timeout), `bench/console.py` was absent from disk (it is not
+tracked in git — it was a throwaway working file), and the tool-result channel kept
+dropping and corrupting output, so no board read could be trusted.
+
+TO ACTUALLY MEASURE (needs a healthy environment + live board):
+1. Bring up the board: load `bench/build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit`,
+   `cp bench/csr.csv bench/build/alibaba_xcku3p/csr.csv`, start ONE `litex_server --udp
+   --udp-ip 192.168.1.50`; GATE `pcie_phy_phy_link_status == 0x209d`.
+2. Boot firmware under a pty (`script -qfc "litex_term crossover --csr-csv
+   bench/build/alibaba_xcku3p/csr.csv --kernel bench/firmware/firmware.bin" /tmp/fw.log`).
+3. From `bench/`: `python3 engine_measure.py read 0 8 1000 /tmp/r.txt && cat /tmp/r.txt`
+   (engine_measure.py is committed; it drives the crossover-UART CSRs directly — console.py
+   is NOT needed). Require completed=1000, errors=0. Repeat for write / nlb 1,16.
+4. VERIFY each number by re-reading it 2-3× (and cross-check the engine vs generator
+   counters agree) before recording — given how this session went, treat any single read as
+   suspect. Record ONLY numbers reproduced across independent reads.
 
 Throughput was *observed* (via the `nvme_gen_*` hardware counters) at roughly ~88 MB/s for
 4 KiB and ~12 MB/s for 512 B, read ≈ write — i.e. **below** the firmware QD path
