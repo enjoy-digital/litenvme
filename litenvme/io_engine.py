@@ -178,8 +178,8 @@ class LiteNVMeIOEngine(LiteXModule):
         # # #
 
         # Ring state.
-        sq_tail  = Signal(max=qsize)
-        cq_head  = Signal(max=qsize)
+        self.sq_tail = sq_tail = Signal(max=qsize)
+        self.cq_head = cq_head = Signal(max=qsize)
         cq_phase = Signal(reset=1)
 
         # Latched request being submitted.
@@ -228,11 +228,11 @@ class LiteNVMeIOEngine(LiteXModule):
             return If(sig == (qsize - 1), NextValue(sig, 0)).Else(NextValue(sig, sig + 1))
 
         # Can we submit a new command? Room in the in-flight window and a request waiting.
-        can_submit = Signal()
+        self.can_submit = can_submit = Signal()
         self.comb += can_submit.eq(self.enable & self.sink.valid & (self.inflight < qd))
 
         # Should we try to reap? Something outstanding.
-        can_reap = Signal()
+        self.can_reap = can_reap = Signal()
         self.comb += can_reap.eq(self.enable & (self.inflight != 0))
 
         # Byte-address helpers.
