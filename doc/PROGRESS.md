@@ -65,14 +65,32 @@ per-slot 4 KiB buffers, then do the firmware QD ring.
 - [~] E1  Engine HW measurement harness DONE + sim-validated; HW run PENDING the
           `--with-io-engine` gateware build (in progress). NO engine HW number yet.
 
-### Engine HW measurement — harness ready, measurement NOT yet done (2026-05-29 night)
+### Engine HW measurement — harness ready, NO engine bitstream produced yet (2026-05-29 night)
 - DONE + committed + sim-tested (31 pass): `litenvme/request_gen.py` (RTL request
   generator, drives engine.sink at full rate, counts completed/cycles/errors, zero CPU in
   loop); SoC wiring under `--with-io-engine` (`nvme_gen_*` CSRs); core `with_request_gen`;
-  firmware `nvme_engine_bench` command. SoC elaborates with/without engine.
-- NOT done: the actual hardware measurement. The `--with-io-engine` gateware build is
-  still synthesizing; an earlier attempt to measure loaded the STALE no-engine bitstream
-  (14:31) — engine CSRs absent, runs returned empty. No engine throughput number exists.
+  firmware `nvme_engine_bench` command. SoC elaborates with/without engine (verified via
+  --no-compile-gateware header passes).
+- NOT done: the actual hardware measurement — AND no usable engine bitstream exists yet.
+  VERIFIED state of the current build dir (bench/build/alibaba_xcku3p, 17:10 bitstream):
+  its gateware Verilog, csr.csv, and build log contain ZERO engine/generator references —
+  it is a NO-ENGINE build. Root cause: concurrent `--build` invocations clobbered each
+  other this session (a recurring problem); the intended `--with-io-engine` full build did
+  not yield an engine bitstream. So every "engine" run this session actually hit a
+  no-engine design (engine CSRs absent, `nvme_engine_bench` absent from help) — NOT a
+  gateware regression of the NVMe path (an earlier draft note wrongly guessed that; it was
+  never committed).
+- No engine throughput number exists. Do not invent one.
+- TO RESUME (clean): run EXACTLY ONE build, nothing else touching the build dir:
+  `cd bench && python3 alibaba_xcku3p.py --with-cpu --cpu-boot=bios --with-etherbone \
+   --with-io-engine --csr-csv=csr.csv --libc=full --build`
+  Wait for it ALONE to finish (one `write_bitstream completed`; no other vivado running).
+  VERIFY before loading: `grep -c nvme_engine bench/build/alibaba_xcku3p/csr.csv` > 0 AND
+  `grep -c nvme_gen bench/build/alibaba_xcku3p/gateware/alibaba_xcku3p.v` > 0 AND
+  `riscv64-unknown-elf-nm bench/firmware/firmware.elf | grep -c nvme_engine_bench` > 0.
+  Only then load, boot, check `has nvme_gen==True` over Etherbone, and measure
+  (`nvme_engine_bench read/write ... 1000 16`, require errors=0/completed=1000). Record
+  only board-printed numbers.
 - TO RESUME: wait for the engine build to finish (grep "write_bitstream completed"
   /tmp/engine_build.log; bitstream mtime newer than 14:31; built csr.csv has nvme_engine/
   nvme_gen). Then: load that bitstream, fresh litex_server, boot firmware under a pty,
