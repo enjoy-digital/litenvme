@@ -30,10 +30,11 @@ from litepcie.core.rootport  import LitePCIeRootPort
 
 from litescope import LiteScopeAnalyzer
 
-from litenvme.cfg     import LiteNVMePCIeCfgAccessor
-from litenvme.mem     import LiteNVMePCIeMmioAccessor
-from litenvme.hostmem import LiteNVMeHostMemResponder
-from litenvme.req     import LiteNVMeRequestCSR
+from litenvme.cfg       import LiteNVMePCIeCfgAccessor
+from litenvme.mem       import LiteNVMePCIeMmioAccessor
+from litenvme.hostmem   import LiteNVMeHostMemResponder
+from litenvme.req       import LiteNVMeRequestCSR
+from litenvme.io_engine import LiteNVMeIOEngineAXI
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -60,6 +61,8 @@ class BaseSoC(SoCCore):
     def __init__(self, sys_clk_freq=int(125e6), with_cpu=False, cpu_firmware=None, cpu_boot="bios",
         with_etherbone  = False,
         eth_ip          = "192.168.1.50",
+        with_io_engine  = False,
+        io_engine_qd    = 32,
         **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = alibaba_xcku3p.Platform()
@@ -179,13 +182,31 @@ class BaseSoC(SoCCore):
         def hostmem_decoder(a):
             return (a >= hostmem_base) & (a < (hostmem_base + hostmem_size))
 
+        # Optional hardware I/O command engine (steady-state I/O without per-command CPU
+        # cost). Joins the hostmem AXI backend as an extra master and drives SQ/CQ
+        # doorbells through its own dedicated MMIO accessor. Firmware still does admin
+        # setup (enable controller, create IO SQ/CQ) and programs the engine's queue /
+        # doorbell addresses + enable via CSR.
+        io_engine_masters = None
+        if with_io_engine:
+            self.io_engine = io_engine = LiteNVMeIOEngineAXI(
+                qid=1, qsize=64, qd=io_engine_qd,
+                data_width=self.pcie_phy.data_width, with_csr=True)
+            self.add_module(name="nvme_engine", module=io_engine.engine)
+
+            io_db_port = endpoint.crossbar.get_master_port()
+            self.mmio_db = LiteNVMePCIeMmioAccessor(port=io_db_port, tag=0x45, with_csr=False)
+            self.comb += io_engine.connect_mmio(self.mmio_db)
+            io_engine_masters = [io_engine.axi]
+
         self.hostmem_port = endpoint.crossbar.get_slave_port(address_decoder=hostmem_decoder)
         self.hostmem = LiteNVMeHostMemResponder(
-            port       = self.hostmem_port,
-            base       = hostmem_base,
-            size       = hostmem_size,
-            data_width = self.pcie_phy.data_width,
-            with_csr   = True,
+            port              = self.hostmem_port,
+            base              = hostmem_base,
+            size              = hostmem_size,
+            data_width        = self.pcie_phy.data_width,
+            with_csr          = True,
+            extra_axi_masters = io_engine_masters,
         )
 
 
@@ -312,6 +333,8 @@ def main():
     parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
     parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
+    parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
+    parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     args = parser.parse_args()
 
     def build_soc(cpu_firmware=None, force_run=None):
@@ -321,6 +344,8 @@ def main():
             cpu_firmware   = cpu_firmware,
             cpu_boot       = args.cpu_boot,
             with_etherbone = args.with_etherbone,
+            with_io_engine = args.with_io_engine,
+            io_engine_qd   = args.io_engine_qd,
             **parser.soc_argdict,
         )
         if args.litescope_probe == "pcie":
