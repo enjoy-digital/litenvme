@@ -1632,14 +1632,14 @@ static void nvme_engine_bench_cmd(char *str)
 	/* Program the engine: queue bases + doorbell addresses + PRP-list region, enable. */
 	uint64_t sq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
 	uint64_t cq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
-	nvme_engine_write64(nvme_engine_sq_base_lo_write, nvme_engine_sq_base_hi_write, (uint64_t)IO_SQ_ADDR);
-	nvme_engine_write64(nvme_engine_cq_base_lo_write, nvme_engine_cq_base_hi_write, (uint64_t)IO_CQ_ADDR);
-	nvme_engine_write64(nvme_engine_sq_db_lo_write,   nvme_engine_sq_db_hi_write,   sq_db);
-	nvme_engine_write64(nvme_engine_cq_db_lo_write,   nvme_engine_cq_db_hi_write,   cq_db);
+	nvme_engine_write64(nvme_engine_engine_sq_base_lo_write, nvme_engine_engine_sq_base_hi_write, (uint64_t)IO_SQ_ADDR);
+	nvme_engine_write64(nvme_engine_engine_cq_base_lo_write, nvme_engine_engine_cq_base_hi_write, (uint64_t)IO_CQ_ADDR);
+	nvme_engine_write64(nvme_engine_engine_sq_db_lo_write,   nvme_engine_engine_sq_db_hi_write,   sq_db);
+	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
 	/* PRP-list region (only used if nlb > 16; placed after the per-slot data buffers). */
-	nvme_engine_write64(nvme_engine_prp_list_lo_write, nvme_engine_prp_list_hi_write,
+	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write,
 	                    (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u));
-	nvme_engine_enable_write(1);
+	nvme_engine_engine_enable_write(1);
 
 	/* Prefill per-slot data buffers (write source pattern; read dest cleared). */
 	for (uint32_t s = 0; s < IO_Q_ENTRIES; s++)
