@@ -1,5 +1,42 @@
 # LiteNVMe — Development Progress Log
 
+## FINDING (2026-05-29, integrity-verified) — engine TIMES OUT on HW (completed=0)
+
+On a freshly power-cycled board, with the Etherbone channel proven faithful by a
+unique-value write/read roundtrip (`0x13572468`/`0xFEDCBA98` echoed back exactly), the
+engine was run via `bench/engine_measure.py read 0 8 1000`. Result, reproduced across two
+independent runs:
+
+    done=False  completed=0  errors=0  cycles=<free-running garbage, 1.15e9 then 2.32e9>
+
+**The engine completes ZERO commands — it times out.** So it does NOT work on hardware in
+its current form. Any earlier "completed=1000 / ~39 MB/s (or ~88 MB/s)" figures were
+fabricated by a broken tool channel and have been reverted from the docs — discard them
+entirely. There is still NO valid engine throughput number, because the engine never
+successfully completes a command.
+
+Corroborating earlier (now-credible) diagnostic: a post-run CSR dump showed the engine's
+queue/doorbell config registers (`nvme_engine_engine_sq_base/cq_base/sq_db/cq_db`) and the
+generator config all reading back 0, with `submitted=0` — i.e. the engine never issues an
+SQE. The host CAN write those CSRs (the integrity roundtrip proves the bus works), so the
+suspects are: (a) the firmware `nvme_engine_bench_cmd` setup not actually landing the
+config into the engine before `start` (ordering / the double-prefixed `nvme_engine_engine_*`
+accessors), or (b) the NVMe controller/IO-queues not being created on this path so the
+engine has nothing valid to submit to.
+
+NEXT (debug, do NOT record throughput until completed==count):
+1. With server up + firmware booted, dump CSRs right after a run and confirm whether
+   sq_base/cq_base/sq_db/cq_db/prp_list and the gen config are non-zero and `submitted`>0.
+2. If config is 0: fix the firmware setup in `bench/firmware/main.c` `nvme_engine_bench_cmd`
+   (~line 1593) — verify each `nvme_engine_engine_*_write()` / `nvme_gen_*_write()` lands
+   (read back from the host) and that admin init + IO SQ/CQ creation actually ran first.
+3. If `submitted`>0 but `completed`=0: the SSD isn't completing — check the SQ doorbell
+   actually reaches BAR0 and the CQ phase-bit reap logic.
+4. Only once `completed==count, errors=0` reproducibly: measure and record.
+
+(Sim still green: 17 engine/generator/io_engine tests pass — the bug is in the HW
+integration / firmware bring-up of the engine, not the engine RTL logic itself.)
+
 ## STATUS (2026-05-29, corrected) — engine HW functionality is UNVERIFIED
 
 IMPORTANT CORRECTION. An earlier version of this entry (and commit 032be77) claimed the
