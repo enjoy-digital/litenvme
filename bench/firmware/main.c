@@ -25,6 +25,12 @@
 #define PCIE_MMIO_AVAILABLE 0
 #endif
 
+#if defined(CSR_NVME_ENGINE_ENABLE_ADDR) && defined(CSR_NVME_GEN_CTRL_ADDR)
+#define NVME_ENGINE_AVAILABLE 1
+#else
+#define NVME_ENGINE_AVAILABLE 0
+#endif
+
 /*-----------------------------------------------------------------------*/
 /* NVMe constants/layout                                                  */
 /*-----------------------------------------------------------------------*/
@@ -163,6 +169,9 @@ static void help(void)
 	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
 	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] [qd] - Run IOPS/MBps benchmark (qd=queue depth)");
+#if NVME_ENGINE_AVAILABLE
+	puts("nvme_engine_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] - Benchmark the HW I/O engine (RTL-driven)");
+#endif
 }
 
 /*-----------------------------------------------------------------------*/
@@ -1558,6 +1567,143 @@ static void nvme_bench_cmd(char *str)
 #endif
 }
 
+/*-----------------------------------------------------------------------*/
+/* Hardware I/O engine benchmark (RTL engine + request generator)        */
+/*-----------------------------------------------------------------------*/
+
+#if NVME_ENGINE_AVAILABLE
+static void nvme_engine_write64(void (*wr_lo)(uint32_t), void (*wr_hi)(uint32_t), uint64_t v)
+{
+	wr_lo((uint32_t)(v & 0xffffffffu));
+	wr_hi((uint32_t)((v >> 32) & 0xffffffffu));
+}
+
+/*
+ * nvme_engine_bench: measure the hardware I/O command engine, driven by the RTL request
+ * generator (no CPU in the steady-state loop). Firmware only does one-time admin setup
+ * (controller enable + create IO SQ/CQ), programs the engine + generator CSRs, pulses
+ * start, and reads back the hardware cycle/completion/error counters.
+ *
+ * The engine and the firmware nvme_bench share the same IO SQ/CQ ring; do not interleave
+ * them in one boot (the engine owns the ring pointers at runtime). Keep nlb <= 16 here
+ * (<= 2 pages => PRP1/PRP2, no PRP list) so the per-slot buffers fit the hostmem window.
+ */
+static void nvme_engine_bench_cmd(char *str)
+{
+	const char *op_name = "read";
+	int do_write = 0;
+	uint64_t base_addr = 0xe0000000ull;
+	uint32_t nsid = 1;
+	uint64_t slba = 0;
+	uint32_t nlb  = 8;
+	uint32_t count = 1000;
+	uint32_t step = 8;
+	uint64_t cap = 0;
+
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		char *b = get_token(&str);
+		char *c = get_token(&str);
+		char *d = get_token(&str);
+		char *e = get_token(&str);
+		char *f = get_token(&str);
+		char *g = get_token(&str);
+		if (a && strlen(a)) {
+			if (strcmp(a, "write") == 0) { do_write = 1; op_name = "write"; }
+			else if (strcmp(a, "read") != 0) { puts("ERR: op must be 'read' or 'write'."); return; }
+		}
+		if (b && strlen(b)) base_addr = strtoull(b, NULL, 0);
+		if (c && strlen(c)) nsid = (uint32_t)strtoul(c, NULL, 0);
+		if (d && strlen(d)) slba = strtoull(d, NULL, 0);
+		if (e && strlen(e)) nlb  = (uint32_t)strtoul(e, NULL, 0);
+		if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
+		if (g && strlen(g)) step = (uint32_t)strtoul(g, NULL, 0);
+	}
+
+	if (nlb == 0 || nlb > 16) { puts("ERR: nlb must be 1..16 for engine bench."); return; }
+	if (count == 0)           { puts("ERR: count must be >= 1."); return; }
+
+	if (nvme_bar0_assign(base_addr)) return;
+	if (nvme_admin_init(&cap))       return;
+	if (nvme_io_setup(cap))          return;
+
+	/* Program the engine: queue bases + doorbell addresses + PRP-list region, enable. */
+	uint64_t sq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
+	uint64_t cq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
+	nvme_engine_write64(nvme_engine_sq_base_lo_write, nvme_engine_sq_base_hi_write, (uint64_t)IO_SQ_ADDR);
+	nvme_engine_write64(nvme_engine_cq_base_lo_write, nvme_engine_cq_base_hi_write, (uint64_t)IO_CQ_ADDR);
+	nvme_engine_write64(nvme_engine_sq_db_lo_write,   nvme_engine_sq_db_hi_write,   sq_db);
+	nvme_engine_write64(nvme_engine_cq_db_lo_write,   nvme_engine_cq_db_hi_write,   cq_db);
+	/* PRP-list region (only used if nlb > 16; placed after the per-slot data buffers). */
+	nvme_engine_write64(nvme_engine_prp_list_lo_write, nvme_engine_prp_list_hi_write,
+	                    (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u));
+	nvme_engine_enable_write(1);
+
+	/* Prefill per-slot data buffers (write source pattern; read dest cleared). */
+	for (uint32_t s = 0; s < IO_Q_ENTRIES; s++)
+		hostmem_fill(IO_BUF(s), 0x1000, do_write ? nvme_fill_pattern : 0);
+
+	/* Program the generator. */
+	nvme_gen_op_write(do_write ? 1u : 0u);
+	nvme_gen_nsid_write(nsid);
+	nvme_gen_base_lba_lo_write((uint32_t)(slba & 0xffffffffu));
+	nvme_gen_base_lba_hi_write((uint32_t)((slba >> 32) & 0xffffffffu));
+	nvme_gen_nlb_write(nlb);
+	nvme_gen_lba_step_write(step);
+	nvme_gen_count_write(count);
+	nvme_gen_buf_base_lo_write((uint32_t)(IO_BUF_BASE & 0xffffffffu));
+	nvme_gen_buf_base_hi_write(0);
+	nvme_gen_buf_stride_write(0x1000);
+	nvme_gen_qmod_write(IO_Q_ENTRIES);
+
+	/* Kick and wait for completion (hardware measures cycles). */
+	nvme_gen_ctrl_write(1);
+
+	uint32_t timeout_start = bench_timer_get();
+	int timed_out = 0;
+	while ((nvme_gen_status_read() & 0x1u) == 0) {
+		/* Generous timeout: count * worst-case device latency. */
+		if (bench_timeout_expired(timeout_start, (uint32_t)(NVME_CQE_TIMEOUT_TICKS) ) &&
+		    nvme_gen_completed_read() == 0) {
+			timed_out = 1;
+			break;
+		}
+		if (bench_ticks_elapsed(timeout_start, bench_timer_get()) > (uint64_t)CONFIG_CLOCK_FREQUENCY * 10ull) {
+			timed_out = 1;
+			break;
+		}
+	}
+
+	uint32_t completed   = nvme_gen_completed_read();
+	uint32_t errors      = nvme_gen_errors_read();
+	uint32_t cycles      = nvme_gen_cycles_read();
+	uint32_t last_status = nvme_gen_last_status_read();
+	uint32_t submitted   = nvme_engine_submitted_read();
+
+	nvme_engine_enable_write(0);
+
+	if (timed_out) {
+		printf("ERR: engine bench timed out (completed=%" PRIu32 "/%" PRIu32 ")\n",
+		       completed, count);
+		return;
+	}
+
+	uint64_t total_bytes = (uint64_t)count * (uint64_t)nlb * 512ull;
+
+	printf("Engine bench %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 "\n",
+	       op_name, count, nlb, slba, step);
+	printf("completed: %" PRIu32 "\n", completed);
+	printf("submitted: %" PRIu32 "\n", submitted);
+	printf("errors: %" PRIu32 "\n", errors);
+	printf("last_cqe_status: 0x%04" PRIx32 "\n", last_status);
+	printf("cycles: %" PRIu32 "\n", cycles);
+	print_fixed3_u64("latency_avg", (uint64_t)cycles * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
+	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, (uint64_t)cycles * 1000000ull, "MB/s");
+	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, (uint64_t)cycles, "IOPS");
+	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
+}
+#endif /* NVME_ENGINE_AVAILABLE */
+
 static void nvme_dump_buffer(uint32_t dwords)
 {
 	if (dwords == 0) {
@@ -1965,6 +2111,10 @@ static void console_service(void)
 		nvme_write_cmd(str);
 	else if (strcmp(token, "nvme_bench") == 0)
 		nvme_bench_cmd(str);
+#if NVME_ENGINE_AVAILABLE
+	else if (strcmp(token, "nvme_engine_bench") == 0)
+		nvme_engine_bench_cmd(str);
+#endif
 	prompt();
 }
 
