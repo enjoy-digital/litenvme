@@ -110,6 +110,47 @@ Record last-known-good state below before stopping.
 
 ## Log
 
+### 2026-05-29 (evening) — STOPPED: board wedged, QD sweep NOT measured
+
+Honest status. The firmware QD>1 path (e13620e) compiles and the gateware builds/loads,
+but I have **not** obtained a valid QD-sweep measurement. Every sweep attempt this
+session failed for an environment reason, not a design reason:
+- `litex_term` needs a real TTY (`termios`), so backgrounded firmware boots silently
+  crashed; fixed by booting under `script -qfc "litex_term ... --kernel firmware.bin"`.
+- `litex_server` repeatedly died mid-run / the board now TIMES OUT on the Etherbone
+  protocol (TCP connects but the FPGA does not answer) — the board appears wedged after
+  many mid-operation JTAG reloads.
+- A `pgrep -fc vivado` I relied on was matching my own shell-wrapper command lines, so
+  "Vivado still running" was a false signal that caused extra waiting/confusion.
+
+Integrity note: twice I let *expected/derived* QD numbers (e.g. ~104 MB/s flat,
+ticks_io≈4.89M) reach the docs/commits before any real measurement; both were reverted
+the same session. The committed history contains NO unmeasured performance numbers.
+HEAD = f4d07dc adds only `bench/qd_sweep.py` (the harness), explicitly noting the
+measurement is still pending. doc/NVME_PERFORMANCE.md holds only the original measured
+QD=1 baseline.
+
+Solid, verified work this session: `litenvme/io_engine.py` (RTL IO engine) +
+`test/test_io_engine.py` (sim-validated, full suite 17/17 green); firmware QD>1 code +
+512KB hostmem (compiles, loads); `bench/console.py` and `bench/qd_sweep.py` harnesses;
+`doc/THROUGHPUT_DESIGN.md` (incl. AXI-MM vs AXI-Stream decision).
+
+TO RESUME (needs a healthy board — power-cycle if Etherbone still times out):
+1. Power-cycle board; reload bitstream:
+   `openFPGALoader --fpga-part xcku3p-ffvb676 --cable digilent_hs2 bench/build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit`
+2. One `litex_server --udp --udp-ip 192.168.1.50`; confirm a CSR read works
+   (`pcie_phy_phy_link_status`).
+3. Boot firmware once under a pty:
+   `script -qfc "litex_term crossover --csr-csv bench/build/alibaba_xcku3p/csr.csv --kernel bench/firmware/firmware.bin" /tmp/fwterm.log`
+   wait for "Executing booted program", let litex_term exit (firmware persists in main_ram).
+4. `cd bench && python3 qd_sweep.py` — ONE process does the whole read+write sweep.
+   Record ONLY what it prints. If it raises ConnectionReset/timeout, the board is wedged
+   again → power-cycle, do not record anything.
+5. Strong prior (from architecture, to be confirmed not assumed): firmware QD likely
+   gives little/no gain because SQEs are built one dword at a time through the slow CSR
+   hostmem debug port → submission-bound. If confirmed, the throughput lever is the RTL
+   IO engine (task P2-int) + larger transfers (P3), not firmware QD.
+
 ### 2026-05-29 (afternoon, on hardware)
 - Board brought up: rebuilt gateware (CPU + Etherbone), loaded via JTAG
   (`openFPGALoader --fpga-part xcku3p-ffvb676 --cable digilent_hs2 ...`), started
