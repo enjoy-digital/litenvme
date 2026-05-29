@@ -110,7 +110,30 @@ Record last-known-good state below before stopping.
 
 ## Log
 
-### 2026-05-29
+### 2026-05-29 (afternoon, on hardware)
+- Board brought up: rebuilt gateware (CPU + Etherbone), loaded via JTAG
+  (`openFPGALoader --fpga-part xcku3p-ffvb676 --cable digilent_hs2 ...`), started
+  `litex_server --udp --udp-ip 192.168.1.50`, loaded firmware via
+  `litex_term crossover --csr-csv build/alibaba_xcku3p/csr.csv --kernel firmware/firmware.bin`.
+  PCIe link verified up: `pcie_phy_phy_link_status = 0x209d` (bit0 status=1,
+  bit1 phy_down=0, rate=gen2, width=x4).
+- Added `bench/console.py` — drives the firmware console over Etherbone (crossover
+  UART CSRs), so benchmarks run non-interactively. Firmware persists in main_ram after
+  litex_term detaches.
+- P2 RTL engine: `litenvme/io_engine.py` validated in simulation
+  (`test/test_io_engine.py`, 3 cases; full suite 17/17 green).
+- P1 firmware QD>1 written (sliding-window submit/reap; `qd` arg on `nvme_bench`;
+  per-slot 4 KiB buffers at HOSTMEM+0x10000; IO_Q_ENTRIES=64) and hostmem window
+  bumped 32KB->512KB in the SoC. NOT yet measured on HW — needs a gateware rebuild
+  (hostmem size is a gateware param) + firmware reload, then the QD sweep.
+- HONESTY NOTE: a fresh QD=1 baseline has NOT been captured on HW yet this session
+  (the first console runs returned empty because firmware was not yet booted). Capture
+  it together with the QD sweep after the rebuild; until then the QD=1 reference is the
+  documented doc/NVME_PERFORMANCE.md numbers.
+- NEXT: rebuild gateware (512KB hostmem), reload bitstream+firmware, run the QD sweep
+  for read & write (qd ∈ {1,2,4,8,16,32}) and record the curve.
+
+### 2026-05-29 (morning)
 - Session start. Explored codebase, read docs, agreed plan (incremental: firmware QD
   first, then RTL engine; clean core with CSR/AXI-Lite + AXI-Stream; LiteDRAM demo;
   link-saturation target).

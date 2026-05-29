@@ -37,8 +37,15 @@
 #define IO_SQ_ADDR         (HOSTMEM_BASE + 0x4000u)
 #define IO_RD_BUF_ADDR     (HOSTMEM_BASE + 0x5000u)
 #define IO_WR_BUF_ADDR     (HOSTMEM_BASE + 0x6000u)
+/* Per-slot 4 KiB I/O data buffers for queue-depth (QD>1) benchmarking: one page per
+ * SQ slot so up to IO_Q_ENTRIES commands can be in flight with distinct PRP1 buffers.
+ * Requires the hostmem window >= 0x10000 + IO_Q_ENTRIES*0x1000 (see alibaba_xcku3p.py).
+ */
+#define IO_BUF_BASE        (HOSTMEM_BASE + 0x10000u)
+#define IO_BUF(i)          (IO_BUF_BASE + (uint32_t)(i) * 0x1000u)
 #define ADMIN_Q_ENTRIES    2
-#define IO_Q_ENTRIES       4
+#define IO_Q_ENTRIES       64
+#define IO_QD_MAX          (IO_Q_ENTRIES - 1)
 
 #define NVME_CAP_TRIES        2
 #define NVME_CAP_DELAY        5000
@@ -155,7 +162,7 @@ static void help(void)
 	puts("nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords] - Write then read+dump");
 	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
-	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] - Run IOPS/MBps benchmark");
+	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] [qd] - Run IOPS/MBps benchmark (qd=queue depth)");
 }
 
 /*-----------------------------------------------------------------------*/
@@ -1172,6 +1179,101 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	return cqe_ok(cqe[3]) ? 0 : 1;
 }
 
+/*
+ * Queue-depth (QD>1) benchmark window: keep up to `qd` commands in flight using a
+ * sliding window over the IO SQ/CQ rings.
+ *
+ * - Submits up to `qd` commands (one SQE per slot, distinct per-slot PRP1 buffer),
+ *   advancing io_sq_tail, then rings the SQ doorbell ONCE per batch (coalesced).
+ * - Reaps all currently-complete CQEs by phase bit (draining the CQ in order),
+ *   refilling the window as slots free, then rings the CQ doorbell once per batch.
+ *
+ * Uses the persistent io_sq_tail / io_cq_head / io_cq_phase globals so it stays in sync
+ * with the device across calls. No per-slot CQ pre-clear is needed: a stale CQE keeps
+ * the previous lap's phase, which never matches the expected flipped phase.
+ *
+ * CID == SQ slot index. Completions may arrive out of order; we only count them and
+ * check status. Reuse of slot/buffer i is safe because at most qd < IO_Q_ENTRIES
+ * commands are outstanding (the command that last used slot i, IO_Q_ENTRIES submissions
+ * ago, is guaranteed complete).
+ *
+ * Returns 0 on success, 1 on CQ timeout. *errors_out gets the count of failed CQEs.
+ */
+static int nvme_io_bench_window(uint64_t cap, int do_write, uint32_t nsid,
+                                uint64_t slba, uint32_t step, uint16_t nlb_m1,
+                                uint32_t count, uint32_t qd, uint32_t *errors_out)
+{
+	uint64_t db_sq = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
+	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
+	uint32_t submitted = 0, completed = 0, inflight = 0;
+	uint64_t lba = slba;
+	uint32_t errors = 0;
+	uint32_t cmd[16];
+	uint32_t timeout_start = bench_timer_get();
+
+	if (qd < 1)         qd = 1;
+	if (qd > IO_QD_MAX) qd = IO_QD_MAX;
+
+	while (completed < count) {
+		/* Fill the in-flight window. */
+		int rang_sq = 0;
+		while (inflight < qd && submitted < count) {
+			uint16_t slot = io_sq_tail;
+			uint16_t cid  = slot;
+			uint64_t buf  = IO_BUF(slot);
+			if (do_write)
+				nvme_cmd_write(cid, nsid, buf, lba, nlb_m1, cmd);
+			else
+				nvme_cmd_read(cid, nsid, buf, lba, nlb_m1, cmd);
+
+			uint32_t sqe_addr = IO_SQ_ADDR + slot * 64;
+			for (int i = 0; i < 16; i++)
+				hostmem_wr32(sqe_addr + i * 4, cmd[i]);
+
+			io_sq_tail = (io_sq_tail + 1) % IO_Q_ENTRIES;
+			submitted++;
+			inflight++;
+			lba += step;
+			rang_sq = 1;
+			bench_io_submit_count++;
+		}
+		if (rang_sq)
+			(void)mmio_wr32(db_sq, io_sq_tail);
+
+		/* Reap everything currently complete (phase-bit scan). */
+		int reaped = 0;
+		for (;;) {
+			bench_io_poll_loops++;
+			uint32_t d3 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 12);
+			if (((d3 >> 16) & 0x1u) != io_cq_phase)
+				break;
+			uint32_t sts = (d3 >> 16) & 0xffffu;
+			uint32_t sc  = (sts >> 1) & 0xffu;
+			uint32_t sct = (sts >> 9) & 0x7u;
+			if (sc || sct)
+				errors++;
+			io_cq_head = (io_cq_head + 1) % IO_Q_ENTRIES;
+			if (io_cq_head == 0)
+				io_cq_phase ^= 1u;
+			completed++;
+			inflight--;
+			reaped++;
+		}
+		if (reaped) {
+			(void)mmio_wr32(db_cq, io_cq_head);
+			timeout_start = bench_timer_get();  /* progress: reset watchdog. */
+		} else if (bench_timeout_expired(timeout_start, NVME_CQE_TIMEOUT_TICKS)) {
+			if (errors_out)
+				*errors_out = errors;
+			return 1;
+		}
+	}
+
+	if (errors_out)
+		*errors_out = errors;
+	return 0;
+}
+
 static void nvme_identify_cmd(char *str)
 {
 	uint64_t base_addr = 0xe0000000ull;
@@ -1286,6 +1388,8 @@ static void nvme_bench_cmd(char *str)
 	uint32_t count = 100;
 	uint32_t step = 0;
 	uint32_t warmup = 1;
+	uint32_t qd = 1;
+	uint32_t bench_errors = 0;
 	uint64_t cap = 0;
 	uint32_t setup_tick_start, setup_tick_end;
 	uint32_t io_tick_start, io_tick_end;
@@ -1307,7 +1411,7 @@ static void nvme_bench_cmd(char *str)
 	uint32_t cqe[4];
 
 	if (str == NULL || strlen(str) == 0) {
-		puts("usage: nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup]");
+		puts("usage: nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] [qd]");
 		return;
 	}
 
@@ -1319,6 +1423,7 @@ static void nvme_bench_cmd(char *str)
 	char *f = get_token(&str);
 	char *g = get_token(&str);
 	char *h = get_token(&str);
+	char *iq = get_token(&str);
 
 	if (a && strlen(a)) {
 		if (strcmp(a, "write") == 0) {
@@ -1336,6 +1441,7 @@ static void nvme_bench_cmd(char *str)
 	if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
 	if (g && strlen(g)) step = (uint32_t)strtoul(g, NULL, 0);
 	if (h && strlen(h)) warmup = (uint32_t)strtoul(h, NULL, 0);
+	if (iq && strlen(iq)) qd = (uint32_t)strtoul(iq, NULL, 0);
 
 	if (nlb == 0) {
 		puts("ERR: nlb must be >= 1.");
@@ -1349,6 +1455,8 @@ static void nvme_bench_cmd(char *str)
 		puts("ERR: count must be >= 1.");
 		return;
 	}
+	if (qd < 1)         qd = 1;
+	if (qd > IO_QD_MAX) qd = IO_QD_MAX;
 
 	setup_tick_start = bench_timer_get();
 	if (nvme_bar0_assign(base_addr))
@@ -1360,24 +1468,19 @@ static void nvme_bench_cmd(char *str)
 	setup_tick_end = bench_timer_get();
 	setup_ticks = bench_ticks_elapsed(setup_tick_start, setup_tick_end);
 
-	hostmem_fill(IO_RD_BUF_ADDR, 0x1000, 0);
-	if (do_write)
-		hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
+	/* Prefill per-slot data buffers (write source pattern; read dest cleared). */
+	for (uint32_t s = 0; s < qd; s++)
+		hostmem_fill(IO_BUF(s), 0x1000, do_write ? nvme_fill_pattern : 0);
 
-	lba = slba;
-	for (uint32_t i = 0; i < warmup; i++) {
-		if (do_write)
-			nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
-		else
-			nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
+	(void)cmd; (void)cqe;
 
-		if (nvme_io_submit(cap, cmd, cqe)) {
-			printf("ERR: warmup %s failed at iter %" PRIu32 " lba %" PRIu64 "\n",
-			       op_name, i, lba);
-			decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+	/* Warmup window (excluded from timing). */
+	if (warmup) {
+		if (nvme_io_bench_window(cap, do_write, nsid, slba, step,
+		                         (uint16_t)(nlb - 1), warmup, qd, &bench_errors)) {
+			printf("ERR: warmup %s timed out\n", op_name);
 			return;
 		}
-		lba += step;
 	}
 
 	mmio_rd_before       = bench_mmio_rd32_count;
@@ -1399,19 +1502,11 @@ static void nvme_bench_cmd(char *str)
 
 	io_tick_start = bench_timer_get();
 	lba = slba + (uint64_t)warmup * step;
-	for (uint32_t i = 0; i < count; i++) {
-		if (do_write)
-			nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
-		else
-			nvme_cmd_read(0x30, nsid, (uint64_t)IO_RD_BUF_ADDR, lba, (uint16_t)(nlb - 1), cmd);
-
-		if (nvme_io_submit(cap, cmd, cqe)) {
-			printf("ERR: benchmark %s failed at iter %" PRIu32 " lba %" PRIu64 "\n",
-			       op_name, i, lba);
-			decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
-			return;
-		}
-		lba += step;
+	bench_errors = 0;
+	if (nvme_io_bench_window(cap, do_write, nsid, lba, step,
+	                         (uint16_t)(nlb - 1), count, qd, &bench_errors)) {
+		printf("ERR: benchmark %s timed out (completed < count)\n", op_name);
+		return;
 	}
 	io_tick_end = bench_timer_get();
 	io_ticks = bench_ticks_elapsed(io_tick_start, io_tick_end);
@@ -1435,9 +1530,10 @@ static void nvme_bench_cmd(char *str)
 
 	total_bytes = (uint64_t)count * (uint64_t)nlb * 512ull;
 
-	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 "\n",
-	       op_name, count, nlb, slba, step);
+	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 " qd=%" PRIu32 "\n",
+	       op_name, count, nlb, slba, step, qd);
 	printf("warmup: %" PRIu32 "\n", warmup);
+	printf("errors: %" PRIu32 "\n", bench_errors);
 	printf("ticks_setup: %" PRIu64 "\n", setup_ticks);
 	printf("ticks_io: %" PRIu64 "\n", io_ticks);
 	printf("ticks_total: %" PRIu64 "\n", total_ticks);

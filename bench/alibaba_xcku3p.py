@@ -174,7 +174,7 @@ class BaseSoC(SoCCore):
         # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
 
         hostmem_base = 0x10000000
-        hostmem_size = 0x8000  # 32KB
+        hostmem_size = 0x80000  # 512KB: admin/IO queues + per-slot 4KiB I/O buffers for QD>1.
 
         def hostmem_decoder(a):
             return (a >= hostmem_base) & (a < (hostmem_base + hostmem_size))
