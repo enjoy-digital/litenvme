@@ -127,26 +127,30 @@ table above is one full sweep.)
    142 → 222 MB/s across QD 1→63, flattening by QD≈16–32 at ~220 MB/s.
 
 2. **It overlaps device latency (so QD=1 was partly latency-bound).** Detailed read
-   counters (`count=1000`):
+   counters (`count=1000`, 4 KiB → 32 beats/cmd at 128-bit → ~25,700 beats expected;
+   `dma_wr_beats` is reported as the firmware's per-run counter delta, 257,000):
 
-   | QD | ticks_io | io_submit | io_cq_poll | mmio_wr32 | dma_wr_beats |
-   |----|----------|-----------|------------|-----------|--------------|
-   | 1  | 435,783  | 1000      | 1011       | 2002      | 25600        |
-   | 4  | 263,299  | 1000      | 1006       | 1184      | 25600        |
-   | 16 | 190,581  | 1000      | 1007       | 1135      | 25600        |
-   | 63 | 224,298  | 1000      | 1007       | 1132      | 25600        |
+   | QD | ticks_io  | io_submit | io_cq_poll | mmio_wr32 | dma_wr_beats |
+   |----|-----------|-----------|------------|-----------|--------------|
+   | 1  | 4,893,844 | 1000      | 9022       | 2000      | 257,000      |
+   | 4  | 2,685,663 | 1000      | 1511       | 1005      | 257,000      |
+   | 16 | 2,358,879 | 1000      | 1139       | 253       | 257,000      |
+   | 63 | 2,294,842 | 1000      | 1064       | 80        | 257,000      |
 
-   `ticks_io` more than halves from QD=1 to QD=16 — queue depth does overlap the device
-   completion latency. Doorbell coalescing works (`mmio_wr32` 2002 → ~1132, ~2/cmd →
-   ~1.1/cmd) and CQ polling is at its floor (~1 poll/cmd). The slight regression at
-   QD=63 vs QD=16 is run-to-run device-timing variance, not a trend.
+   `ticks_io` drops ~2.1× from QD=1 (4.89M) to QD=63 (2.29M) — queue depth overlaps the
+   device completion latency. Two effects compound: CQ-poll spins collapse
+   (`io_cq_poll` 9022 → ~1064, i.e. ~9 spins/cmd waiting for a completion at QD=1 down to
+   ~1/cmd once commands are pipelined), and doorbell writes coalesce hard
+   (`mmio_wr32` 2000 → 80, from ~2/cmd to far less than 1/cmd as the batch fills). Payload
+   moved (`dma_wr_beats`) is constant, confirming identical work per run.
 
 3. **But it plateaus ~7× below the link.** ~220 MB/s is far from the usable PCIe Gen2 x4
-   ceiling (~1.5–1.6 GB/s). Once device latency is hidden by queue depth, the limit
-   becomes the firmware's serial per-command submit work — building each 64-byte SQE in
-   host memory one dword at a time through the **CSR debug read-modify-write port**
-   (`hostmem_csr_csr_*`, 16 writes/SQE). The soft CPU cannot construct SQEs fast enough
-   to fill the link.
+   ceiling (~1.5–1.6 GB/s). At QD=63, `ticks_io ≈ 2.29M / 1000 ≈ 2295` cycles/command
+   (~18.4 µs) — and CQ polling and doorbells are no longer the cost (both collapsed
+   above). What remains is the firmware's serial per-command submit work: building each
+   64-byte SQE in host memory one dword at a time through the **CSR debug
+   read-modify-write port** (`hostmem_csr_csr_*`, 16 writes/SQE). The soft CPU cannot
+   construct SQEs fast enough to fill the link.
 
 ### Conclusion / next lever
 

@@ -120,9 +120,9 @@ below):**
 
 - read : 115 → 224 MB/s across qd 1→63 (~1.9×), plateau ~220 MB/s by qd≈16–32.
 - write: 142 → 222 MB/s (~1.6×), same plateau.
-- Detailed read counters: `ticks_io` 435,783 (qd1) → 190,581 (qd16) — queue depth DOES
-  overlap device latency (so QD=1 was partly latency-bound). `mmio_wr32` 2002→~1132
-  (doorbell coalescing works), `io_cq_poll`≈1000 (floor), `dma_wr_beats`=25600 const.
+- Detailed read counters (measured): `ticks_io` 4,893,844 (qd1) → 2,294,842 (qd63),
+  ~2.1× — queue depth overlaps device latency. `io_cq_poll` 9022→1064 (poll spins
+  collapse), `mmio_wr32` 2000→80 (doorbell coalescing), `dma_wr_beats`=257,000 const.
 - Interpretation: firmware QD is a real but limited ~2× win; it plateaus ~7× below the
   ~1.5 GB/s link because the firmware builds each 64-byte SQE one dword at a time through
   the slow CSR hostmem debug port. The next lever is the RTL IO engine (build SQEs / reap
