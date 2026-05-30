@@ -1,5 +1,32 @@
 # LiteNVMe — Development Progress Log
 
+## SIM DOES NOT REPRODUCE (2026-05-30) — bug is HW-specific or an address mismatch
+
+Tried hard to reproduce the sentinel failure in simulation; could NOT. The engine's AXI
+write path is correct in every sim config tried:
+- Existing test_io_engine_integration.py (2-master arbiter, engine master 0): passes (3/3,
+  validates SQE CIDs the SSD reads back).
+- Engine as LAST master in a 2-master arbiter [ssd, engine]: 6 completions.
+- 3-master arbiter [ssd, idle_bridge, engine] (mirrors HW [dma, csr, engine], engine last):
+  6 completions.
+(A direct eng.axi.connect(backend.axi) with no arbiter DID drop the write, but that's an
+AXIInterface.connect() artifact, not the real path — the SoC always uses AXIArbiter. Red
+herring; the throwaway test exercising it was removed.)
+
+So the HW failure (sentinel survives → engine SQE write doesn't land at IO_SQ_ADDR) is NOT
+a logic bug the sim sees. Remaining possibilities:
+  (A) HW-specific: timing/CDC/synthesis, or a real idle master (dma.axi/csr.axi) driving an
+      AXI signal in a way the sim's idle models don't — needs LiteScope on the engine's AXI
+      master (aw/w/b valid+ready+addr+strb) to see what actually happens on the bus.
+  (B) Address mismatch: the engine's writes DO commit but to a different backend offset than
+      IO_SQ_ADDR on HW (the sentinel only checked SQ[0]'s slot, 16 dwords). A full-window
+      scan distinguishes (A) from (B): if some other region went non-zero after the run,
+      it's (B) an addressing bug; if the whole window stays zero, it's (A) writes-lost.
+
+NEXT (cheap, firmware-only): add a backend memory scan to nvme_engine_diag — after the run,
+walk the hostmem window in big strides and print any non-zero dwords outside the queues.
+Decides (A) vs (B) without a rebuild-heavy LiteScope bring-up. Then act accordingly.
+
 ## SENTINEL PROOF (2026-05-30, reproduced 2x) — engine AXI writes never commit to backend
 
 Decisive, run-on-board, reproduced result. The `nvme_engine_diag` sentinel test:
