@@ -405,37 +405,43 @@ class LiteNVMeIOEngine(LiteXModule):
             )
         )
 
-        # Reap: read the 4 CQE dwords from host memory.
+        # Reap: read the CQE status dword (dw3 = phase|status|cid) FIRST and check the phase
+        # bit before reading anything else. The device writes the CQE payload before flipping
+        # the phase bit, and dw3 is a single atomic 32-bit read; so observing the new phase
+        # guarantees the whole entry is committed. Reading dw3-first (instead of dw0..dw3 in
+        # order) avoids a torn read at the ring wrap, where the engine could otherwise sample
+        # dw0..dw2 from the PREVIOUS entry, then catch the just-flipped phase in dw3 and emit
+        # a completion with a stale cid/sqhd. (Observed on HW as exactly one bad CQE at
+        # completion index == qsize; sim's atomic CQE model never exposed it.)
         fsm.act("REAP-READ",
-            NextValue(cqe_idx, 0),
-            NextState("REAP-READ-LOOP"),
-        )
-        fsm.act("REAP-READ-LOOP",
             self.mem.stb.eq(1),
             self.mem.we.eq(0),
-            self.mem.adr.eq((cq_slot_adr >> 2) + cqe_idx),
+            self.mem.adr.eq((cq_slot_adr >> 2) + 3),  # dw3: phase/status/cid (atomic).
             If(self.mem.ack,
-                Case(cqe_idx, {
-                    0: NextValue(cqe0, self.mem.dat_r),
-                    1: NextValue(cqe1, self.mem.dat_r),
-                    2: NextValue(cqe2, self.mem.dat_r),
-                    3: NextValue(cqe3, self.mem.dat_r),
-                }),
-                If(cqe_idx == (CQE_DWORDS - 1),
-                    NextState("REAP-CHECK"),
-                ).Else(
-                    NextValue(cqe_idx, cqe_idx + 1),
-                )
+                NextValue(cqe3, self.mem.dat_r),
+                NextState("REAP-CHECK"),
             )
         )
 
-        # Check the phase bit. If matched -> a completion is available.
+        # Check the phase bit. If matched -> the entry is complete; fetch sqhd then emit.
         fsm.act("REAP-CHECK",
             If(cqe_phase == cq_phase,
-                NextState("REAP-EMIT"),
+                NextState("REAP-READ-SQHD"),
             ).Else(
                 # Not ready yet: go back to arbitration (try submitting more meanwhile).
                 NextState("IDLE"),
+            )
+        )
+
+        # Phase matched: read dw2 (sqhd). Safe now -- the device wrote the payload before the
+        # phase, so dw2 is the current entry's.
+        fsm.act("REAP-READ-SQHD",
+            self.mem.stb.eq(1),
+            self.mem.we.eq(0),
+            self.mem.adr.eq((cq_slot_adr >> 2) + 2),  # dw2: sqhd/sqid.
+            If(self.mem.ack,
+                NextValue(cqe2, self.mem.dat_r),
+                NextState("REAP-EMIT"),
             )
         )
 
