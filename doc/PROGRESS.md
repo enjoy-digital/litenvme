@@ -1,5 +1,39 @@
 # LiteNVMe — Development Progress Log
 
+## CLUE (2026-05-30) — erroring CID is ALWAYS a multiple of 4 (addressing artifact, not generic CID reuse)
+
+From on-disk captures (reliable), the SC=0x03 error at idx=64 has these CIDs across runs:
+  0, 8, 24, 48 (this round) and 4, 36, 44, 60 (prior round) -- EVERY one divisible by 4.
+status alternates 0x0006/0x0007 (= SC=0x03 with phase bit 0/1). 8/8 cids ≡ 0 mod 4 is
+structural (chance ~ (1/4)^8), so the conflict is NOT random CID reuse -- it points to an
+ADDRESSING / field artifact tied to the 4-dword (16-byte) CQE granularity at the wrap.
+
+Refined hypothesis: at the first CQ wrap (idx=64, cq_head 63->0), the engine reaps a CQE
+whose extracted cid is a multiple of 4 -- consistent with cid being mis-derived from a
+dword-offset/lane (CQE = 4 dwords; cq_head*4 appears in the dword address
+(cq_base>>2)+cq_head*4+k). I.e. the engine likely reads the WRONG CQ slot or wrong dword at
+the wrap and extracts a garbage "cid" that is ~ a multiple of 4; the device may also be
+genuinely flagging 0x03 because the engine submitted a malformed/duplicate SQE built from
+that same wrap-time confusion. (The dw3-first reap reorder, 7f84b01, changed the read order
+but NOT the slot/lane addressing, so it didn't help -- consistent.)
+
+This SUPERSEDES the "generic CID reuse / per-slot busy bit" theory: a per-slot busy gate
+would not explain why the bad cid is always ≡0 mod 4. The fix is more likely in the CQ
+slot/dword ADDRESSING at the wrap (cq_slot_adr / the bridge lane for the CQE read, or
+cq_head update timing) than in submit flow-control.
+
+NEXT (needs HW instrumentation, do when channel is stable):
+1. At the error, also capture the RAW CQE dwords the engine read (cqe0..cqe3) and cq_head at
+   idx=64 -- compare to the actual CQ[64%qsize] contents in host memory. If they differ, the
+   engine read the wrong slot/lane (addressing bug). If they match and the device wrote
+   SC=0x03, the device got a bad SQE (submit-side).
+2. Check cq_slot_adr math and the bridge read lane for a 16-byte CQE at the wrap boundary.
+3. Re-derive whether cid extraction picks up cq_head*4 under any path.
+
+Honest status: a precise, reliable clue (cid ≡ 0 mod 4, idx=qsize) but NOT yet root-caused;
+no fix attempted (would be speculative). Engine reads still error 1/1000 at the wrap; writes
+unvalidated. T1-T4 done; T5 open with this sharpened lead; T6 not started.
+
 ## SIM CHECK (2026-05-30) — CID-tracking model does NOT reproduce the conflict
 
 Ran a sim (qsize=8, qd=4, 20 cmds = 2 ring wraps) with a model SSD that tracks outstanding
