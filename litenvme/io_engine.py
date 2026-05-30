@@ -168,6 +168,13 @@ class LiteNVMeIOEngine(LiteXModule):
 
         # Runtime config (set by CSR or directly).
         self.enable      = Signal()
+        # Ring-reset pulse: re-initialize sq_tail/cq_head/cq_phase/inflight/slot_busy to the
+        # fresh-queue state. Firmware pulses this AFTER (re)creating the IO SQ/CQ and BEFORE
+        # enabling the engine, so the engine's ring pointers match the device's freshly-reset
+        # queues. Required because the firmware recreates the queues each run (resetting the
+        # device to head=0/phase=1) while the engine's pointers otherwise persist across runs
+        # -> desync (seen as the write path mis-reaping leftover CQEs / completed!=count).
+        self.ring_reset  = Signal()
         self.sq_base     = Signal(64)   # IO SQ base (host-memory byte address).
         self.cq_base     = Signal(64)   # IO CQ base (host-memory byte address).
         self.sq_db_adr   = Signal(64)   # SQ doorbell (BAR0 byte address).
@@ -321,7 +328,16 @@ class LiteNVMeIOEngine(LiteXModule):
         self.comb += self.busy.eq(~fsm.ongoing("IDLE"))
 
         fsm.act("IDLE",
-            If(can_submit,
+            # Firmware-controlled ring reset takes priority and only acts while idle, so it
+            # can never tear a transaction mid-flight (unlike gating on ~enable). Pulse it
+            # after (re)creating the IO queues and before enabling the engine.
+            If(self.ring_reset,
+                NextValue(sq_tail,  0),
+                NextValue(cq_head,  0),
+                NextValue(cq_phase, 1),
+                NextValue(self.inflight, 0),
+                *[NextValue(slot_busy[i], 0) for i in range(qsize)],
+            ).Elif(can_submit,
                 NextState("LATCH-REQ"),
             ).Elif(can_reap,
                 NextState("REAP-READ"),
@@ -519,6 +535,10 @@ class LiteNVMeIOEngine(LiteXModule):
     # CSRs ---------------------------------------------------------------------------------------
     def add_csr(self):
         self._enable = CSRStorage(description="Enable the hardware I/O engine.")
+        self._ring_reset = CSRStorage(fields=[
+            CSRField("reset", size=1, offset=0, pulse=True,
+                     description="Pulse to re-init ring state (after IO queue (re)create).")
+        ])
         self._sq_base_lo = CSRStorage(32, description="IO SQ base (host byte addr) low.")
         self._sq_base_hi = CSRStorage(32, description="IO SQ base (host byte addr) high.")
         self._cq_base_lo = CSRStorage(32, description="IO CQ base (host byte addr) low.")
@@ -538,6 +558,7 @@ class LiteNVMeIOEngine(LiteXModule):
 
         self.comb += [
             self.enable.eq(self._enable.storage),
+            self.ring_reset.eq(self._ring_reset.fields.reset),
             self.sq_base.eq(Cat(self._sq_base_lo.storage, self._sq_base_hi.storage)),
             self.cq_base.eq(Cat(self._cq_base_lo.storage, self._cq_base_hi.storage)),
             self.sq_db_adr.eq(Cat(self._sq_db_lo.storage, self._sq_db_hi.storage)),

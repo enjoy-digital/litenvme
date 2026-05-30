@@ -1645,6 +1645,8 @@ static void nvme_engine_bench_cmd(char *str)
 	/* PRP-list region (only used if nlb > 16; placed after the per-slot data buffers). */
 	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write,
 	                    (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u));
+	/* Re-init engine ring state to match the just-(re)created IO SQ/CQ before enable. */
+	nvme_engine_engine_ring_reset_write(1);
 	nvme_engine_engine_enable_write(1);
 
 	/* Prefill per-slot data buffers (write source pattern; read dest cleared). */
@@ -1845,6 +1847,8 @@ static void nvme_engine_diag_cmd(char *str)
 	}
 
 	/* Enable engine, then kick the generator. */
+	/* Re-init engine ring state to match the just-(re)created IO SQ/CQ before enable. */
+	nvme_engine_engine_ring_reset_write(1);
 	nvme_engine_engine_enable_write(1);
 	nvme_gen_ctrl_write(1);
 
