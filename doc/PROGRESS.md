@@ -1,5 +1,32 @@
 # LiteNVMe — Development Progress Log
 
+## SIM CHECK (2026-05-30) — CID-tracking model does NOT reproduce the conflict
+
+Ran a sim (qsize=8, qd=4, 20 cmds = 2 ring wraps) with a model SSD that tracks outstanding
+CIDs and would flag SC=0x03 on reuse: result `completions=20 conflicts=[] err_cqes=[]`. So
+the engine does NOT submit a CID while the model still holds it outstanding -- the inflight
+window + reap ordering are correct against a SYNCHRONOUS device.
+
+Why it doesn't reproduce the HW error: my model retires a CID the instant it posts the CQE.
+A real SSD frees a CID with latency, and (per NVMe) only considers an SQ slot / CID
+reusable after it has advanced its SQ head -- which the host signals implicitly via the
+NEXT SQ-tail doorbell and the device tracks via sqhd it returns. The HW SC=0x03 at exactly
+idx=qsize means: at the first wrap the engine writes SQE into slot 0 and rings the SQ
+doorbell, but the device still has the ORIGINAL slot-0 command (CID 0) in-flight/not-yet-
+freed. To reproduce in sim requires a model with realistic per-command device latency where
+CID-free lags several commands behind the CQE post.
+
+This is a genuine but subtle submit/flow-control bug at the ring wrap that needs either that
+richer sim model or careful HW iteration. Given the session length + flaky HW channel, it's
+left as the next focused task (small, well-scoped):
+  - Option A (most likely correct fix): gate SUBMIT not just on aggregate inflight<qd but on
+    the SPECIFIC slot/CID being free (track a per-slot busy bit cleared at REAP-EMIT for that
+    cid). This guarantees a CID is never re-emitted until its own CQE was reaped.
+  - Option B: ensure the CQ-head doorbell is correctly rung at the wrap (cq_head=0) so the
+    device frees old CIDs promptly.
+  - Verify by adding a latency+CID-tracking model SSD to test_io_engine_integration.py that
+    fails on reuse-before-free, then confirm on HW (errors=0 at idx=64, reproduced).
+
 ## SHARPENED DIAGNOSIS (2026-05-30) — SC=0x03 = "Command ID Conflict" at the wrap
 
 Decoding the HW error status (reliable fact, not channel-dependent): NVMe generic status
