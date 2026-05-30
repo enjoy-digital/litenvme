@@ -173,8 +173,13 @@ class LiteNVMeRequestGen(LiteXModule):
                 ),
             ),
 
-            # Done when every submitted command has completed.
-            If((self.completed + cpl_fire) == self.count,
+            # Done when at least `count` completions have been seen. Use >= (not ==): if the
+            # engine ever emits MORE completions than submitted (reaping a stale/extra CQE),
+            # `completed` can jump past `count`; an exact `==` would then never match and the
+            # run would hang (observed on HW as a small-count write timeout, completed=65/16).
+            # `>=` makes the run always terminate; an over-count then shows as completed>count
+            # (a diagnosable value) instead of a hang.
+            If((self.completed + cpl_fire) >= self.count,
                 NextValue(running, 0),
                 NextValue(done_r,  1),
                 NextState("IDLE"),
