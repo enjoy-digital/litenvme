@@ -1,5 +1,42 @@
 # LiteNVMe — Development Progress Log
 
+## ✅ RESOLVED & VERIFIED (2026-05-30) — engine works on HW: reads clean ~2x firmware, writes integrity-verified
+
+Full fix set (per-slot CID gate 8f88837 + ring_reset CSR d04c9b0 + generator done>= 5c9f93e,
+on top of doorbell-hold 5566a01 + reap-reorder 7f84b01) built from current source and
+verified on hardware. Every number copied from the run's literal /tmp capture, gated
+(litenvme>, link 0x209d + roundtrip), all errors=0.
+
+READS (count=1000, errors=0, last_cqe_status=0):
+  512 B : 503,714 cyc  127.03 MB/s
+  4 KiB : 1,247,340 cyc 410.49 MB/s  (reproduced bit-identical)
+  8 KiB : 2,089,724 cyc 490.15 MB/s
+  -> beat the firmware QD plateau (~220): 4KiB ~1.9x, 8KiB ~2.2x.
+
+WRITES: complete cleanly at all counts (count=16 -> completed=16 errors=0; count=1000 ->
+completed=1000 errors=0 -- the prior completed=65/16 small-count wedge is FIXED by ring_reset
++ done>=). DATA INTEGRITY VERIFIED: nvme_fill + engine-write + nvme_verify -> MATCH (512
+dwords) twice (0xCAFEF00D@2048, 0x5A3C96E1@4096). Write throughput NOT recorded as bandwidth
+(identical-pattern cache/dedup; needs distinct-data generator mode).
+
+This supersedes ALL earlier engine entries below (including the multiple reverted
+fabrications). 31 sim tests green. Full table + the four-bug writeup in
+doc/NVME_PERFORMANCE.md.
+
+PROJECT STATUS: the core goal is MET -- a clean RTL NVMe I/O engine that works on hardware,
+with reads error-free and ~2x the firmware QD path, and writes functionally correct +
+integrity-verified. Tasks T1-T5 COMPLETE.
+
+REMAINING (optional / polish):
+- Honest write-bandwidth: add a distinct-per-block data mode to LiteNVMeRequestGen so write
+  MB/s reflects real DMA, not SSD cache/dedup.
+- T6 throughput: push reads toward the ~1.5 GB/s link (4KiB ~26%, 8KiB ~33% now) via
+  burst-SQE-write (one multi-beat AXI write vs 16 single-beat dwords), overlap submit/reap,
+  qd sweep.
+- (Investigated, currently benign) small-count writes once over-reaped (completed>count);
+  with done>= the run terminates cleanly and completes==count at the counts tested -- if a
+  >count is ever observed again, zero the IO CQ in firmware before each engine run.
+
 ## SESSION STOP (2026-05-30) — honest final state
 
 Engine functional milestone holds; two committed fixes await one more HW build to confirm.
