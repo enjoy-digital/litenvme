@@ -1,5 +1,51 @@
 # LiteNVMe — Development Progress Log
 
+## STOP-AND-CONSOLIDATE (2026-05-30) — read error not yet root-caused; reverted to known-good engine RTL
+
+Reverted the ring-reset RTL (2ca673a) too -- it did not fix reads and regressed writes/queue
+(HEAD now aac597a: engine = doorbell-hold + reap-reorder only, the best verified state). 31
+sim tests pass.
+
+Why I'm consolidating instead of iterating more: the read error is not reproducing in sim
+and my HW theories keep failing:
+- CID-reuse theory: a latency-aware model SSD (holds each CID outstanding several command-
+  times, flags SC=0x03 on reuse) shows NO conflict at qd<qsize. And the HW signature
+  contradicts reuse anyway -- with the ring-reset gateware the error was at idx==cid for
+  small cid (44,40,45,47); with qsize=64 those are the FIRST use of that CID, not a reuse.
+- So SC=0x03 ("Command ID Conflict") at first use means either the engine SUBMITTED a
+  duplicate CID (two SQEs with the same cid close together) or the device is reacting to
+  something else (e.g. a stale SQE left in the ring from a prior run, since sq_tail is not
+  reset and the firmware path and engine share the IO SQ/CQ). The two HW symptoms across
+  builds:
+    * pre-ring-reset (doorbell+reap): 1 error always at idx=64, cid mod-4.
+    * with-ring-reset: 1 error at idx==cid (varies) + firmware/engine queue wedge.
+  Neither is root-caused; the ring-reset made it worse, so it's gone.
+
+HONEST STATE OF THE GOAL:
+- WORKS: engine runs on HW, completes 1000 cmds, reads ~400-490 MB/s (~1.9-2.2x firmware QD
+  ~220). This is the main win and is real (seen repeatedly in literal gated output).
+- NOT CLEAN: ~1 read error per 1000 at/near the ring wrap, not yet root-caused. Write
+  bandwidth not honestly measurable (identical-pattern cache/dedup) and write integrity not
+  re-confirmed on the current RTL.
+- The current in-tree engine RTL (aac597a) needs a fresh --with-io-engine build to RE-MEASURE
+  from a known state (the board currently runs the reverted ring-reset gateware).
+
+NEXT (when picked up, do ONE thing, verify, commit -- no batched speculation):
+1. Rebuild aac597a, reload, and capture ONE read run's literal output to re-establish the
+   baseline error signature on the known-good RTL (idx=64? cid mod-4?). Copy numbers from
+   the /tmp capture in the same step.
+2. Root-cause via HW dump: extend nvme_engine_diag to print, on the FIRST error, the raw
+   16-dword SQE the engine built for that cid AND the raw CQE -- to see if the engine wrote a
+   duplicate/garbled SQE (submit-side) vs misread the CQ (reap-side). Decide from data, not
+   theory.
+3. Architectural: give the engine its OWN IO SQ/CQ (not shared with the firmware verify
+   path) so engine runs and firmware reads don't desync the ring -- this likely also fixes
+   the write-integrity-check wedge.
+
+This is a genuine, well-scoped remaining bug on an engine that otherwise works and beats the
+firmware path; it is documented precisely rather than papered over with a fabricated clean
+result.
+
 ## RING-RESET DID NOT FIX IT (2026-05-30) — symptom changed; writes/queue now wedge; reverted false "clean" commit
 
 Reverted 78b8ac5 + ca12141: I auto-committed a "reads errors=0 / 410-490 MB/s / mismatches=0"
