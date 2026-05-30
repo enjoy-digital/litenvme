@@ -1869,44 +1869,7 @@ static void nvme_engine_diag_cmd(char *str)
 		       (unsigned)nvme_gen_first_err_cid_read(), (unsigned)nvme_gen_first_err_idx_read());
 	}
 
-	/*
-	 * Doorbell-rescue probe: if the engine submitted SQEs but got no completions, ring the
-	 * SQ doorbell HERE via the firmware's known-good MMIO path (the same pcie_mmio accessor
-	 * that admin/io setup used successfully). If the SSD then completes, the engine's own
-	 * doorbell write (via the separate mmio_db crossbar master) is not reaching the device.
-	 */
-	uint32_t submitted_now = nvme_engine_engine_submitted_read();
-	if (submitted_now != 0 && nvme_engine_engine_completed_read() == 0) {
-		puts("== doorbell-rescue: ringing SQ doorbell via firmware MMIO path ==");
-		(void)mmio_wr32(sq_db, submitted_now);   /* new SQ tail = #submitted */
-		mmio_posted_flush(bar0_base + NVME_CSTS);
-		uint32_t rstart = bench_timer_get();
-		while (!bench_timeout_expired(rstart, CONFIG_CLOCK_FREQUENCY))  /* up to ~1s */
-			if (nvme_engine_engine_completed_read() != 0)
-				break;
-		uint32_t cqe_after[4];
-		hostmem_read_dwords(IO_CQ_ADDR, cqe_after, 4);
-		printf("rescue: eng_completed=%u gen_completed=%u CQ[0].dw3=0x%08x (phase=%u)\n",
-		       (unsigned)nvme_engine_engine_completed_read(), (unsigned)nvme_gen_completed_read(),
-		       (unsigned)cqe_after[3], (unsigned)((cqe_after[3] >> 16) & 0x1u));
-	}
-
 	nvme_engine_engine_enable_write(0);
-
-	/* Dump the first SQ entry (16 dwords) the engine built, and the first CQ entry. */
-	uint32_t sqe[16];
-	uint32_t cqe[4];
-	hostmem_read_dwords(IO_SQ_ADDR, sqe, 16);
-	hostmem_read_dwords(IO_CQ_ADDR, cqe, 4);
-	printf("SQ[0] sentinel %s\n",
-	       sqe[0] == 0x5E471A10u ? "SURVIVED: engine write missed" :
-	       (sqe[0] == 0 ? "gone(zero)" : "overwritten"));
-	for (int i = 0; i < 16; i += 4)
-		printf("  dw%-2d: %08x %08x %08x %08x\n", i, (unsigned)sqe[i], (unsigned)sqe[i+1],
-		       (unsigned)sqe[i+2], (unsigned)sqe[i+3]);
-	printf("CQ[0]: %08x %08x %08x %08x phase=%u\n",
-	       (unsigned)cqe[0], (unsigned)cqe[1], (unsigned)cqe[2], (unsigned)cqe[3],
-	       (unsigned)((cqe[3] >> 16) & 0x1u));
 	(void)op_name;
 }
 #endif /* NVME_ENGINE_AVAILABLE */
