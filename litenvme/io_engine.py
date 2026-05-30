@@ -310,19 +310,7 @@ class LiteNVMeIOEngine(LiteXModule):
         self.comb += self.busy.eq(~fsm.ongoing("IDLE"))
 
         fsm.act("IDLE",
-            # Re-initialize the ring state whenever the engine is disabled, so each enable
-            # starts a fresh run from a known position. Without this the SQ tail / CQ head /
-            # CQ phase persist across runs (e.g. after a small `nvme_engine_diag` the next
-            # bench would start at cq_head=4, cq_phase=1 instead of 0/1) and desync from the
-            # device's freshly-(re)created queues -- producing spurious completions/errors,
-            # notably around the first ring wrap. (submitted/completed are cumulative status
-            # counters and are intentionally left alone.)
-            If(~self.enable,
-                NextValue(sq_tail,  0),
-                NextValue(cq_head,  0),
-                NextValue(cq_phase, 1),
-                NextValue(self.inflight, 0),
-            ).Elif(can_submit,
+            If(can_submit,
                 NextState("LATCH-REQ"),
             ).Elif(can_reap,
                 NextState("REAP-READ"),
