@@ -1753,6 +1753,12 @@ static void nvme_engine_diag_cmd(char *str)
 		if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
 	}
 
+	/* Unconfounded doorbell test: if NVME_DIAG_FWRING is set below, the engine's SQ
+	 * doorbell is pointed at a harmless scratch BAR0 offset (0xf00, unused, within BAR0
+	 * size 0x4000) so the engine's own ring does NOT advance the SSD-visible SQ tail. After
+	 * the engine submits its SQEs, firmware rings the REAL SQ doorbell via the proven
+	 * pcie_mmio path. If the SSD then completes, the engine's own doorbell TLP is the bug. */
+
 	if (nlb == 0 || nlb > 16) { puts("ERR: nlb must be 1..16 for engine diag."); return; }
 	if (count == 0)           { puts("ERR: count must be >= 1."); return; }
 

@@ -1,5 +1,40 @@
 # LiteNVMe — Development Progress Log
 
+## ROOT CAUSE ISOLATED (2026-05-30, reproduced 2x) — engine's SQ-doorbell TLP never reaches BAR0
+
+Unconfounded firmware-rings-doorbell test, conclusive. Setup: point the ENGINE's SQ
+doorbell at a scratch BAR0 offset (0xf00, unused) so the engine's own ring is a no-op; let
+the engine submit its SQEs (they land correctly); then FIRMWARE rings the REAL SQ doorbell
+via the proven pcie_mmio path. Result (reproduced 2x, firmware booted to litenvme>, seqread
+selftest OK):
+
+  SQ[0] sentinel overwritten (valid SQE in place), submitted=4, completed=0 after the run,
+  then == doorbell-rescue ==: rescue eng_completed=4 gen_completed=4 CQ[0] phase=1
+
+=> With a firmware doorbell, the SSD completes all 4 commands (completed 0→4, phase flips).
+The ONLY variable is who rings the doorbell. Therefore: **the engine's own SQ-doorbell
+MemWr TLP, sent via its dedicated `mmio_db` PCIe crossbar master, does not reach the SSD's
+BAR0.** Everything else in the engine works: SQE build + AXI write to host memory (correct),
+CQE reap (the engine reaped the 4 completions once firmware rang -> eng_completed=4), queue
+config, generator.
+
+This is the whole bug. Fix is in the engine's doorbell path only:
+- bench/alibaba_xcku3p.py: mmio_db = LiteNVMePCIeMmioAccessor(port=io_db_port, tag=0x45,
+  with_csr=False) on a dedicated crossbar master; io_engine.connect_mmio(mmio_db).
+- Compare against the WORKING pcie_mmio (tag=0x44) which firmware uses successfully.
+- Suspects: (a) the dedicated master port isn't actually routed to the PCIe endpoint /
+  needs different setup than the firmware's; (b) connect_mmio drives something wrong for a
+  posted MemWr (it sets wsel=0xf, len=1, but check requester_id / the REQUEST `we`/`channel`
+  fields the accessor needs for a write TLP that egresses); (c) the engine's mmio_start
+  pulse + the accessor's edge-detect interact so the TLP is formed but not emitted. Since
+  the SAME accessor class works for firmware via CSR, focus on what differs when driven by
+  connect_mmio vs the CSR fields, and on the crossbar master port wiring.
+
+NEXT: read litenvme/mem.py REQUEST formation for writes + how io_db_port/mem_port are
+obtained in bench, and diff. Likely a small wiring/field fix, then rebuild + rerun this same
+FWRING test expecting eng_completed=4 WITHOUT the firmware ring (i.e. set NVME_DIAG_FWRING
+0 / restore engine sq_db and confirm the engine's own ring now completes).
+
 ## VERIFIED STATE (2026-05-30) — engine SQEs land correctly; SSD never completes (doorbell path)
 
 This entry is trustworthy: the firmware linked (no RAM overflow), BOOTED to `litenvme>`
