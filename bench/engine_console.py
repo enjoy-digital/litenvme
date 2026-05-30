@@ -83,11 +83,16 @@ def cmd(command, settle, outfile):
     b.close()
     txt = out.decode("utf-8", "replace")
     open(outfile, "w").write(txt)
-    # Gate flags for the caller.
-    booted = "litenvme>" in txt
-    notfound = "Command not found" in txt
-    print("CAP bytes=%d litenvme=%d notfound=%d -> %s" % (len(out), booted, notfound, outfile))
-    return 0
+    # HARD GATE: a valid capture must reach the firmware prompt 'litenvme>'. If it shows the
+    # BIOS prompt 'litex>' or 'Command not found', the firmware is NOT running (or the UART
+    # is being raced) -- the capture is INVALID and must NOT be used as a result.
+    at_fw   = "litenvme>" in txt
+    at_bios = ("litex>" in txt) or ("Command not found" in txt)
+    valid   = at_fw and not at_bios
+    print("CAP bytes=%d valid=%d at_fw=%d at_bios=%d -> %s%s" % (
+        len(out), valid, at_fw, at_bios, outfile,
+        "" if valid else "  [INVALID: not at firmware prompt -- do NOT record]"))
+    return 0 if valid else 3
 
 
 if __name__ == "__main__":
