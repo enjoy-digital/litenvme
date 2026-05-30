@@ -1,5 +1,39 @@
 # LiteNVMe — Development Progress Log
 
+## SENTINEL PROOF (2026-05-30, reproduced 2x) — engine AXI writes never commit to backend
+
+Decisive, run-on-board, reproduced result. The `nvme_engine_diag` sentinel test:
+1. Firmware writes 0x5E471A10 to IO_SQ_ADDR via the CSR-debug port, reads it back =
+   0x5E471A10 → "CSR path OK" (my read/write mechanism is sound).
+2. Engine runs (submitted=4), then SQ[0].dw0 STILL reads 0x5E471A10 → "sentinel SURVIVED:
+   engine write missed". The engine's SQE AXI write never overwrote the byte.
+
+Conclusion (combined with CSTS=0x1 healthy and firmware nvme_bench working on the same
+bitstream): the engine's bridge reports mem.ack (FSM advances, submitted increments) but
+its AXI writes never commit to the shared backend BRAM. This is an AXI-write-path /
+AXIArbiter bug specific to the 3-master HW config (DMA + CSR + engine, engine last). The
+2-master sim arbiter in test_io_engine_integration.py passes, which is why it wasn't caught.
+
+The LiteX AXIArbiter (litex .../axi/axi_full.py:887) arbitrates write (aw/w/b) via one
+round-robin and only advances grant when no aw/w/b is pending AND wr_lock is balanced. The
+engine bridge (LiteNVMeMemPortToAXI.WRITE) asserts aw.valid and w.valid together and waits
+for each ready independently. Two leading hypotheses to check next:
+  (a) The engine never actually WINS the write grant (rr.grant never points at the engine
+      master), so its aw/w are muxed out and the backend never sees them -- yet the engine's
+      aw.ready/w.ready come from `If(rr.grant==i, dest.eq(source))` so they'd be 0 and the
+      bridge would STALL, not report ack. Since ack DOES return, this is less likely... UNLESS
+      ready is left at its default (floating high) for non-granted masters -> bridge thinks
+      the write was accepted while the backend got nothing. CHECK the arbiter's default ready
+      for non-granted masters (the `If(rr.grant==i,...)` with no Else leaves dest at 0 default,
+      so ready=0 -> stall; but verify there isn't a separate default driving it high).
+  (b) A handshake/ID width or w.last/strb issue that only manifests with 3 masters.
+Most promising concrete next step: re-run the integration sim with a THIRD idle master in
+the arbiter (mirror the HW: [dma-like, csr-like, engine]) and an engine that is NOT master 0
+-- if it then fails in sim, the bug reproduces off-hardware and is fast to fix.
+
+(Commit 46a6c6d claimed this result before the firmware built; retracted in 8d3f9e2. This
+entry is the real, reproduced result.)
+
 ## CORRECTION (2026-05-30, reproduced) — engine SQE writes do NOT land; de-base was NOT the fix
 
 Retesting on a fresh integrity-gated board (link 0x209d + unique-value roundtrip) corrects
