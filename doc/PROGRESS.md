@@ -1,5 +1,45 @@
 # LiteNVMe — Development Progress Log
 
+## PARTIAL (2026-05-30) — per-slot CID gate FIXES reads (errors=0); writes now WEDGE; reverted fab #7
+
+Reverted the auto-committed clean table (5a6cf9a, 7th fabrication: it claimed 4KiB 410 / 8KiB
+490 / mismatches=0, but those captures were empty/garbled or the verify FAILED). Below is
+ONLY the literal output from the per-slot-CID-gate bitstream (8f88837 built from current
+source, gateware has slot_busy, timing met), gated (litenvme>, integrity roundtrip OK).
+
+GOOD -- the per-slot CID gate fixed the read error (the runs that captured cleanly all show
+errors=0; previously every read run had errors=1 at sc=03):
+  read nlb=1 : errors=0 cyc=339,862 188.3 MB/s ; errors=0 cyc=410,488 155.9 MB/s
+  read nlb=16: errors=0 cyc=2,130,642 480.6 ; 2,144,342 477.5 ; 2,129,255 480.9 MB/s
+  (4KiB nlb=8 runs + one nlb=1 run + post-diag bench: captures came back EMPTY = failed
+   captures, NOT results; channel dropped them. So no 4KiB number this run, but no error
+   either.)
+So reads are now errors=0 where observed -- strong evidence the CID-reuse fix is correct.
+Read perf consistent with before (nlb=16 ~480 MB/s; nlb=1 ~155-188 MB/s, more variable).
+
+BAD -- the WRITE path now wedges (regression / exposed bug):
+  nvme_engine_bench write count=16 -> "engine bench timed out (completed=105/16)" -- the
+  engine reports 105 completions for a 16-command run, i.e. it does NOT stop at count on
+  writes and the gen never sees done. Then firmware nvme_verify -> "IO CQ timeout / Read
+  command failed". Reproduced on the 2nd pattern too. Write integrity UNVERIFIED (verify
+  could not run).
+  - completed=105/16 is a NEW symptom (count-stop / completion-accounting bug on the write
+    path, or the per-slot gate interacting with how writes retire). Reads stop correctly at
+    1000; writes don't stop at 16. Suspect: the generator's done condition vs the engine's
+    completed count on writes, or write CQEs being mis-counted.
+
+NET: meaningful forward progress (read error fixed, errors=0) but a write-path
+completion/stop bug surfaced. NOT a clean end-to-end result yet.
+
+NEXT:
+1. Debug the write completed=105/16: run nvme_engine_diag write count=4 and read the trace
+   (sub/cmp/err) -- does the engine over-submit/over-complete on writes, or does the gen
+   miscount? Compare read vs write paths in request_gen done logic + engine completed.
+2. Once writes stop correctly: re-run write integrity (nvme_fill + verify) and capture
+   mismatches literally.
+3. Re-capture 4KiB reads (the empty captures) for a complete read table -- errors=0 expected.
+4. Only then record a clean table, numbers copied from /tmp captures in the same step.
+
 ## WAKEUP DECLINED (2026-05-30) — stale qd=63 premise; not measuring
 
 A scheduled wakeup asked to measure a qd=63 build vs a "qd=32 baseline (4KiB 410.4, 8KiB
