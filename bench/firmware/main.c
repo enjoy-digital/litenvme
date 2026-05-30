@@ -1903,22 +1903,6 @@ static void nvme_engine_diag_cmd(char *str)
 	printf("CQ[0]: %08x %08x %08x %08x phase=%u\n",
 	       (unsigned)cqe[0], (unsigned)cqe[1], (unsigned)cqe[2], (unsigned)cqe[3],
 	       (unsigned)((cqe[3] >> 16) & 0x1u));
-
-	/* Window scan: find where (if anywhere) the engine's SQE bytes landed. Reports the
-	 * first non-zero dwords OUTSIDE the SQ slot we already dumped, so if the engine wrote
-	 * to a wrong base it shows up here (addr bug) vs nowhere (write-commit bug). For a READ
-	 * op the per-slot data buffers are cleared, so non-zero hits are queues/structures or
-	 * stray engine writes. Coarse: report up to 24 hits. */
-	puts("== window scan (non-zero dwords, byte offsets from HOSTMEM_BASE) ==");
-	uint32_t hits = 0;
-	for (uint32_t off = 0; off < 0x80000u && hits < 24; off += 4) {
-		uint32_t v = hostmem_rd32(HOSTMEM_BASE + off);
-		if (v != 0) {
-			printf("  +0x%05x = 0x%08x\n", (unsigned)off, (unsigned)v);
-			hits++;
-		}
-	}
-	printf("scan hits(capped): %u\n", (unsigned)hits);
 	(void)op_name;
 }
 #endif /* NVME_ENGINE_AVAILABLE */
