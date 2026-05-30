@@ -168,6 +168,70 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## RTL I/O engine on hardware (measured 2026-05-31)
+
+The `LiteNVMeIOEngine` now runs on the Alibaba KU3P board (PCIe Gen2 x4) with a real NVMe
+SSD attached, driven by `nvme_engine_bench` (firmware kicks the engine + on-chip generator
+and reads back the engine's own counters — no host-channel arithmetic). Captured with the
+single-reader crossover-UART console (`bench/engine_console.py`, ANSI-stripped prompt gate)
+so every line below was literally printed by the board at a verified `litenvme>` prompt.
+Bring-up gate for both passes: `ping 0% loss`, `pcie_phy_link_status=0x209d`, CSR
+write/read roundtrip exact (double-read).
+
+**Functional result — rock solid (this is the headline).** Across BOTH passes and ALL six
+configs (read/write × 512 B / 4 KiB / 8 KiB), every single run reported:
+
+    completed: 1000    errors: 0    last_cqe_status: 0x0000/0x0001 (valid phase bit)
+
+That is 16/16 clean runs at `count=1000`. The engine builds SQEs, rings the doorbell, and
+reaps CQEs entirely in RTL, and the SSD completes every command with no errors. The diag
+command corroborates: `final sub=N cmp=N err=0`, `seqread selftest: OK`, `sentinel CSR path
+OK`. (Note: the engine's `submitted` CSR is a free-running cumulative counter — it reads
+1020, 2020, … 16020 across the session, i.e. exactly +1000 per run after the 20 left from a
+prior diag+bench; `completed`/`errors` are per-run. There is no over-submission.)
+
+**Throughput — two literal passes, shown raw.** Firmware computes throughput as
+`payload_bytes / (cycles / 125e6)`, i.e. engine command-processing time over real
+completions. Both passes, exactly as printed (MB/s):
+
+| config            | pass 1 (MB/s)        | pass 2 (MB/s)        | reproducible? |
+|-------------------|----------------------|----------------------|---------------|
+| read  512 B  nlb1 | 197.703              | 67.646               | NO (≈3×)      |
+| read  4 KiB  nlb8 | 463.153 / 453.624    | 453.172 / 438.104    | yes (~440–463)|
+| read  8 KiB nlb16 | 480.723              | 479.719              | yes (~480)    |
+| write 512 B  nlb1 | 602.835              | 601.673              | yes (~602)    |
+| write 4 KiB  nlb8 | 1521.554 / 1518.508  | 1522.545 / 1196.742  | mostly (~1520, 1 outlier) |
+| write 8 KiB nlb16 | 1012.066             | 1577.892             | NO (≈1.5×)    |
+
+**How to read these numbers honestly:**
+
+1. **They are engine throughput over real CQEs, not validated sustained media bandwidth.**
+   Writes far exceeding reads (4 KiB write ~1520 vs read ~455 MB/s) and several points at or
+   above the usable Gen2 x4 ceiling (~1.5 GB/s) mean the write path is write-cache-acked and
+   the repeated sequential-from-LBA-0 reads are partly read-cache-served. This benchmarks the
+   engine's control path against a (partly cached) device, which is the thing we are
+   optimizing — but it is NOT a claim about the SSD's steady-state NAND bandwidth.
+
+2. **Two configs are not reproducible** (512 B read 67–198; 8 KiB write 1012–1578). The
+   firmware-computed throughput is sensitive to SSD completion jitter within the measurement
+   window. Do not quote a single headline number for those.
+
+3. **The one clean comparative win:** 4 KiB read is reproducibly ~440–463 MB/s, ~2× the
+   firmware queue-depth plateau (~224 MB/s, table above) and ~4× firmware QD=1 (115 MB/s).
+   The RTL engine builds and reaps commands faster than the soft CPU, as intended.
+
+**Still TODO before any "X GB/s sustained" claim:** end-to-end data integrity through the
+engine (write known pattern → read back → compare), distinct-per-block write data, a
+cache-busting LBA spread, and an engine-side QD sweep. Until then the trustworthy statements
+are exactly: *the RTL engine is functional on hardware (1000/1000, errors=0, reproduced) and
+its 4 KiB read command throughput is ~2× the firmware path.*
+
+Reproduce (board up, firmware already at `litenvme>` prompt, from `bench/`):
+
+```sh
+./hw_measure.sh        # 8-command read+write battery, count=1000 -> /tmp/meas.log
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone

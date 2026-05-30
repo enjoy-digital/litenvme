@@ -15,10 +15,19 @@ litex_term. Usage:
 
 Both use one RemoteClient over the existing litex_server (port 1234). No second reader.
 """
-import sys, time
+import sys, time, re
 from litex import RemoteClient
 
 CSR = "build/alibaba_xcku3p/csr.csv"
+
+# The firmware prints a COLORIZED prompt: ESC[92;1m litenvme ESC[0m > . Raw substring
+# matching for "litenvme>" then fails even though the prompt is present. Strip ANSI/CSI
+# escape sequences before any prompt/validity check.
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def _strip(s):
+    return _ANSI.sub("", s)
 
 
 def _open():
@@ -69,7 +78,7 @@ def boot(fw_path):
     time.sleep(0.3)
     out = _collect(b, 2.0)
     b.close()
-    txt = out.decode("utf-8", "replace")
+    txt = _strip(out.decode("utf-8", "replace"))
     ok = "litenvme>" in txt
     print("BOOTCHK ok=%d tail=%r" % (ok, txt[-40:]))
     return 0 if ok else 1
@@ -81,7 +90,7 @@ def cmd(command, settle, outfile):
     _send(b, command + "\r")
     out = _collect(b, settle)
     b.close()
-    txt = out.decode("utf-8", "replace")
+    txt = _strip(out.decode("utf-8", "replace"))
     open(outfile, "w").write(txt)
     # HARD GATE: a valid capture must reach the firmware prompt 'litenvme>'. If it shows the
     # BIOS prompt 'litex>' or 'Command not found', the firmware is NOT running (or the UART

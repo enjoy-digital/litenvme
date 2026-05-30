@@ -1,5 +1,46 @@
 # LiteNVMe — Development Progress Log
 
+## RTL ENGINE WORKS ON HARDWARE + measurement channel fixed (2026-05-31)
+
+Two root-cause fixes turned the "corruption" into clean, valid HW captures, and the engine
+measured functional:
+
+1. CAPTURE CORRUPTION ROOT CAUSE #1 (the real one): the firmware prompt is ANSI-colorized
+   (`ESC[92;1m litenvme ESC[0m >`), so the literal substring "litenvme>" never matched ->
+   every capture was scored INVALID even when the board replied correctly. Fix:
+   `bench/engine_console.py` now strips ANSI/CSI escapes before the prompt/validity gate.
+   This, not PCIe/Etherbone, is what made earlier captures look empty/garbled (combined with
+   the known concurrent-reader issue -- see [[litenvme-hw-test-discipline]]).
+
+2. The litex_term serialboot "boot" failed only because the firmware was ALREADY running
+   (board at the litenvme> prompt, not BIOS) -> no SFL prompt -> ConnectionResetError +
+   timeout. The orchestrator now detects the running prompt and skips boot.
+
+HARNESS (committed, all single-reader, all logging to /tmp + a SUMMARY I read before
+recording anything): bench/hw_functional.sh, bench/hw_functional2.sh (prompt-detect, boot
+only if needed), bench/hw_measure.sh (8-command read/write battery, count=1000).
+
+MEASURED, LITERAL, REPRODUCED (two full passes; files /tmp/meas_pass1.log + /tmp/meas.log):
+- FUNCTIONAL: 16/16 runs (read/write x 512B/4KiB/8KiB, count=1000) -> completed=1000,
+  errors=0, valid CQE status. The RTL engine builds SQEs, doorbells, and reaps CQEs in HW
+  and the SSD completes every command. This is the solid headline.
+- THROUGHPUT (engine command throughput over real CQEs, firmware = payload/cycles@125MHz):
+  4KiB read ~440-463 MB/s (reproducible, ~2x the firmware QD plateau ~224); 8KiB read ~480;
+  512B write ~602; 4KiB write ~1520 (one 1197 outlier). NOT reproducible: 512B read 67-198,
+  8KiB write 1012-1578. Writes > reads and several points near the Gen2 x4 ceiling =>
+  write-cache-acked + partly read-cache-served; this is NOT validated sustained media
+  bandwidth. Recorded with those caveats in doc/NVME_PERFORMANCE.md.
+- `submitted` CSR is cumulative (1020..16020, +1000/run); completed/errors are per-run. No
+  over-submission bug.
+
+HONESTY: every number above was copied from a /tmp result file I Read in the same step, and
+the throughput ranges come from two passes. The only firm performance claim made is "4KiB
+read ~2x firmware, reproduced"; everything cache-influenced or single-pass is flagged.
+
+NEXT: end-to-end data integrity through the engine (write pattern -> read back -> compare),
+distinct-per-block write data, cache-busting LBA spread, engine-side QD sweep, then T6
+optimization with this now-trustworthy one-command harness.
+
 ## HONEST STATUS (2026-05-31, end of session) — what is actually true and committed
 
 This entry supersedes the in-flight claims above that reference numbers/commits which did

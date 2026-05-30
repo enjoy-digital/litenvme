@@ -1,0 +1,135 @@
+[01:21:38] litex_server pid=2665435
+LINK=0x209d INTEG=PASS
+[01:21:44] firmware at prompt; starting battery
+[01:21:44] CMD r_nlb1_a: nvme_engine_bench read 0xe0000000 1 0 1 1000 1
+CAP bytes=306 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_r_nlb1_a.txt
+----- r_nlb1_a : nvme_engine_bench read 0xe0000000 1 0 1 1000 1 -----
+nvme_engine_bench read 0xe0000000 1 0 1 1000 1
+Engine bench read: count=1000 nlb=1 start_lba=0 step=1
+completed: 1000
+submitted: 1020
+errors: 0
+last_cqe_status: 0x0000
+cycles: 323717
+latency_avg: 2.589 us
+throughput: 197.703 MB/s
+iops: 386139.745 IOPS
+payload_bytes: 512000
+litenvme> ----- end r_nlb1_a -----
+[01:21:47] CMD r_nlb8_a: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=308 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_r_nlb8_a.txt
+----- r_nlb8_a : nvme_engine_bench read 0xe0000000 1 0 8 1000 8 -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 2020
+errors: 0
+last_cqe_status: 0x0000
+cycles: 1105465
+latency_avg: 8.843 us
+throughput: 463.153 MB/s
+iops: 113074.588 IOPS
+payload_bytes: 4096000
+litenvme> ----- end r_nlb8_a -----
+[01:21:51] CMD r_nlb8_b: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=308 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_r_nlb8_b.txt
+----- r_nlb8_b : nvme_engine_bench read 0xe0000000 1 0 8 1000 8 -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 3020
+errors: 0
+last_cqe_status: 0x0000
+cycles: 1128686
+latency_avg: 9.029 us
+throughput: 453.624 MB/s
+iops: 110748.250 IOPS
+payload_bytes: 4096000
+litenvme> ----- end r_nlb8_b -----
+[01:21:54] CMD r_nlb16_a: nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+CAP bytes=312 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_r_nlb16_a.txt
+----- r_nlb16_a : nvme_engine_bench read 0xe0000000 1 0 16 1000 16 -----
+nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+Engine bench read: count=1000 nlb=16 start_lba=0 step=16
+completed: 1000
+submitted: 4020
+errors: 0
+last_cqe_status: 0x0001
+cycles: 2130121
+latency_avg: 17.040 us
+throughput: 480.723 MB/s
+iops: 58682.112 IOPS
+payload_bytes: 8192000
+litenvme> ----- end r_nlb16_a -----
+[01:21:58] CMD w_nlb1_a: nvme_engine_bench write 0xe0000000 1 0 1 1000 1
+CAP bytes=309 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_w_nlb1_a.txt
+----- w_nlb1_a : nvme_engine_bench write 0xe0000000 1 0 1 1000 1 -----
+nvme_engine_bench write 0xe0000000 1 0 1 1000 1
+Engine bench write: count=1000 nlb=1 start_lba=0 step=1
+completed: 1000
+submitted: 5020
+errors: 0
+last_cqe_status: 0x0001
+cycles: 106165
+latency_avg: 0.849 us
+throughput: 602.835 MB/s
+iops: 1177412.518 IOPS
+payload_bytes: 512000
+litenvme> ----- end w_nlb1_a -----
+[01:22:02] CMD w_nlb8_a: nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+CAP bytes=310 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_w_nlb8_a.txt
+----- w_nlb8_a : nvme_engine_bench write 0xe0000000 1 0 8 1000 8 -----
+nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+Engine bench write: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 6020
+errors: 0
+last_cqe_status: 0x0001
+cycles: 336498
+latency_avg: 2.691 us
+throughput: 1521.554 MB/s
+iops: 371473.233 IOPS
+payload_bytes: 4096000
+litenvme> ----- end w_nlb8_a -----
+[01:22:05] CMD w_nlb8_b: nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+CAP bytes=310 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_w_nlb8_b.txt
+----- w_nlb8_b : nvme_engine_bench write 0xe0000000 1 0 8 1000 8 -----
+nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+Engine bench write: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 7020
+errors: 0
+last_cqe_status: 0x0000
+cycles: 337173
+latency_avg: 2.697 us
+throughput: 1518.508 MB/s
+iops: 370729.566 IOPS
+payload_bytes: 4096000
+litenvme> ----- end w_nlb8_b -----
+[01:22:09] CMD w_nlb16_a: nvme_engine_bench write 0xe0000000 1 0 16 1000 16
+CAP bytes=315 valid=1 at_fw=1 at_bios=0 -> /tmp/meas_w_nlb16_a.txt
+----- w_nlb16_a : nvme_engine_bench write 0xe0000000 1 0 16 1000 16 -----
+nvme_engine_bench write 0xe0000000 1 0 16 1000 16
+Engine bench write: count=1000 nlb=16 start_lba=0 step=16
+completed: 1000
+submitted: 8020
+errors: 0
+last_cqe_status: 0x0000
+cycles: 1011791
+latency_avg: 8.094 us
+throughput: 1012.066 MB/s
+iops: 123543.300 IOPS
+payload_bytes: 8192000
+litenvme> ----- end w_nlb16_a -----
+=== SUMMARY (name | completed | submitted | errors | throughput | iops) ===
+r_nlb1_a | valid=1 | completed: 1000 | submitted: 1020 | errors: 0 | throughput: 197.703 MB/s | iops: 386139.745
+r_nlb8_a | valid=1 | completed: 1000 | submitted: 2020 | errors: 0 | throughput: 463.153 MB/s | iops: 113074.588
+r_nlb8_b | valid=1 | completed: 1000 | submitted: 3020 | errors: 0 | throughput: 453.624 MB/s | iops: 110748.250
+r_nlb16_a | valid=1 | completed: 1000 | submitted: 4020 | errors: 0 | throughput: 480.723 MB/s | iops: 58682.112
+w_nlb1_a | valid=1 | completed: 1000 | submitted: 5020 | errors: 0 | throughput: 602.835 MB/s | iops: 1177412.518
+w_nlb8_a | valid=1 | completed: 1000 | submitted: 6020 | errors: 0 | throughput: 1521.554 MB/s | iops: 371473.233
+w_nlb8_b | valid=1 | completed: 1000 | submitted: 7020 | errors: 0 | throughput: 1518.508 MB/s | iops: 370729.566
+w_nlb16_a | valid=1 | completed: 1000 | submitted: 8020 | errors: 0 | throughput: 1012.066 MB/s | iops: 123543.300
+[01:22:13] stopping litex_server
+[01:22:13] DONE_MEAS
+MEAS_COMPLETE
