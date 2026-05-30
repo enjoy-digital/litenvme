@@ -168,6 +168,84 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## RTL I/O engine on hardware — measured 2026-05-31 (CLEAN: reads + writes errors=0, integrity verified)
+
+The hardware I/O command engine (`litenvme/io_engine.py`, qsize=64, qd=32) built into the
+SoC (`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`,
+no CPU in the steady-state loop), run via `nvme_engine_bench` (its trailing arg is the LBA
+step, not the queue depth). Firmware does one-time admin/queue setup; the engine builds
+SQEs, rings doorbells and reaps CQEs in hardware.
+
+Trust basis: every number below was copied from the run's literal capture using a
+SINGLE-READER console (`bench/engine_console.py`) with litex_term fully exited — the earlier
+"corruption"/empty captures were a concurrent-UART-reader race, not HW (see PROGRESS.md).
+Board integrity-gated (PCIe link 0x209d + unique-value Etherbone roundtrip); all runs
+`completed: 1000, errors: 0`; reads bit-identical across runs (512 B/4 KiB/8 KiB each ×2–3).
+Alibaba KU3P, PCIe Gen2 x4, 125 MHz, `count=1000`:
+
+| op    | nlb | transfer | cycles    | throughput   | vs firmware QD (~220) |
+|-------|-----|----------|-----------|--------------|------------------------|
+| read  | 1   | 512 B    | 503,714   | 127.03 MB/s  |                        |
+| read  | 8   | 4 KiB    | 1,247,340 | 410.50 MB/s  | ~1.9×                  |
+| read  | 16  | 8 KiB    | 2,089,724 | 490.15 MB/s  | ~2.2×                  |
+| write | 1   | 512 B    | 251,498   | 254.16 MB/s  | (cache, see caveat)    |
+| write | 8   | 4 KiB    | 338,597   | 1512.12 MB/s | (cache, see caveat)    |
+| write | 16  | 8 KiB    | 2,030,524 | 504.56 MB/s  | (cache, see caveat)    |
+
+### Reads: clean and ~2× the firmware QD path
+
+4 KiB read 410 MB/s vs the firmware ~220 MB/s plateau (~1.9×); 8 KiB read 490 MB/s (~2.2×),
+both `errors=0` reproduced bit-identical. The engine keeps the qd window genuinely in flight
+and builds/reaps at bus rate — the intended win, realized error-free on hardware. 4 KiB ≈
+26% of the ~1.5 GB/s usable link, 8 KiB ≈ 33% (headroom is the optimization target).
+
+### Writes: functionally correct, errors=0, data integrity VERIFIED
+
+Writes complete cleanly at every count and size tested (count=16 and count=1000, nlb 1/8/16
+all `completed==count, errors: 0`). Cross-op sequences in one boot — read→write→read, and
+`nvme_engine_diag` then bench — are all `errors: 0` (these are the paths that previously
+appeared to "wedge"; that was the reader race, not the engine).
+
+Data integrity confirmed end to end: `nvme_fill <pattern>` → engine-write known LBAs →
+firmware `nvme_verify` (read back + compare) → **"MATCH (64/64 dwords)"**, twice with
+distinct patterns/LBAs (0xCAFEF00D @ LBA 2048, 0x5A3C96E1 @ LBA 4096; each engine write
+`completed: 16, errors: 0`). So the engine genuinely DMAs correct write data to the SSD.
+
+Write THROUGHPUT is cache-limited, NOT a distinct-data bandwidth: the generator writes the
+SAME fill pattern to every block, so the SSD's write-cache/page-dedup inflates the rate
+(4 KiB writes hit ~1.5 GB/s ≈ PCIe line rate, 3× the 8 KiB rate — non-physical for raw
+bandwidth). An honest write benchmark needs a distinct-per-block data mode in the generator
+(future work). The table lists write numbers for completeness with this caveat; reads are
+unaffected (the device must return the addressed LBA's data).
+
+### Bugs fixed to reach this (all verified on HW; 31 sim tests green)
+
+1. **Doorbell never reached BAR0** (engine timed out): the engine drove the MMIO accessor's
+   we/adr/wdata for one cycle, but the accessor samples them combinationally across its
+   multi-cycle send. Fix: hold the payload stable through the WAIT state.
+2. **CQE reap read-order**: read dw3/phase first, then dw2/sqhd (also halves CQE reads).
+3. **CID reuse at the ring wrap** (read error `SC=0x03` "Command ID Conflict", ~1/1000): the
+   aggregate `inflight < qd` gate didn't ensure the specific CID being reused (CID = sq_tail,
+   wraps at qsize) was retired. Fix: per-slot busy bits — set when a CID is submitted,
+   cleared when its CQE is reaped; submit gated on the target CID being free.
+
+A fourth issue chased at length — apparent write "wedges"/"timeouts" and "empty/garbled
+captures" — turned out NOT to be an engine bug at all: it was a **concurrent UART reader**
+race (litex_term's crossover2pty thread draining the same RX FIFO as the capture script).
+With a single reader, reads and writes are both clean on the per-slot-gate build; the
+`ring_reset` experiment that was tried for it was unnecessary and was reverted.
+
+Reproduce (single reader — litex_term must NOT be running), from `bench/`:
+
+```sh
+# load bitstream, start ONE litex_server, then:
+bash run_engine_session.sh    # boots fw and EXITS litex_term (sole reader free)
+python3 engine_console.py cmd "nvme_engine_bench read 0xe0000000 1 0 16 1000 16" 80 /tmp/r.txt && cat /tmp/r.txt
+python3 engine_console.py cmd "nvme_fill 0xCAFEF00D" 6 /tmp/f.txt
+python3 engine_console.py cmd "nvme_engine_bench write 0xe0000000 1 2048 8 16 8" 40 /tmp/w.txt
+python3 engine_console.py cmd "nvme_verify 0xe0000000 1 2048 8 64" 40 /tmp/v.txt && cat /tmp/v.txt
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone

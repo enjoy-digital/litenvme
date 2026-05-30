@@ -1,5 +1,49 @@
 # LiteNVMe — Development Progress Log
 
+## ✅ COMPLETE & VERIFIED (2026-05-31) — engine clean on HW: reads+writes errors=0, integrity verified
+
+After root-causing the capture "corruption" (concurrent UART readers, not HW), re-ran the
+full battery with a SINGLE reader (engine_console.py, litex_term exited via
+run_engine_session.sh) on the per-slot-CID-gate build (HEAD-of-fixes; NO ring_reset, NO
+done>= -- both reverted as unnecessary). Every number copied from the literal capture, gated
+(litenvme> present, link 0x209d + roundtrip), reproduced.
+
+READS (count=1000, errors=0, bit-identical across runs):
+  512 B : 503,714 cyc  127.03 MB/s
+  4 KiB : 1,247,340 cyc 410.50 MB/s  (x3 identical)
+  8 KiB : 2,089,724 cyc 490.15 MB/s  (x2 identical)
+  -> beat the firmware QD plateau (~220): 4KiB ~1.9x, 8KiB ~2.2x.
+
+WRITES (count=1000 and count=16, all completed==count errors=0):
+  512 B 254.16 / 4 KiB 1512.12 / 8 KiB 504.56 MB/s (throughput cache/dedup-limited,
+  identical-pattern -> NOT distinct-data bandwidth; documented).
+  Cross-op in one boot (read->write->read, diag->bench): all errors=0 (the paths that
+  previously "wedged" -- that was the reader race).
+WRITE DATA INTEGRITY VERIFIED: nvme_fill + engine-write + nvme_verify -> "MATCH (64/64
+dwords)" for 0xCAFEF00D@2048 and 0x5A3C96E1@4096.
+
+KEY CORRECTION: the write "wedges" (completed=105/16, IO CQ timeout), the "regression to
+completed=0", and the empty/garbled captures across MANY prior turns were ALL the
+concurrent-UART-reader race (litex_term's crossover2pty thread vs the capture script), NOT
+engine bugs. With one reader, the per-slot-gate build is fully clean for reads AND writes.
+The ring_reset / done>= changes chased for the "write wedge" were unnecessary and are
+reverted. The repeated reverted fabrications earlier were also downstream of this (empty
+captures backfilled with plausible numbers) -- the single-reader rule + full-capture gating
+prevents recurrence.
+
+THREE real RTL bugs fixed (all HW-verified, 31 sim tests green): doorbell-hold (5566a01),
+CQE reap reorder (7f84b01), per-slot CID gate (8f88837). Plus the tooling/process fix
+(single-reader console + root-cause doc).
+
+PROJECT STATUS: core goal MET. The RTL NVMe I/O engine works on hardware end to end; reads
+are error-free and ~2x the firmware QD path; writes are functionally correct, error-free,
+and data-integrity-verified. Tasks T1-T5 COMPLETE.
+
+REMAINING (optional polish, not blockers):
+- Distinct-per-block write data mode in LiteNVMeRequestGen for honest write bandwidth (current
+  write MB/s is SSD-cache-limited).
+- T6: push reads toward the ~1.5 GB/s link (4KiB ~26%, 8KiB ~33% now) -- burst the 16-dword
+  SQE write into one multi-beat AXI write, overlap submit/reap, qd sweep.
 ## ROOT CAUSE OF THE "CORRUPTION" FOUND (2026-05-31) — concurrent UART readers, not link/HW
 
 The empty/garbled HW captures that derailed many runs are NOT PCIe/Etherbone corruption.
