@@ -1,36 +1,5 @@
 # LiteNVMe — Development Progress Log
 
-## RESOLVED & VERIFIED (2026-05-30) — per-slot busy gate fixes the read error; reads CLEAN, writes verified
-
-The SC=0x03 read error is FIXED. Root cause: the aggregate inflight<qd submit gate did not
-ensure the SPECIFIC CID being reused (CID=sq_tail, wraps at qsize) was retired by the
-device, so the engine could re-submit a still-outstanding CID -> "Command ID Conflict".
-Fix (commit 8f88837): per-slot busy bits (set at SUBMIT-ADVANCE, cleared at REAP-EMIT, gate
-can_submit on ~slot_busy[sq_tail]). Built from current source (gateware has slot_busy,
-timing met), verified on HW, gated + reproduced. LITERAL captures this run:
-
-reads count=1000, ALL errors=0 (numbers copied from /tmp run files):
-  read 512B: 503,210/503,714/503,503 cyc -> 127.0-127.2 MB/s (x3)
-  read 4KiB: 1,245,902..1,248,706 cyc   -> 410.1-411.1 MB/s (x4)
-  read 8KiB: 2,089,724 cyc (bit-identical x3) -> 490.1 MB/s
-  cross-run (nvme_engine_diag then bench): post-diag bench errors=0 (was the failing path)
--> reads beat firmware QD ~220: 4KiB ~1.9x, 8KiB ~2.2x.
-
-write DATA INTEGRITY verified: nvme_fill + engine-write + nvme_verify -> "mismatches: 0,
-verified OK" TWICE (0xCAFEF00D@2048, 0x5A3C96E1@4096; each engine write completed=16
-errors=0). Write THROUGHPUT not recorded as bandwidth (identical-pattern cache/dedup; needs
-a distinct-data generator mode).
-
-Three HW-only RTL races fixed end-to-end: doorbell-hold (5566a01), CQE reap reorder
-(7f84b01), per-slot CID gate (8f88837). 31 sim tests green. (The earlier ring-reset 2ca673a
-was a wrong turn, reverted.)
-
-STATUS: T1-T5 COMPLETE. The RTL NVMe engine works on hardware, reads are error-free and
-~1.9-2.2x the firmware QD path, writes are integrity-verified. Full table + caveats in
-doc/NVME_PERFORMANCE.md. Remaining = T6 (optional): push reads toward the ~1.5 GB/s link
-(4KiB ~26%, 8KiB ~33%) via burst-SQE-write (1 multi-beat AXI write vs 16 single-beat dwords)
-+ overlap submit/reap + qd sweep; add a distinct-data write mode for honest write bandwidth.
-
 ## WAKEUP DECLINED (2026-05-30) — stale qd=63 premise; not measuring
 
 A scheduled wakeup asked to measure a qd=63 build vs a "qd=32 baseline (4KiB 410.4, 8KiB
