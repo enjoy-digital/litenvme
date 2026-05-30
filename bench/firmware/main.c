@@ -1703,6 +1703,12 @@ static void nvme_engine_bench_cmd(char *str)
 	printf("completed: %" PRIu32 "\n", completed);
 	printf("submitted: %" PRIu32 "\n", submitted);
 	printf("errors: %" PRIu32 "\n", errors);
+	if (errors) {
+		uint32_t es = nvme_gen_first_err_status_read();
+		printf("err0 status=%04x sc=%02x sct=%x cid=%u idx=%u\n",
+		       (unsigned)es, (unsigned)((es >> 1) & 0xff), (unsigned)((es >> 9) & 0x7),
+		       (unsigned)nvme_gen_first_err_cid_read(), (unsigned)nvme_gen_first_err_idx_read());
+	}
 	printf("last_cqe_status: 0x%04" PRIx32 "\n", last_status);
 	printf("cycles: %" PRIu32 "\n", cycles);
 	print_fixed3_u64("latency_avg", (uint64_t)cycles * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
@@ -1851,9 +1857,17 @@ static void nvme_engine_diag_cmd(char *str)
 
 	uint32_t cycles      = nvme_gen_cycles_read();
 	uint32_t last_status = nvme_gen_last_status_read();
+	uint32_t errs        = nvme_gen_errors_read();
 	printf("final sub=%u cmp=%u err=%u cyc=%u st=%04x\n",
 	       (unsigned)nvme_engine_engine_submitted_read(), (unsigned)nvme_gen_completed_read(),
-	       (unsigned)nvme_gen_errors_read(), (unsigned)cycles, (unsigned)last_status);
+	       (unsigned)errs, (unsigned)cycles, (unsigned)last_status);
+	if (errs) {
+		/* First-error detail: SC=status[8:1], SCT=status[11:9]; idx = which completion. */
+		uint32_t es = nvme_gen_first_err_status_read();
+		printf("err0 status=%04x sc=%02x sct=%x cid=%u idx=%u\n",
+		       (unsigned)es, (unsigned)((es >> 1) & 0xff), (unsigned)((es >> 9) & 0x7),
+		       (unsigned)nvme_gen_first_err_cid_read(), (unsigned)nvme_gen_first_err_idx_read());
+	}
 
 	/*
 	 * Doorbell-rescue probe: if the engine submitted SQEs but got no completions, ring the

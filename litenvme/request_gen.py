@@ -74,6 +74,12 @@ class LiteNVMeRequestGen(LiteXModule):
         self.errors     = Signal(32)
         self.cycles     = Signal(32)
         self.last_status = Signal(16)
+        # First-error capture (for debugging errors>0): the status, cid and completion index
+        # of the FIRST CQE seen with a non-success status. Lets firmware tell a real device
+        # error (a valid NVMe SC/SCT) from a harness/reap artifact, and which command erred.
+        self.first_err_status = Signal(16)
+        self.first_err_cid    = Signal(16)
+        self.first_err_idx    = Signal(32)
 
         # # #
 
@@ -122,6 +128,9 @@ class LiteNVMeRequestGen(LiteXModule):
                 NextValue(submitted,      0),
                 NextValue(self.completed, 0),
                 NextValue(self.errors,    0),
+                NextValue(self.first_err_status, 0),
+                NextValue(self.first_err_cid,    0),
+                NextValue(self.first_err_idx,    0),
                 NextValue(self.cycles,    0),
                 NextValue(lba,            self.base_lba),
                 NextValue(buf_key,        0),
@@ -155,6 +164,12 @@ class LiteNVMeRequestGen(LiteXModule):
                 NextValue(self.last_status, self.sink.status),
                 If((cpl_sc != 0) | (cpl_sct != 0),
                     NextValue(self.errors, self.errors + 1),
+                    # Latch the first error's details only (errors still 0 this cycle).
+                    If(self.errors == 0,
+                        NextValue(self.first_err_status, self.sink.status),
+                        NextValue(self.first_err_cid,    self.sink.cid),
+                        NextValue(self.first_err_idx,    self.completed),
+                    ),
                 ),
             ),
 
@@ -192,6 +207,9 @@ class LiteNVMeRequestGen(LiteXModule):
         self._errors     = CSRStatus(32, description="Completions with error status.")
         self._cycles     = CSRStatus(32, description="Cycles from start to last completion.")
         self._last_status = CSRStatus(16, description="Last CQE status field.")
+        self._first_err_status = CSRStatus(16, description="Status of the first erroring CQE.")
+        self._first_err_cid    = CSRStatus(16, description="CID of the first erroring CQE.")
+        self._first_err_idx    = CSRStatus(32, description="Completion index of the first error.")
 
         self.comb += [
             self.op.eq(self._op.storage),
@@ -210,4 +228,7 @@ class LiteNVMeRequestGen(LiteXModule):
             self._errors.status.eq(self.errors),
             self._cycles.status.eq(self.cycles),
             self._last_status.status.eq(self.last_status),
+            self._first_err_status.status.eq(self.first_err_status),
+            self._first_err_cid.status.eq(self.first_err_cid),
+            self._first_err_idx.status.eq(self.first_err_idx),
         ]
