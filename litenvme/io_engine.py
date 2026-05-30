@@ -379,6 +379,14 @@ class LiteNVMeIOEngine(LiteXModule):
             NextState("SUBMIT-DOORBELL"),
         )
 
+        # NOTE: the MMIO accessor (litenvme/mem.py) samples we/adr/wdata COMBINATIONALLY in
+        # its SEND state and holds there until the request is accepted (req_sink.ready),
+        # latching nothing. So the engine MUST hold these inputs stable from the start pulse
+        # through the WAIT state until mmio_done -- otherwise the accessor forms the write
+        # TLP with address/data 0 and the doorbell never reaches BAR0. (This was the bug
+        # that made the SSD never fetch: a valid SQE was in place but the doorbell TLP was
+        # malformed.) mmio_start is a one-cycle pulse (the accessor edge-detects it); the
+        # address/data are held across both states below.
         fsm.act("SUBMIT-DOORBELL",
             self.mmio_start.eq(1),
             self.mmio_we.eq(1),
@@ -388,6 +396,10 @@ class LiteNVMeIOEngine(LiteXModule):
             NextState("SUBMIT-DOORBELL-WAIT"),
         )
         fsm.act("SUBMIT-DOORBELL-WAIT",
+            # Hold the request payload stable while the accessor sends it.
+            self.mmio_we.eq(1),
+            self.mmio_adr.eq(self.sq_db_adr),
+            self.mmio_wdata.eq(sq_tail),
             If(self.mmio_done,
                 NextState("IDLE"),
             )
@@ -455,6 +467,10 @@ class LiteNVMeIOEngine(LiteXModule):
             NextState("REAP-DOORBELL-WAIT"),
         )
         fsm.act("REAP-DOORBELL-WAIT",
+            # Hold the request payload stable while the accessor sends it (see SUBMIT note).
+            self.mmio_we.eq(1),
+            self.mmio_adr.eq(self.cq_db_adr),
+            self.mmio_wdata.eq(cq_head),
             If(self.mmio_done,
                 NextState("IDLE"),
             )
