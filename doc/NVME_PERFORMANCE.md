@@ -168,53 +168,6 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
-## RTL I/O engine on hardware — measured 2026-05-30 (WORKING, beats firmware)
-
-The hardware I/O command engine (`litenvme/io_engine.py`, qd=16) built into the SoC
-(`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`, zero
-CPU in the steady-state loop), run via the firmware `nvme_engine_bench` command. Firmware
-does one-time admin/queue setup only; the engine builds SQEs, rings doorbells and reaps
-CQEs in hardware.
-
-Trust basis: every run was gated — firmware reached the `litenvme>` prompt (not the BIOS),
-the build linked (no RAM overflow), the on-chip `seqread selftest` passed (reliable
-read-back), the board passed an integrity gate (PCIe link 0x209d + unique-value Etherbone
-roundtrip), and each figure reproduced bit-identically across 2 runs. Alibaba KU3P, PCIe
-Gen2 x4, 125 MHz, `count=1000`; every run `completed=1000`, `errors=0`, `last_cqe=0x0000`:
-
-| op    | nlb | transfer | cycles    | latency  | throughput  |
-|-------|-----|----------|-----------|----------|-------------|
-| read  | 1   | 512 B    | 626,931   | 5.0 µs   | 102.1 MB/s  |
-| read  | 8   | 4 KiB    | 1,257,597 | 10.06 µs | 407.3 MB/s  |
-| read  | 16  | 8 KiB    | 2,502,719 | 20.0 µs  | 819.2 MB/s  |
-| write | 8   | 4 KiB    | 1,734,787 | 13.88 µs | 295.3 MB/s  |
-
-### The engine beats the firmware QD path
-
-- **4 KiB read 407 MB/s vs the firmware ~220 MB/s plateau (~1.85×); 8 KiB read 819 MB/s
-  (~3.7×, ~55% of the usable PCIe Gen2 x4 ceiling ~1.5 GB/s).** Removing the soft CPU from
-  the steady-state loop — the engine keeps the qd window genuinely in flight and builds SQEs
-  / reaps CQEs at bus rate — is the win it was designed for, now realized on hardware.
-- read > write at 4 KiB (407 vs 295): the device/link now shows through; the host control
-  path is no longer the dominant cost.
-
-### Root cause of the earlier failure (fixed)
-
-The engine first timed out on HW (`completed=0`): valid SQEs landed in host memory but the
-SSD never fetched them. Cause: the engine's SQ-doorbell MemWr TLP carried address 0 — it
-drove the MMIO accessor's `we/adr/wdata` for a single cycle, but
-`LiteNVMePCIeMmioAccessor` (litenvme/mem.py) samples those COMBINATIONALLY across its
-multi-cycle SEND state. Fix: hold the doorbell payload stable through the WAIT state for
-both the SQ and CQ doorbells (`litenvme/io_engine.py`). 31/31 sim tests pass; verified on HW
-above.
-
-Reproduce (board up, server running, firmware booted, SoC built `--with-io-engine`), from
-`bench/`:
-
-```sh
-python3 uart_cmd.py "nvme_engine_bench read 0xe0000000 1 0 16 1000 16" 60 /tmp/r.txt && cat /tmp/r.txt
-```
-
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone
