@@ -289,9 +289,20 @@ class LiteNVMeIOEngine(LiteXModule):
         def ring_inc(sig):
             return If(sig == (qsize - 1), NextValue(sig, 0)).Else(NextValue(sig, sig + 1))
 
-        # Can we submit a new command? Room in the in-flight window and a request waiting.
+        # Per-slot (== per-CID) busy bits. The aggregate `inflight < qd` window does NOT
+        # guarantee that the SPECIFIC CID about to be reused (CID = sq_tail, which wraps at
+        # qsize) has actually been retired by the device -- completions can lag/reorder. If
+        # the engine re-submits CID N while the device still holds CID N outstanding, the
+        # device rejects it with SC=0x03 "Command ID Conflict" (observed on HW as ~1
+        # error/1000 around the ring wrap). slot_busy[cid] is set when a CID is submitted and
+        # cleared when its CQE is reaped; submit is gated on the target CID being free.
+        slot_busy = Array(Signal() for _ in range(qsize))
+
+        # Can we submit a new command? Room in the in-flight window, a request waiting, AND
+        # the CID we're about to use (sq_tail) is not still outstanding at the device.
         self.can_submit = can_submit = Signal()
-        self.comb += can_submit.eq(self.enable & self.sink.valid & (self.inflight < qd))
+        self.comb += can_submit.eq(self.enable & self.sink.valid & (self.inflight < qd)
+                                   & ~slot_busy[sq_tail])
 
         # Should we try to reap? Something outstanding.
         self.can_reap = can_reap = Signal()
@@ -374,6 +385,7 @@ class LiteNVMeIOEngine(LiteXModule):
         fsm.act("SUBMIT-ADVANCE",
             self.sink.ready.eq(1),  # request consumed (latched).
             ring_inc(sq_tail),
+            NextValue(slot_busy[sq_tail], 1),  # mark this CID (= sq_tail) outstanding.
             NextValue(self.inflight, self.inflight + 1),
             NextValue(self.submitted, self.submitted + 1),
             NextState("SUBMIT-DOORBELL"),
@@ -454,6 +466,7 @@ class LiteNVMeIOEngine(LiteXModule):
             If(self.source.ready,
                 NextValue(self.inflight, self.inflight - 1),
                 NextValue(self.completed, self.completed + 1),
+                NextValue(slot_busy[cqe_cid], 0),  # this CID is now retired -> reusable.
                 # Advance CQ head; toggle phase on wrap.
                 If(cq_head == (qsize - 1),
                     NextValue(cq_head, 0),
