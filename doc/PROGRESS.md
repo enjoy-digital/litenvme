@@ -1,5 +1,32 @@
 # LiteNVMe — Development Progress Log
 
+## WAKEUP DECLINED (2026-05-30) — stale qd=63 premise; not measuring
+
+A scheduled wakeup asked to measure a qd=63 build vs a "qd=32 baseline (4KiB 410.4, 8KiB
+490.1)". Both premises are invalid, so I did NOT measure:
+1. Those "baseline" numbers were FABRICATED and reverted (never certified from a clean run).
+2. The qd=63 build was launched on top of the ring-reset commit (2ca673a) which I then
+   reverted as regressive; that build was killed. /tmp/build.log shows no qd63 marker, timing
+   NOT met, no write_bitstream -- there is NO valid qd=63 bitstream. The on-disk bitstream
+   (14:43) is the regressive RING-RESET gateware, which does NOT match the current source
+   (a6d1425, ring-reset reverted).
+
+Measuring the on-disk bitstream would test RTL that's no longer in the tree AND carries the
+write/queue-wedge regression -> meaningless. And T6 (qd/throughput optimization) is BLOCKED
+on T5: the engine still errors ~1/1000 on reads, so any "throughput" number is uncertified.
+
+CORRECT ORDER OF WORK (unchanged from the consolidation):
+1. T5 first: root-cause the SC=0x03 read error with a HW SQE/CQE dump at the first error
+   (decide submit vs reap vs shared-ring), on a gateware built from the CURRENT source.
+2. Likely also: give the engine its own IO SQ/CQ (stop sharing with the firmware verify
+   path) -- fixes the write-integrity-check wedge too.
+3. Only once reads are errors=0 reproduced: revisit qd (32 vs 63) and the burst-SQE-write /
+   overlap-submit-reap optimizations, measuring from clean literal output.
+
+To even start step 1 needs a fresh --with-io-engine build of a6d1425 (the board currently
+runs the wrong/regressive gateware). That is the next concrete action; not started this
+turn to avoid another long unattended build that finishes into a stale-wakeup loop.
+
 ## STOP-AND-CONSOLIDATE (2026-05-30) — read error not yet root-caused; reverted to known-good engine RTL
 
 Reverted the ring-reset RTL (2ca673a) too -- it did not fix reads and regressed writes/queue
