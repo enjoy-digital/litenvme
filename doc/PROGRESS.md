@@ -1,5 +1,46 @@
 # LiteNVMe — Development Progress Log
 
+## TOOLING DEFECT FOUND (2026-05-30) — hostmem read primitive is unreliable; re-verify everything
+
+The window scan added to nvme_engine_diag returned a self-CONTRADICTORY result (reproduced):
+the sentinel 0x5E471A10, written to IO_SQ_ADDR (offset +0x4000) and read back OK from
++0x4000, was found by the sequential scan at offset **+0x3000** instead, with the ENTIRE
+rest of the 512 KB window (including admin/IO queues that were definitely written by
+nvme_admin_init/nvme_io_setup) reading as zero. That is impossible if the reads were
+accurate.
+
+ROOT CAUSE (firmware): `hostmem_rd32()` (bench/firmware/main.c:444) does
+`hostmem_set_adr(dword); return hostmem_csr_csr_rdata_read();` with NO delay. The CSR-debug
+read port (LiteNVMeHostMemCSR) has read latency (1-cycle BRAM + a registered csr_word cache
+keyed on last_read_adr), so reading rdata immediately after writing the address returns
+STALE data from the previous address. Single reads where the address was just set by a
+preceding write (e.g. the sentinel readback) happen to look right, but SEQUENTIAL reads
+(the scan, and the SQ/CQ dumps which read 16/4 consecutive dwords!) are shifted/stale.
+
+IMPACT: this casts doubt on EVERY hostmem-read-based observation this session, including:
+- the SQ[0] dumps ("SQ[0] all-zero" / "sentinel survived") -- those are consecutive-dword
+  reads through the same buggy primitive, so they may be reading stale/shifted data, NOT the
+  true backend contents.
+- therefore the conclusion "engine SQE writes do not land" is NO LONGER TRUSTWORTHY and is
+  retracted pending a fixed read path.
+What is still solid (not hostmem-read-based): submitted reaches 4 (engine CSR counter);
+completed stays 0 (engine CSR counter); CSTS=0x1 healthy (MMIO read, different path);
+firmware nvme_bench completes errors=0 (the SSD's own execution, not our readback).
+
+NEXT (must do before any further memory-based debugging):
+1. FIX hostmem_rd32: after hostmem_set_adr(), either read csr_rdata TWICE (discard first)
+   or add a couple of dummy CSR reads, so the returned value matches the requested address.
+   Verify the fix: write distinct values to 4 consecutive dwords via CSR, read them back
+   sequentially, assert they match.
+2. Re-run nvme_engine_diag with the fixed read path. Re-establish the TRUE state: does the
+   engine's SQE actually land at IO_SQ_ADDR or not? Only then resume root-causing.
+3. The SQ/CQ dump loops and the scan all share hostmem_rd32, so they all get fixed at once.
+
+(This supersedes the "SENTINEL PROOF" and "engine writes never commit" entries below: those
+were derived from the unreliable read primitive. The engine still does not COMPLETE
+commands on HW -- that part (completed=0, CSTS healthy) stands -- but WHERE it breaks must
+be re-determined with a correct read path.)
+
 ## SIM DOES NOT REPRODUCE (2026-05-30) — bug is HW-specific or an address mismatch
 
 Tried hard to reproduce the sentinel failure in simulation; could NOT. The engine's AXI

@@ -452,6 +452,11 @@ static uint32_t hostmem_rd32(uint32_t addr)
 {
 	uint32_t dword = (addr - HOSTMEM_BASE) >> 2;
 	hostmem_set_adr(dword);
+	/* The CSR-debug read port has read latency (1-cycle BRAM + a registered csr_word
+	 * cache). Reading rdata immediately after setting the address can return stale data
+	 * from the previously-selected dword, which corrupts sequential reads (SQ/CQ dumps,
+	 * window scans). Discard the first read so the returned value matches `dword`. */
+	(void)hostmem_csr_csr_rdata_read();
 	return hostmem_csr_csr_rdata_read();
 }
 
@@ -1810,6 +1815,19 @@ static void nvme_engine_diag_cmd(char *str)
 	 * to overwrite -- if after the run SQ[0].dw0 still reads the sentinel, the engine's AXI
 	 * SQE write never reached this backend location (vs the CSR port writing the SAME spot,
 	 * which the SSD executes via nvme_bench). */
+	/* Sequential read self-test: write 4 distinct values to consecutive dwords, then read
+	 * them back in order. Proves hostmem_rd32 returns the requested address (not stale). */
+	for (uint32_t i = 0; i < 4; i++)
+		hostmem_wr32(IO_SQ_ADDR + 4 * i, 0x1000u + i);
+	{
+		uint32_t ok = 1;
+		for (uint32_t i = 0; i < 4; i++) {
+			uint32_t v = hostmem_rd32(IO_SQ_ADDR + 4 * i);
+			if (v != 0x1000u + i) ok = 0;
+		}
+		printf("seqread selftest: %s\n", ok ? "OK" : "BROKEN (stale reads)");
+	}
+
 	hostmem_wr32(IO_SQ_ADDR, 0x5E471A10u);
 	{
 		uint32_t sb = hostmem_rd32(IO_SQ_ADDR);
@@ -1885,6 +1903,22 @@ static void nvme_engine_diag_cmd(char *str)
 	printf("CQ[0]: %08x %08x %08x %08x phase=%u\n",
 	       (unsigned)cqe[0], (unsigned)cqe[1], (unsigned)cqe[2], (unsigned)cqe[3],
 	       (unsigned)((cqe[3] >> 16) & 0x1u));
+
+	/* Window scan: find where (if anywhere) the engine's SQE bytes landed. Reports the
+	 * first non-zero dwords OUTSIDE the SQ slot we already dumped, so if the engine wrote
+	 * to a wrong base it shows up here (addr bug) vs nowhere (write-commit bug). For a READ
+	 * op the per-slot data buffers are cleared, so non-zero hits are queues/structures or
+	 * stray engine writes. Coarse: report up to 24 hits. */
+	puts("== window scan (non-zero dwords, byte offsets from HOSTMEM_BASE) ==");
+	uint32_t hits = 0;
+	for (uint32_t off = 0; off < 0x80000u && hits < 24; off += 4) {
+		uint32_t v = hostmem_rd32(HOSTMEM_BASE + off);
+		if (v != 0) {
+			printf("  +0x%05x = 0x%08x\n", (unsigned)off, (unsigned)v);
+			hits++;
+		}
+	}
+	printf("scan hits(capped): %u\n", (unsigned)hits);
 	(void)op_name;
 }
 #endif /* NVME_ENGINE_AVAILABLE */
