@@ -170,9 +170,10 @@ python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32
 
 ## RTL I/O engine on hardware — measured 2026-05-30 (clean: reads errors=0, writes verified)
 
-The hardware I/O command engine (`litenvme/io_engine.py`, qd=16) built into the SoC
-(`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`, no CPU
-in the steady-state loop), run via `nvme_engine_bench`. Firmware does one-time admin/queue
+The hardware I/O command engine (`litenvme/io_engine.py`, qsize=64, qd=32) built into the
+SoC (`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`, no
+CPU in the steady-state loop), run via `nvme_engine_bench` (the trailing `16` in the bench
+commands below is the LBA `step`, not the queue depth). Firmware does one-time admin/queue
 setup; the engine builds SQEs, rings doorbells and reaps CQEs in hardware.
 
 Trust basis: every run gated — firmware reached `litenvme>` (not the BIOS), build linked
