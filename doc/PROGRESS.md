@@ -1,5 +1,44 @@
 # LiteNVMe — Development Progress Log
 
+## TRUE STATE (2026-05-30, fixed read path, reproduced 2x) — engine SQEs land; SSD never completes
+
+With hostmem_rd32 fixed (discard-first-read; `seqread selftest: OK` confirms sequential
+reads are now accurate), the real situation is clear and the opposite of the buggy-tool
+conclusion:
+
+- `SQ[0] sentinel overwritten` -- the engine DID write its SQE over the sentinel. SQ[0] now
+  reads a VALID SQE: dw0=0x00000002 (NVMe Read opcode, cid=0), dw1=0x1 (nsid), dw6=0x10010000
+  (PRP1), dw12=0x7 (nlb-1 => 8 blocks). So **the engine's AXI SQE writes DO land correctly
+  at IO_SQ_ADDR.** (The earlier "writes don't commit / sentinel survived" was entirely a
+  stale-read artifact -- retracted.)
+- completed=0, CQ[0] all-zero (phase=0): **the SSD never posts a completion.** submitted=4.
+- CSTS=0x1 (RDY=1, CFS=0): controller healthy, did not fault.
+
+So the bug is back to the DOORBELL/COMPLETION path: a correct SQE sits in the right place,
+but the SSD never fetches/executes it. The engine rings the SQ doorbell through its dedicated
+`mmio_db` PCIe master (separate from the firmware's proven `pcie_mmio`). Prime suspect: the
+engine's doorbell MemWr TLP is not reaching/affecting BAR0 (wrong value, not actually
+emitted, or wrong routing on that crossbar master).
+
+NEXT:
+1. Clean doorbell test (the earlier rescue was confounded -- engine had already advanced the
+   tail). On a FRESH setup, have the engine submit but do NOT let it ring (or zero its
+   doorbell), then firmware rings IO SQ doorbell via pcie_mmio with the correct tail and
+   check completion. Cleaner: add a diag mode that submits via engine, then firmware writes
+   the SQ doorbell itself = tail, polls CQ. If SSD then completes => engine's doorbell TLP is
+   the bug.
+2. If confirmed, compare mmio_db vs pcie_mmio: both are LiteNVMePCIeMmioAccessor on distinct
+   crossbar master ports. Check the engine drives mmio.adr/wdata/we/len/wsel correctly via
+   connect_mmio (it sets wsel=0xf, len=1) AND that the value rung = SQ tail (1..4). The
+   engine's SUBMIT-DOORBELL writes sq_tail (post-increment) -- verify that's the NVMe-correct
+   tail and lands as a 32-bit MemWr at e0001008.
+3. Could also be the engine never actually rings (mmio_start pulse): but submitted advances
+   past SUBMIT-DOORBELL-WAIT only on mmio_done, so it does fire. So delivery/content, not
+   firing, is suspect.
+
+(Supersedes the "SENTINEL PROOF" / "writes never commit" / "tooling defect" entries below
+for the WHERE-it-breaks question; the read-path bug itself was real and is fixed in c4e7b1f.)
+
 ## TOOLING DEFECT FOUND (2026-05-30) — hostmem read primitive is unreliable; re-verify everything
 
 The window scan added to nvme_engine_diag returned a self-CONTRADICTORY result (reproduced):
