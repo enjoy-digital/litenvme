@@ -1,5 +1,46 @@
 # LiteNVMe — Development Progress Log
 
+## VERIFIED STATE (2026-05-30) — engine SQEs land correctly; SSD never completes (doorbell path)
+
+This entry is trustworthy: the firmware linked (no RAM overflow), BOOTED to `litenvme>`
+(not the BIOS — confirmed no "Command not found"), `seqread selftest: OK` confirms the
+fixed hostmem_rd32 returns accurate sequential data, and the result reproduced identically
+across 2 runs.
+
+nvme_engine_diag read, count=4, nlb=8:
+- `seqread selftest: OK` — discard-first-read fix works; memory dumps are now reliable.
+- `sentinel: wrote 0x5E471A10 read 0x5E471A10 (CSR path OK)`.
+- `SQ[0] sentinel overwritten` → engine wrote a VALID SQE: dw0=0x00000002 (NVMe Read op,
+  cid=0), dw1=0x1 (nsid), dw6=0x10010000 (PRP1), dw12=0x7 (nlb-1 = 8 blocks). **The engine's
+  AXI SQE writes DO land correctly at IO_SQ_ADDR.**
+- `submitted=4`, `completed=0`, `CQ[0]` all-zero (phase=0): **the SSD never posts a
+  completion.**
+- `CSTS=0x1` (RDY=1, CFS=0): controller healthy, did not fault.
+
+So: a correct SQE sits in the right host-memory location, but the SSD never fetches/executes
+it. The bug is the DOORBELL/COMPLETION path. The engine rings the SQ doorbell via its
+dedicated `mmio_db` PCIe master (separate from firmware's proven `pcie_mmio`). Since the SSD
+is provably healthy (firmware nvme_bench completes on this gateware) and the SQE is valid and
+in place, the SSD simply isn't being told to fetch — the engine's SQ-doorbell MemWr TLP is
+the prime suspect (not emitted, wrong value, or wrong routing on that crossbar master).
+
+(Note: this CONFIRMS the earlier stale-read hypothesis was correct — the inconsistent SQ
+dumps from the unfixed reader were artifacts; with the fix the SQE is reliably present. But
+that hypothesis was only proven now, on a build that actually ran; the earlier writeups of
+it were retracted because they were never executed — see RETRACTION below.)
+
+NEXT — confirm + fix the doorbell:
+1. Clean doorbell test: engine submits (SQE lands), then FIRMWARE rings the SQ doorbell via
+   the proven pcie_mmio with the correct tail and polls CQ. To avoid the earlier
+   confound (engine already advanced the SSD-visible tail), either run the engine with its
+   doorbell address pointed at a scratch location (so the engine's ring is a no-op) then have
+   firmware ring the real doorbell, or compare completions with/without the firmware ring.
+   If firmware-ring makes the SSD complete → the engine's doorbell TLP is the bug, confirmed.
+2. Fix: compare mmio_db vs pcie_mmio TLP formation / crossbar master setup in
+   bench/alibaba_xcku3p.py + litenvme/mem.py; the engine drives connect_mmio (wsel=0xf,
+   len=1, adr=sq_db_adr=0xe0001008, wdata=sq_tail). Verify the value rung equals the
+   NVMe-correct tail and that this master's MemWr actually reaches BAR0.
+
 ## RETRACTION (2026-05-30) — several prior entries were based on builds that never ran
 
 IMPORTANT, read this first. While iterating on `nvme_engine_diag` I added a sentinel test,
