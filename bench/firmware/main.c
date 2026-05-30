@@ -1805,6 +1805,18 @@ static void nvme_engine_diag_cmd(char *str)
 	       (unsigned)nvme_gen_count_read(), (unsigned)nvme_gen_buf_base_lo_read(),
 	       (unsigned)nvme_gen_buf_stride_read(), (unsigned)nvme_gen_qmod_read());
 
+	/* Sentinel self-test: write a known marker into SQ[0].dw0 via the CSR-debug port and
+	 * read it straight back. Proves the CSR read/write path AND gives the engine something
+	 * to overwrite -- if after the run SQ[0].dw0 still reads the sentinel, the engine's AXI
+	 * SQE write never reached this backend location (vs the CSR port writing the SAME spot,
+	 * which the SSD executes via nvme_bench). */
+	hostmem_wr32(IO_SQ_ADDR, 0x5E471A10u);
+	{
+		uint32_t sb = hostmem_rd32(IO_SQ_ADDR);
+		printf("sentinel: wrote 0x5E471A10 read 0x%08x (%s)\n",
+		       (unsigned)sb, sb == 0x5E471A10u ? "CSR path OK" : "CSR PATH BROKEN");
+	}
+
 	/* Enable engine, then kick the generator. */
 	nvme_engine_engine_enable_write(1);
 	nvme_gen_ctrl_write(1);
@@ -1864,7 +1876,9 @@ static void nvme_engine_diag_cmd(char *str)
 	uint32_t cqe[4];
 	hostmem_read_dwords(IO_SQ_ADDR, sqe, 16);
 	hostmem_read_dwords(IO_CQ_ADDR, cqe, 4);
-	puts("== SQ[0] (16 dwords: dw0=cdw0 op/cid, dw6/7=PRP1, dw8/9=PRP2, dw10/11=slba, dw12=nlb) ==");
+	printf("== SQ[0] (dw0 was sentinel 0x5E471A10; engine should overwrite -> %s) ==\n",
+	       sqe[0] == 0x5E471A10u ? "NOT OVERWRITTEN: engine write missed" :
+	       (sqe[0] == 0 ? "zero" : "overwritten"));
 	for (int i = 0; i < 16; i += 4)
 		printf("  dw%-2d: %08x %08x %08x %08x\n", i, (unsigned)sqe[i], (unsigned)sqe[i+1],
 		       (unsigned)sqe[i+2], (unsigned)sqe[i+3]);
