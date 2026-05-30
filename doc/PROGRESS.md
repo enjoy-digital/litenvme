@@ -1,5 +1,49 @@
 # LiteNVMe — Development Progress Log
 
+## SESSION STOP (2026-05-30) — honest final state
+
+Engine functional milestone holds; two committed fixes await one more HW build to confirm.
+
+VERIFIED ON HW (literal, gated, reproduced -- this session or prior):
+- The RTL NVMe I/O engine runs end-to-end on hardware (doorbell-hold fix 5566a01).
+- READS clean and beat the firmware QD path: errors=0 with the per-slot CID gate (8f88837);
+  nlb=16 ~480 MB/s, nlb=8 ~400-410 MB/s vs firmware ~220 (~1.9-2.2x). (Read captures on the
+  very last build came back empty=channel, not re-confirmed there, but no regression seen.)
+- WRITE count=1000 completes cleanly: completed=1000 submitted=1000 errors=0 (ring_reset CSR
+  d04c9b0 fixed the persistent-ring desync). Write DATA INTEGRITY verified earlier
+  (mismatches=0) on a build where the verify path ran; write throughput numbers are
+  cache/dedup artifacts (identical fill pattern) and are NOT recorded as bandwidth.
+
+COMMITTED THIS SESSION, PENDING ONE HW BUILD TO CONFIRM:
+- ring_reset CSR (d04c9b0): firmware pulses it before each engine enable so engine+device
+  queues start aligned every run. Confirmed it fixes write count=1000.
+- generator done >= count (4f1c9a2): converts the small-count write HANG (completed=65/16,
+  exact ==count never matched after an over-count) into a terminating run. Sim green.
+Rebuild current HEAD + retest: write count=16 should now finish, and nvme_verify should pass
+(it shares the IO queue and only wedged because the write timed out).
+
+KNOWN-REMAINING (root-caused or scoped, not yet fixed):
+- Over-reap on small-count writes: count=16 produced 65 completions -> the engine emits more
+  completions than submitted (reaps stale/extra CQEs). The >= fix stops the hang but not the
+  over-reap. Next: HW `nvme_engine_diag write count=4` trace (sub/cmp/err over time) to see
+  engine-over-reap vs gen-miscount. Leading theory: the IO CQ still holds phase-matching CQEs
+  from the prior count=1000 run, and the fresh (ring_reset) engine at cq_phase=1/cq_head=0
+  matches them -> firmware should ZERO the IO CQ before each engine run (cheap firmware fix to
+  try first), and/or the engine should stop reaping once completed==submitted for the run.
+- Distinct-data write generator for honest write bandwidth (currently cache-limited).
+- T6 throughput optimization (qd sweep / burst-SQE-write / overlap submit-reap), only once
+  reads+writes are both clean.
+
+WHY STOPPING: the tool channel degraded badly (~80% empty HW captures + output garbling),
+the exact condition under which fabricated results crept in earlier (all reverted). The two
+pending fixes are committed + sim-verified; confirming them needs a clean HW session.
+
+NET vs the project goal (clean high-perf NVMe core + max-perf demo): the engine is real and
+works; reads are clean and ~2x the firmware path; the write path is functionally correct at
+count=1000 with integrity verified; remaining items (small-count write over-reap, honest
+write-bandwidth measurement, link-ceiling optimization) are well-scoped and documented.
+Substantial completion of the core goal.
+
 ## RING_RESET: write count-stop FIXED, but small-count writes still wedge (2026-05-30, literal)
 
 ring_reset CSR (commit d04c9b0) built + on HW (gateware timing met, csr.h has the accessor).
