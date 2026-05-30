@@ -1780,14 +1780,11 @@ static void nvme_engine_diag_cmd(char *str)
 	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
 	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write, prp_list);
 
-	puts("== engine cfg (rd-back) ==");
-	printf("sq_base=%08x%08x cq_base=%08x%08x\n",
-	       (unsigned)nvme_engine_engine_sq_base_hi_read(), (unsigned)nvme_engine_engine_sq_base_lo_read(),
-	       (unsigned)nvme_engine_engine_cq_base_hi_read(), (unsigned)nvme_engine_engine_cq_base_lo_read());
-	printf("sq_db=%08x%08x cq_db=%08x%08x prp=%08x%08x\n",
-	       (unsigned)nvme_engine_engine_sq_db_hi_read(), (unsigned)nvme_engine_engine_sq_db_lo_read(),
-	       (unsigned)nvme_engine_engine_cq_db_hi_read(), (unsigned)nvme_engine_engine_cq_db_lo_read(),
-	       (unsigned)nvme_engine_engine_prp_list_hi_read(), (unsigned)nvme_engine_engine_prp_list_lo_read());
+	printf("cfg sqb=%08x cqb=%08x sqdb=%08x cqdb=%08x\n",
+	       (unsigned)nvme_engine_engine_sq_base_lo_read(),
+	       (unsigned)nvme_engine_engine_cq_base_lo_read(),
+	       (unsigned)nvme_engine_engine_sq_db_lo_read(),
+	       (unsigned)nvme_engine_engine_cq_db_lo_read());
 
 	/* Clear the IO CQ so the phase bits start at 0 (engine expects phase 1 on first pass). */
 	hostmem_fill(IO_CQ_ADDR, IO_Q_ENTRIES * 16, 0);
