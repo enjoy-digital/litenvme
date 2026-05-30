@@ -8,9 +8,14 @@ sim tests pass.
 
 Why I'm consolidating instead of iterating more: the read error is not reproducing in sim
 and my HW theories keep failing:
-- CID-reuse theory: a latency-aware model SSD (holds each CID outstanding several command-
-  times, flags SC=0x03 on reuse) shows NO conflict at qd<qsize. And the HW signature
-  contradicts reuse anyway -- with the ring-reset gateware the error was at idx==cid for
+- CID-reuse theory: an EARLIER plain (zero-latency) model SSD showed no conflict, and the HW
+  signature contradicts reuse anyway. A follow-up LATENCY-aware model (device retires CIDs
+  ~6 commands late, qd=4 qsize=8) did NOT cleanly run -- the engine STOPPED accepting
+  requests partway (sim aborted "no accept"). That is itself a finding: when completions lag,
+  the engine's accept path can stall (inflight not draining as expected) -- a separate
+  liveness concern from the SC=0x03 read error, worth a dedicated sim. It does NOT prove or
+  disprove the CID theory. (Net: the read error is still not reproduced in sim.) The HW
+  signature contradicts simple reuse -- with the ring-reset gateware the error was at idx==cid for
   small cid (44,40,45,47); with qsize=64 those are the FIRST use of that CID, not a reuse.
 - So SC=0x03 ("Command ID Conflict") at first use means either the engine SUBMITTED a
   duplicate CID (two SQEs with the same cid close together) or the device is reacting to
