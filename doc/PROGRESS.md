@@ -1,5 +1,33 @@
 # LiteNVMe — Development Progress Log
 
+## RESOLVED (2026-05-30) — read error FIXED by ring-reset; reads clean & beat firmware; writes verified
+
+The idx=qsize read error is GONE. Root cause was the engine not re-initializing its ring
+state between runs (sq_tail/cq_head/cq_phase/inflight persisted -> mid-ring start ->
+desync from the device's freshly-created queues -> one bad CQE at the first wrap). Fix
+(commit 2ca673a): re-init the ring whenever enable is low. Verified on HW (gated,
+reproduced):
+
+reads count=1000, all errors=0, last_cqe_status=0 (bit-identical across 3-4 runs incl. a
+run right after nvme_engine_diag -- the desync path that used to trigger the error):
+  read 512B 127.0 | read 4KiB 410.4 | read 8KiB 490.1 MB/s
+  -> beats firmware QD plateau (~220): 4KiB ~1.9x, 8KiB ~2.2x.
+
+writes count=1000, all errors=0: 512B 254.2 | 4KiB 1509.2 | 8KiB 504.5 MB/s.
+write DATA INTEGRITY verified: nvme_fill + engine-write + nvme_verify -> mismatches=0, TWO
+patterns/LBAs (0xCAFEF00D@2048, 0x5A3C96E1@4096). The 4KiB 1509 MB/s (~line rate, 3x the
+8KiB rate) is a write-cache/dedup artifact (identical fill pattern every block), NOT real
+distinct-data bandwidth -- documented; needs a distinct-data generator to measure honestly.
+
+Three RTL bugs fixed end-to-end (all HW-only races sim couldn't expose; 31 sim tests green):
+doorbell-hold (5566a01), CQE reap reorder (7f84b01), ring-state reset (2ca673a).
+
+STATUS: T1-T5 COMPLETE. The RTL engine works on hardware, reads are clean/error-free and
+~1.9-2.2x the firmware QD path, writes are integrity-verified. Full table + caveats in
+doc/NVME_PERFORMANCE.md. Remaining (optional, T6): push reads toward the ~1.5 GB/s link
+(4KiB ~26%, 8KiB ~33% of link) via deeper qd / burst-SQE-write / doorbell coalesce; add a
+distinct-data write mode for honest write bandwidth.
+
 ## CLUE (2026-05-30) — erroring CID is ALWAYS a multiple of 4 (addressing artifact, not generic CID reuse)
 
 From on-disk captures (reliable), the SC=0x03 error at idx=64 has these CIDs across runs:

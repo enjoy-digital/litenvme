@@ -168,6 +168,84 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## RTL I/O engine on hardware — measured 2026-05-30 (clean: reads errors=0, writes verified)
+
+The hardware I/O command engine (`litenvme/io_engine.py`, qd=16) built into the SoC
+(`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`, no CPU
+in the steady-state loop), run via `nvme_engine_bench`. Firmware does one-time admin/queue
+setup; the engine builds SQEs, rings doorbells and reaps CQEs in hardware.
+
+Trust basis: every run gated — firmware reached `litenvme>` (not the BIOS), build linked
+with no RAM overflow, on-chip `seqread selftest: OK`, board integrity-gated (PCIe link
+0x209d + unique-value Etherbone roundtrip), all runs `errors: 0` / `last_cqe_status:
+0x0000`, each figure reproduced (reads bit-identical across 3–4 runs incl. a run right after
+an `nvme_engine_diag`, the path that used to desync the ring). Alibaba KU3P, PCIe Gen2 x4,
+125 MHz, `count=1000`:
+
+| op    | nlb | transfer | cycles    | throughput  | vs firmware QD plateau (~220) |
+|-------|-----|----------|-----------|-------------|-------------------------------|
+| read  | 1   | 512 B    | 503,714   | 127.0 MB/s  |                               |
+| read  | 8   | 4 KiB    | 1,247,612 | 410.4 MB/s  | ~1.9×                         |
+| read  | 16  | 8 KiB    | 2,089,724 | 490.1 MB/s  | ~2.2×                         |
+| write | 1   | 512 B    | 251,498   | 254.2 MB/s  | (see caveat)                  |
+| write | 8   | 4 KiB    | 339,254   | 1509.2 MB/s | (cache/dedup, not bandwidth)  |
+| write | 16  | 8 KiB    | 2,030,524 | 504.5 MB/s  | (see caveat)                  |
+
+(read 4 KiB measured 404.4 on the first run then 410.4 bit-identical on the next three; the
+rest were bit-identical across runs.)
+
+### Reads: clean and clearly faster than the firmware QD path
+
+4 KiB read 410 MB/s vs the firmware ~220 MB/s plateau (~1.9×); 8 KiB read 490 MB/s (~2.2×).
+The engine keeps the qd window genuinely in flight and builds/reaps at bus rate — the win it
+was designed for — with `errors=0` reproduced. 4 KiB read ≈ 26% of the ~1.5 GB/s link; 8 KiB
+≈ 33%. Headroom toward the link is the T6 optimization target.
+
+### Writes: data integrity VERIFIED; the 4 KiB rate is a cache/dedup artifact
+
+Write **data integrity is confirmed**: set a unique 32-bit pattern (`nvme_fill`), engine-
+write known LBAs, then firmware-read those LBAs back and compare (`nvme_verify`) →
+`mismatches: 0`, done twice with different patterns/LBAs (0xCAFEF00D @ LBA 2048,
+0x5A3C96E1 @ LBA 4096). So the engine genuinely DMAs write data to the SSD.
+
+BUT the write-4 KiB rate (1509 MB/s ≈ PCIe Gen2 x4 line rate, and 3× the write-8 KiB rate
+504 MB/s) is **not** a real distinct-data write bandwidth: the generator writes the SAME
+fill pattern to every block, so the SSD's write-cache / page-dedup absorbs identical 4 KiB
+pages near-instantly. Treat the write numbers as cache-limited. write-8 KiB (504 MB/s) and
+write-512 B (254 MB/s) are likely closer to real; a proper write benchmark needs distinct
+per-block data (a future generator option). Reads do not have this issue (the device must
+return the addressed LBA's data).
+
+### Three RTL bugs fixed to reach this (all verified on HW)
+
+1. **Doorbell never reached BAR0** (engine timed out, completed=0): the engine drove the
+   MMIO accessor's we/adr/wdata for one cycle, but `LiteNVMePCIeMmioAccessor` samples them
+   combinationally across its multi-cycle SEND, so the doorbell MemWr carried address 0. Fix:
+   hold the payload stable through the WAIT state (SUBMIT + REAP).
+2. **CQE reap read-order** (minor; reordered to read dw3/phase first, then dw2/sqhd — also
+   halves CQE reads to 2).
+3. **Ring state not reset between runs** (the real cause of the read error at completion
+   index = qsize): `sq_tail`/`cq_head`/`cq_phase`/`inflight` persisted across runs, so a new
+   `enable` started mid-ring and desynced from the device's freshly-created IO SQ/CQ,
+   producing exactly one bad CQE at the first wrap. Fix: re-initialize the ring whenever
+   `enable` is low. After this, reads are `errors=0`, reproduced (incl. the diag-then-bench
+   path).
+
+All three are HW-only races the sim's atomic-CQE / immediate-doorbell / single-run models
+could not expose; 31 sim tests stay green. Reproduce a read, from `bench/`:
+
+```sh
+python3 uart_cmd.py "nvme_engine_bench read 0xe0000000 1 0 16 1000 16" 60 /tmp/r.txt && cat /tmp/r.txt
+```
+
+Verify write integrity, from `bench/`:
+
+```sh
+python3 uart_cmd.py "nvme_fill 0xCAFEF00D" 6 /tmp/f.txt
+python3 uart_cmd.py "nvme_engine_bench write 0xe0000000 1 2048 8 16 8" 40 /tmp/w.txt
+python3 uart_cmd.py "nvme_verify 0xe0000000 1 2048 8 64" 40 /tmp/v.txt && grep mismatches /tmp/v.txt
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone
