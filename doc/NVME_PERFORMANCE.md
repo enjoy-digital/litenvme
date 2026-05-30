@@ -220,11 +220,29 @@ completions. Both passes, exactly as printed (MB/s):
    firmware queue-depth plateau (~224 MB/s, table above) and ~4× firmware QD=1 (115 MB/s).
    The RTL engine builds and reaps commands faster than the soft CPU, as intended.
 
-**Still TODO before any "X GB/s sustained" claim:** end-to-end data integrity through the
-engine (write known pattern → read back → compare), distinct-per-block write data, a
-cache-busting LBA spread, and an engine-side QD sweep. Until then the trustworthy statements
-are exactly: *the RTL engine is functional on hardware (1000/1000, errors=0, reproduced) and
-its 4 KiB read command throughput is ~2× the firmware path.*
+**End-to-end data integrity: VERIFIED (round-trip, 2026-05-31).** A host-driven round-trip
+proves the engine moves bytes correctly through the SSD, not just that commands complete
+(`bench/hw_integrity2.sh` + `bench/hostmem_tool.py`; raw evidence
+`bench/results/engine_hw_2026-05-31_integrity.log`):
+
+1. Engine writes LBA 0 (`completed=1, errors=0`). The firmware bench fills the host buffer
+   with a uniform `0xa5a5a5a5` (it overwrites any host pre-seed), so that is the pattern
+   sent to the SSD — confirmed by reading the buffer back over the `hostmem_csr` debug port.
+2. Host clobbers the buffer to `0xDEAD0000+i` and confirms the clobber took.
+3. Engine reads LBA 0 back (`completed=1, errors=0`); the buffer returns to `0xa5a5a5a5`.
+4. Read-back == written (`VERDICT_EQUAL=PASS`, 0/38 sampled dwords mismatched) AND read-back
+   != clobber (`VERDICT_DIFFER=PASS`, 38/38 differ).
+
+Because the buffer was clobbered *between* the write and the read (and the clobber was
+confirmed), the recovered pattern could only have come from the SSD — so the engine's write
+(host→SSD) and read (SSD→host) data paths are both real and correct. *Caveat:* the written
+pattern is uniform, so this proves round-trip correctness but not per-offset/LBA addressing;
+a distinct-per-block pattern needs a firmware-bench change.
+
+**Still TODO:** distinct-per-block write data, a cache-busting LBA spread (so reads aren't
+partly cache-served), and an engine-side QD sweep. Trustworthy statements today: *the RTL
+engine is functional and data-correct on hardware (1000/1000, errors=0, reproduced;
+integrity round-trip PASS), and its 4 KiB read command throughput is ~2× the firmware path.*
 
 Reproduce (board up, firmware already at `litenvme>` prompt, from `bench/`):
 
