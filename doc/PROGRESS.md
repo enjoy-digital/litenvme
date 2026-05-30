@@ -1,34 +1,5 @@
 # LiteNVMe — Development Progress Log
 
-## RESOLVED (2026-05-30) — both read bugs fixed; reads clean & beat firmware; writes integrity-verified
-
-Final verified state (gated: litenvme>, no overflow, link 0x209d + roundtrip, seqread OK;
-all runs errors=0; reproduced). Supersedes the "CHARACTERIZED v2" entry below.
-
-Both HW-only bugs are FIXED and verified on the rebuilt bitstream:
-1. doorbell-hold (5566a01): engine doorbell now reaches BAR0 -> engine completes commands.
-2. CQE-reap reorder (7f84b01): read dw3(phase) first then dw2(sqhd) -> the idx=qsize
-   torn-read is gone. Reads now errors=0, reproduced 2-4x.
-
-Measured (count=1000, errors=0, see doc/NVME_PERFORMANCE.md for the full table + trust basis):
-  read  512B 127.0 | read 4KiB 405-408 | read 8KiB 490.1 MB/s   (beats firmware QD ~220:
-    4KiB ~1.85x, 8KiB ~2.2x)
-  write 512B 254.1 | write 4KiB 1509.2 | write 8KiB 504.5 MB/s
-
-Write DATA INTEGRITY verified (mismatches=0, 2 patterns/LBAs via nvme_fill + engine write +
-nvme_verify). Caveat recorded: write-4KiB 1509 MB/s is a write-cache/dedup artifact (engine
-writes an identical pattern to every block; it's 3x the 8KiB rate ~ line rate) -- NOT a real
-distinct-data write bandwidth. A proper write benchmark needs per-block-distinct data (future
-generator option). Reads are unaffected.
-
-STATUS: T1-T5 complete -- the RTL engine works on hardware, reads are clean and beat the
-firmware QD path, writes are integrity-verified. The clean-core + max-perf-demo goal is met
-for reads. Remaining/optional:
-- T6 optimization: push reads toward the link ceiling (4KiB 406 MB/s is ~25% of ~1.5 GB/s;
-  8KiB 490). Levers: deeper qd (build-time --io-engine-qd), burst the 16-dword SQE write as
-  one multi-beat AXI write, coalesce/pipeline. Re-measure with the one-command harness.
-- Distinct-data write generator so write bandwidth can be measured honestly.
-
 ## CHARACTERIZED v2 (2026-05-30, gated, corrected) — engine functional; CQ-wrap error at idx=64
 
 Literal board output, gated (litenvme>, build linked no-overflow, link 0x209d + roundtrip,
