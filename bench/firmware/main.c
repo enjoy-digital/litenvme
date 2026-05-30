@@ -1876,16 +1876,15 @@ static void nvme_engine_diag_cmd(char *str)
 	uint32_t cqe[4];
 	hostmem_read_dwords(IO_SQ_ADDR, sqe, 16);
 	hostmem_read_dwords(IO_CQ_ADDR, cqe, 4);
-	printf("== SQ[0] (dw0 was sentinel 0x5E471A10; engine should overwrite -> %s) ==\n",
-	       sqe[0] == 0x5E471A10u ? "NOT OVERWRITTEN: engine write missed" :
-	       (sqe[0] == 0 ? "zero" : "overwritten"));
+	printf("SQ[0] sentinel %s\n",
+	       sqe[0] == 0x5E471A10u ? "SURVIVED: engine write missed" :
+	       (sqe[0] == 0 ? "gone(zero)" : "overwritten"));
 	for (int i = 0; i < 16; i += 4)
 		printf("  dw%-2d: %08x %08x %08x %08x\n", i, (unsigned)sqe[i], (unsigned)sqe[i+1],
 		       (unsigned)sqe[i+2], (unsigned)sqe[i+3]);
-	puts("== CQ[0] (4 dwords: dw2=sqhd/sqid, dw3[16]=phase, dw3[31:17]=status) ==");
-	printf("  %08x %08x %08x %08x\n", (unsigned)cqe[0], (unsigned)cqe[1], (unsigned)cqe[2], (unsigned)cqe[3]);
-	printf("  cqe phase=%u status=0x%04x\n",
-	       (unsigned)((cqe[3] >> 16) & 0x1u), (unsigned)((cqe[3] >> 17) & 0x7fffu));
+	printf("CQ[0]: %08x %08x %08x %08x phase=%u\n",
+	       (unsigned)cqe[0], (unsigned)cqe[1], (unsigned)cqe[2], (unsigned)cqe[3],
+	       (unsigned)((cqe[3] >> 16) & 0x1u));
 	(void)op_name;
 }
 #endif /* NVME_ENGINE_AVAILABLE */
