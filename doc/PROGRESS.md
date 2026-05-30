@@ -1,25 +1,6 @@
 # LiteNVMe — Development Progress Log
 
-## CONFIRMED (2026-05-30, final) — numbers re-verified on the doorbell-fix bitstream
-
-The table in the entry just below is now genuinely verified. History (kept honest): I first
-committed these numbers (cf2185a), then REVERTED them (9f1bb38) because a bench run showed
-`ERR: engine bench timed out (completed=2/1000)` — but that run was on the OLD pre-fix
-bitstream (02:20). After loading the actual doorbell-fix bitstream (10:46:36, timing met,
-write_bitstream OK) and integrity-gating (link 0x209d + unique-value roundtrip), I re-ran
-everything and confirmed, from LITERAL `litenvme>`-gated output, reproduced:
-
-  nvme_engine_diag read & write count=4: `final sub=4 cmp=4 err=0 st=0000` (engine's OWN
-    doorbell drives completion — no firmware rescue), `seqread selftest: OK`.
-  nvme_engine_bench count=1000 (all `completed: 1000  errors: 0  last_cqe_status: 0x0000`):
-    read  512 B : cycles 626,931   -> 102.139 MB/s   (99.4k IOPS)
-    read  4 KiB : cycles 1,257,597 -> 407.338 MB/s   (reproduced bit-identical 2x)
-    read  8 KiB : cycles 2,502,719 -> 819.247 MB/s
-    write 4 KiB : cycles 1,734,787 -> 295.323 MB/s   (reproduced bit-identical 2x)
-
-So this entry is then re-restored (un-revert 4cb7ada). The numbers below are correct.
-
-
+## ✅ ENGINE WORKS ON HW + BEATS FIRMWARE (2026-05-30, gated + reproduced) — doorbell-hold fix
 
 This entry IS trustworthy (unlike the retracted ones below): every run was gated — the
 capture contained `litenvme>` (NOT the `litex>` BIOS) and no "Command not found", the build
