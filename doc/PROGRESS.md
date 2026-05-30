@@ -1,5 +1,48 @@
 # LiteNVMe — Development Progress Log
 
+## CHARACTERIZED v2 (2026-05-30, gated, corrected) — engine functional; CQ-wrap error at idx=64
+
+Literal board output, gated (litenvme>, build linked no-overflow, link 0x209d + roundtrip,
+seqread selftest OK), err-instrumented bitstream (11:04). Engine is FUNCTIONAL (doorbell-hold
+fix 5566a01 holds): every config completes all 1000 commands.
+
+bench count=1000, LITERAL (read examples across runs):
+  read 4KiB: completed=1000 errors=1 cyc=1,263,976 405.07 MB/s; reruns 398-405 MB/s
+  read 512B: completed=1000 errors=1 cyc=507,832..552,270 ~116-126 MB/s
+  read 8KiB: completed=1000 errors=0 cyc=2,120,597 480.6 MB/s
+  write4KiB: completed=1000 errors=0 cyc=339,397 1508.6 MB/s (one run printed 1244)
+Reads beat the firmware QD plateau (~220 MB/s): 4KiB ~400, 8KiB ~480 MB/s.
+
+CORRECTION of the prior entry (1b5e928, reverted): there is NO over-submit bug. `submitted`
+is a CUMULATIVE engine counter, never reset between runs — it reads 1004,2004,3004,...8004
+across successive benches (each +1000, +4 from the initial diag). I misread cumulative as
+per-run. Disregard "submitted=1012 / over-submit by 12".
+
+ISSUE 1 — intermittent read error, ALWAYS at idx=64. The new err0 instrumentation shows the
+FIRST (and only) bad CQE is at completion index 64 = qsize on EVERY erroring run:
+  err0 sc=03 sct=0 idx=64 (status 0006/0007 vary; cid varies 4/44/60/36).
+Some read runs have errors=0 (intermittent). idx=64 == qsize is the smoking gun: the engine
+mis-handles the CQ/SQ ring at the FIRST wrap (cq_head/sq_tail or cq_phase toggling at the
+qsize boundary). sc=0x03 in NVMe generic status is around Invalid-Field/Command-class; with
+sct=0 and the cid not matching the slot, this looks like the engine reaps a CQE whose
+phase/slot bookkeeping is off by the wrap — i.e. it reads a not-yet-valid or wrong CQ slot
+exactly when cq_head wraps 63->0 and cq_phase flips. To chase in litenvme/io_engine.py
+REAP-CHECK/REAP-EMIT cq_head/cq_phase wrap, and reproduce in
+test_io_engine_integration.py at count>qsize (current tests use n_cmds=16 < qsize=8? check;
+need a case that crosses the wrap with a model SSD posting real phase bits).
+
+ISSUE 2 (suspected, write) — write 4KiB ~1509 MB/s (~3.8x read, ~PCIe line rate) is
+physically implausible; the write CQE likely posts before the data is DMA'd from host. One
+run printed 1244 MB/s (variance reinforces it's not a real steady data rate). MUST validate
+with write-pattern -> read-back -> verify before trusting any write number. errors=0 only
+means the SSD accepted the command.
+
+SOLID: engine completes 1000 on HW; reads beat firmware QD and are real bus activity. NOT a
+clean benchmark yet: reads have the idx=64 wrap error, write rate unvalidated.
+
+NEXT: (1) fix CQ-wrap reap (issue 1) — reproduce in sim at count>qsize first; (2) write
+integrity check (issue 2); (3) re-measure clean, reproduced; (4) T6 optimization.
+
 ## REAL RESULT (2026-05-30, literal gated output) — doorbell fix WORKS; engine completes 1000; reads have errors=1
 
 This is the actual board output (gated: firmware at `litenvme>`, build linked, board
