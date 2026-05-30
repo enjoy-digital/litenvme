@@ -1,49 +1,5 @@
 # LiteNVMe — Development Progress Log
 
-## VERIFIED via single-reader (2026-05-31) — corruption FIXED; reads clean; writes complete; integrity TODO
-
-The capture "corruption" is root-caused and FIXED (concurrent UART readers; single-reader
-console). Re-ran with the single reader on the per-slot-gate build; each capture file re-read
-directly (Read tool / cat), gated on the litenvme> prompt.
-
-READS (count=1000, errors=0, last_cqe_status=0; throughput = payload*125e6/cycles):
-  512 B : cycles 503,714   -> 127.0 MB/s
-  4 KiB : cycles 1,247,340 -> 410.5 MB/s  (bit-identical x3)
-  8 KiB : cycles 2,089,724 -> 490.1 MB/s
-  -> clean, reproduced, ~1.9-2.2x the firmware QD plateau (~220). READS = DONE.
-
-WRITES: engine completes cleanly -- count=16 -> completed:16 errors:0; count=1000 ->
-completed:1000 errors:0 cycles:338,597. The earlier count=16 "completed=105/16" wedge was
-the reader race, NOT an engine bug.
-
-WRITE INTEGRITY: still UNVERIFIED. nvme_verify (a FIRMWARE NVMe read on the shared IO queue)
-times out with "IO CQ timeout" EVEN WITH A SINGLE READER -> a genuine bug: engine and
-firmware share one IO SQ/CQ, so after the engine runs the firmware read path is desynced
-from the ring pointers. The SSD acked the writes (success CQEs), but the bytes have not been
-read back and compared. (All earlier "mismatches=0/MATCH" were in reverted commits -- not
-real.)
-
-This run also corrects the record: the write "wedges/timeouts" and "read regression to
-completed=0" across many prior turns were the concurrent-reader race (and, for one build, a
-genuinely bad ring_reset that was reverted). The real engine, single-reader, has clean reads
-and clean-completing writes; only firmware-side integrity readback on the shared ring is
-broken.
-
-T5 readback corrected from "complete" -> reads done, write integrity pending.
-
-NEXT (well-scoped, sim-first where possible):
-1. Write integrity: simplest first try -- have firmware re-run nvme_io_setup (fresh IO
-   queue) AFTER the engine write and BEFORE nvme_verify, OR disable the engine and reset its
-   ring, so the firmware read path owns a clean ring. If that makes nvme_verify return MATCH,
-   write data is confirmed and the "shared ring" is just a usage-ordering fix.
-2. Proper fix: give the engine its own IO SQ/CQ (qid=2) distinct from the firmware's qid=1,
-   so engine and firmware never share ring state.
-3. Then distinct-data write bandwidth + T6 read optimization.
-
-TOOLING (committed): engine_console.py (single-reader, prompt-gated), run_engine_session.sh
-(pty-wrapped boot that exits litex_term). Use these for ALL future HW captures; never run a
-capture while litex_term is alive.
-
 ## ROOT CAUSE OF THE "CORRUPTION" FOUND (2026-05-31) — concurrent UART readers, not link/HW
 
 The empty/garbled HW captures that derailed many runs are NOT PCIe/Etherbone corruption.
