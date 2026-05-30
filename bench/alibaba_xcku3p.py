@@ -192,7 +192,8 @@ class BaseSoC(SoCCore):
         if with_io_engine:
             self.io_engine = io_engine = LiteNVMeIOEngineAXI(
                 qid=1, qsize=64, qd=io_engine_qd,
-                data_width=self.pcie_phy.data_width, with_csr=True)
+                data_width=self.pcie_phy.data_width, with_csr=True,
+                hostmem_base=hostmem_base)
             self.add_module(name="nvme_engine", module=io_engine.engine)
 
             io_db_port = endpoint.crossbar.get_master_port()

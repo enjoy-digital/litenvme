@@ -122,7 +122,8 @@ class LiteNVMe(LiteXModule):
 
         # Hardware I/O command engine (engine + dword->AXI bridge).
         self.io_engine = io_engine = LiteNVMeIOEngineAXI(
-            qid=qid, qsize=qsize, qd=qd, data_width=data_width, with_csr=True)
+            qid=qid, qsize=qsize, qd=qd, data_width=data_width, with_csr=True,
+            hostmem_base=hostmem_base)
 
         # Host-memory responder; the engine joins the AXI backend as an extra master.
         def hostmem_decoder(a):

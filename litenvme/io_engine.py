@@ -536,7 +536,13 @@ class LiteNVMeMemPortToAXI(LiteXModule):
     `mem.dat_r` valid that cycle (matching the engine's mem-port contract). One IDLE
     bubble separates consecutive transfers.
     """
-    def __init__(self, mem, data_width=128, address_width=32):
+    def __init__(self, mem, data_width=128, address_width=32, base=0x0000_0000):
+        # `base` is the host-memory window base. The engine addresses host memory with full
+        # host byte addresses (e.g. sq_base = 0x1000_4000), but the shared backend RAM is
+        # flat and zero-based, so we de-base to a window-relative address before driving
+        # AXI -- exactly as the PCIe-DMA port does (`first_word = (req.adr - base) >> ...`).
+        # If base is wrong, the engine's SQE/CQE accesses miss the bytes the SSD/DMA touch
+        # and no command ever completes. base must be beat-aligned (it is: 0x1000_0000).
         self.mem = mem
         self.axi = axi.AXIInterface(
             data_width    = data_width,
@@ -549,15 +555,18 @@ class LiteNVMeMemPortToAXI(LiteXModule):
         beat_dwords       = data_width // 32
         beat_bytes_shift  = _bit_width(beat_bytes - 1)
         beat_dwords_shift = _bit_width(beat_dwords - 1)
+        base_dw           = base >> 2  # base as a dword index (base is beat-aligned).
 
         # # #
 
+        dw_adr   = Signal(address_width)  # window-relative dword address.
         word_adr = Signal(address_width)
         lane     = Signal(max=max(2, beat_dwords))
         byte_adr = Signal(address_width)
         self.comb += [
-            word_adr.eq(mem.adr >> beat_dwords_shift),
-            lane.eq(mem.adr[:beat_dwords_shift] if beat_dwords_shift else 0),
+            dw_adr.eq(mem.adr - base_dw),
+            word_adr.eq(dw_adr >> beat_dwords_shift),
+            lane.eq(dw_adr[:beat_dwords_shift] if beat_dwords_shift else 0),
             byte_adr.eq(word_adr << beat_bytes_shift),
         ]
 
@@ -664,11 +673,14 @@ class LiteNVMeIOEngineAXI(LiteXModule):
     PCIe DMA and CSR-debug masters. The engine's request/completion streams, MMIO
     doorbell port, config and status signals are re-exported.
     """
-    def __init__(self, qid=1, qsize=64, qd=None, data_width=128, with_csr=True):
+    def __init__(self, qid=1, qsize=64, qd=None, data_width=128, with_csr=True,
+                 hostmem_base=0x0000_0000):
+        # hostmem_base MUST equal the responder's window base so the bridge de-bases the
+        # engine's full host addresses to the flat backend (see LiteNVMeMemPortToAXI).
         self.submodules.engine = engine = LiteNVMeIOEngine(
             qid=qid, qsize=qsize, qd=qd, mem_adr_width=32, with_csr=with_csr)
         self.submodules.bridge = bridge = LiteNVMeMemPortToAXI(
-            engine.mem, data_width=data_width, address_width=32)
+            engine.mem, data_width=data_width, address_width=32, base=hostmem_base)
 
         # Re-export.
         self.axi        = bridge.axi
