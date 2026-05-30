@@ -1,5 +1,47 @@
 # LiteNVMe — Development Progress Log
 
+## CORRECTION (2026-05-30, reproduced) — engine SQE writes do NOT land; de-base was NOT the fix
+
+Retesting on a fresh integrity-gated board (link 0x209d + unique-value roundtrip) corrects
+my earlier "de-base fix verified / SQE delivery works" claim — that rested on ONE stale,
+non-reproduced sample and is WRONG. Reproduced 3x now:
+
+- `nvme_engine_diag` shows `eng_submitted=4` but **SQ[0] reads all-zero every run** (the diag
+  pre-clears the SQ, then the engine's SQE never appears there).
+- Controller status **CSTS=0x1 (RDY=1, CFS=0)** after the run: the controller is healthy and
+  did NOT fault — consistent with the SSD never fetching anything (it can't fetch an SQE
+  that isn't in host memory).
+- CONTROL: firmware `nvme_bench read ... count=1` writes its SQE to the SAME IO_SQ_ADDR via
+  the CSR-debug port and the SSD executes it, errors=0. So the backend location, the SSD,
+  the IO queues and doorbells are all fine via the firmware path.
+
+Also note: the de-base change is a latent correctness fix but could NOT have been the
+completion bug here, because hostmem_base (0x1000_0000) is an exact multiple of the backend
+size (0x80000), so the old base=0 address aliased to the same BRAM byte. (Keep the de-base
+fix — it's correct for non-aliasing bases — but it does not explain the failure.)
+
+TRUE STATUS: the engine's AXI SQE writes are accepted by the bridge FSM (mem.ack returns 16x
+→ submitted increments) and the backend issues B responses, yet the bytes are not visible at
+IO_SQ_ADDR via the CSR-debug port. So the engine's writes either (a) commit to a different
+address than the CSR port reads, or (b) commit with zero/empty wstrb, or (c) are lost in the
+AXIArbiter on HW (the engine master shares the backend with PCIe-DMA + CSR-debug; sim uses a
+2-master arbiter and passes, HW has 3 masters). The bridge wstrb/wdata/addr logic looks
+correct in isolation and 31 sim tests pass, so (c) — arbiter/HW interaction — is the leading
+suspect, with (a) address-mapping mismatch second.
+
+NEXT (firmware-only probe, no re-synth needed unless RTL changes):
+1. Add a minimal `nvme_engine_poke` diag: drive the engine to write ONE known dword to a
+   known IO_SQ_ADDR offset (or reuse the existing path with count=1) and read it back via the
+   CSR port BImmediately — isolates the AXI write-commit from the full SQE+doorbell sequence.
+   If the single dword doesn't appear → AXI write path / arbiter bug (inspect
+   litenvme/hostmem.py AXIArbiter wiring vs the 3-master case, and whether the engine master's
+   AW/W reach the backend under contention).
+2. If it DOES appear → the 16-dword SQE write addressing/sequence is the issue (dw_idx/addr).
+3. Only once SQ[0] reliably holds the engine's SQE AND the SSD completes (CQ phase=1) do we
+   measure (T5). NO throughput recorded until completed==submitted, errors=0, reproduced.
+
+(Earlier commit 20841fa's "SQE delivery works" line is superseded by this entry.)
+
 ## PROGRESS (2026-05-30, integrity-verified) — de-base fix works; 2nd engine bug remains
 
 Two firmware-tool bugs down, engine still not completing — but the picture is now precise
