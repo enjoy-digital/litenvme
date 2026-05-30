@@ -1,5 +1,55 @@
 # LiteNVMe — Development Progress Log
 
+## PROGRESS (2026-05-30, integrity-verified) — de-base fix works; 2nd engine bug remains
+
+Two firmware-tool bugs down, engine still not completing — but the picture is now precise
+and every statement here is from on-chip reads on an integrity-gated board (link 0x209d +
+unique-value roundtrip echoed exactly), reproduced.
+
+FIXED & VERIFIED — SQE delivery (the de-base bug, commit 31f85d7): With the de-base
+gateware, `nvme_engine_diag` (which pre-clears the SQ) now shows SQ[0] holding a VALID
+engine-written SQE (op=2 read, nsid=1, PRP1=0x10010000, slba=0, nlb=7). Pre-fix the same
+pre-clear left SQ[0] all-zero. So the engine's AXI SQE writes now land in the backend bytes
+the SSD/firmware read. submitted reaches 4 (qd window fills).
+
+CONTROL — the gateware/SSD/queues are healthy: firmware `nvme_bench read ... qd=4` on this
+exact bitstream completes 64 cmds, errors=0, ~198 MB/s, hostmem_dma_wr_beats=16448. So
+doorbells, IO SQ/CQ creation, host memory and the SSD all work via the firmware path.
+
+REMAINING BUG — engine completions: the engine still gets completed=0 / CQ[0] never posted
+(phase stays 0). Narrowed:
+- SQE is valid and in the right place (above).
+- Engine doorbell addresses are correct and identical to firmware's (sq_db=0xe0001008,
+  cq_db=0xe000100c).
+- The engine's MMIO doorbell accessor FSM does complete (submitted advanced 1->4, and the
+  FSM only advances past SUBMIT-DOORBELL-WAIT when mmio_done returns), yet the SSD never
+  acts on the rung doorbell.
+- doorbell-rescue (firmware re-rings the SQ doorbell via the known-good pcie_mmio path)
+  also yields no completion -- BUT that test is confounded: the engine already advanced the
+  SSD-visible SQ tail to 4, so re-ringing "4" is a no-op. It does NOT cleanly prove the
+  engine's own doorbell TLP reached BAR0.
+
+PRIME SUSPECT: the engine's dedicated doorbell accessor (`mmio_db`, a separate PCIe crossbar
+master, tag=0x45, wired via io_engine.connect_mmio) completes its FSM but may not be
+emitting a correct PCIe MemWr TLP to BAR0 (e.g. requester_id/route/tag/length formation
+differs from the proven `pcie_mmio` path), so the SSD never sees the SQ tail update and
+never fetches the SQE.
+
+NEXT (resume here):
+1. Cleanly isolate the engine doorbell: add a firmware diag step that, BEFORE the engine
+   runs, reads the SSD-visible state, or compare mmio_db vs pcie_mmio TLP formation in
+   litenvme/mem.py + how each crossbar master is built in bench/alibaba_xcku3p.py
+   (requester_id is set on cfg but NOT on either mmio accessor -- check the PCIe write TLP
+   actually carries a valid requester id / the port is a real master that reaches the EP).
+2. Cheap experiment: have the engine use the SAME accessor the firmware uses, or verify by
+   pointing mmio_db at a known CSR-observable target. If mmio_db is the bug, either fix its
+   port wiring or route engine doorbells through the working accessor (needs arbitration).
+3. Re-run nvme_engine_diag; success = completed==submitted, CQ phase=1, status=0. Only then
+   measure (T5) and record board-printed numbers.
+
+(Engine RTL sim still green: 31 tests. The bug is in the HW MMIO doorbell path, not the
+engine's submit/reap logic.)
+
 ## FINDING (2026-05-29, integrity-verified) — engine TIMES OUT on HW (completed=0)
 
 On a freshly power-cycled board, with the Etherbone channel proven faithful by a
