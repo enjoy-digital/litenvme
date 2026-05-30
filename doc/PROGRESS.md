@@ -1,5 +1,48 @@
 # LiteNVMe — Development Progress Log
 
+## CHARACTERIZED (2026-05-30, gated + reproduced 3x) — engine functional; 2 known issues
+
+All literal board output, gated (firmware at litenvme>, build linked no-overflow, board
+integrity-gated link 0x209d + roundtrip, seqread selftest OK), on the err-instrumented
+bitstream (11:04). The engine is FUNCTIONAL (the doorbell-hold fix 5566a01 holds): every
+config completes all 1000 commands. But two real issues remain, both deterministic.
+
+nvme_engine_bench, count=1000 (literal):
+| op    | nlb | completed | submitted | errors | cycles    | throughput   |
+|-------|-----|-----------|-----------|--------|-----------|--------------|
+| read  | 1   | 1000      | 1012      | 1      | 552,270   | 115.819 MB/s |
+| read  | 8   | 1000      | 1012      | 1      | 1,286,067 | 398.193 MB/s |
+| read  | 16  | 1000      | 1012      | 1      | 2,120,371 | 482.898 MB/s |
+| write | 8   | 1000      | 1012      | 0      | 339,254   | 1509.193 MB/s|
+nvme_engine_diag count=4: read sub=4 cmp=4 err=0 (clean at small count).
+
+ISSUE 1 — reads report errors=1, DETERMINISTIC: every read run (nlb 1/8/16, reproduced 3x)
+has exactly one bad CQE: `err0 status=0x4004 sc=0x02 sct=0 cid=4`. SC=0x02/SCT=0 =
+"Invalid Field in Command". Same cid=4 and same status regardless of nlb → NOT an
+LBA-range / transfer-size issue; it is tied to a specific command slot/timing. count=4 is
+clean, so it appears only at scale.
+
+ISSUE 2 — submitted=1012 vs completed=1000 on EVERY run (constant +12). The engine issues
+12 more SQEs than the generator's 1000 requests. The extra submits and the single SC=0x02
+error are almost certainly the same bug: the engine re-issues/over-submits SQEs (likely a
+queue-wrap or inflight-window edge at qsize=64/qd=16), and one of the spurious SQEs carries
+a malformed field. To chase in litenvme/io_engine.py (sq_tail/inflight/SUBMIT-ADVANCE wrap
+logic); try to reproduce in test_io_engine_integration.py at count>qsize with a model SSD
+that flags Invalid-Field on a malformed SQE.
+
+ISSUE 3 (suspected, write) — write 4 KiB = 1509 MB/s is ~3.8x faster than read 4 KiB (398)
+and ~= PCIe Gen2 x4 line rate. Physically implausible for an SSD; strongly suggests the
+write CQE is posted before/without the data actually being DMA'd from host. errors=0 only
+means the SSD accepted it. MUST be validated with write-known-pattern → read-back → verify
+before any write throughput is trusted. Treat 1509 MB/s as NOT a real data-movement rate.
+
+WHAT IS SOLID: engine completes 1000 on HW (doorbell fix real); reads beat the firmware QD
+plateau (~220 MB/s): 4 KiB 398, 16 KiB 483 MB/s. These read rates are real bus activity
+(the device returns data; one CQE errors). NOT yet a clean benchmark due to issues 1-3.
+
+NEXT (in order): (1) fix the over-submit / SC=0x02 (issue 1+2) — sim-first; (2) write
+integrity check (issue 3); (3) re-measure clean; (4) then T6 optimization.
+
 ## REAL RESULT (2026-05-30, literal gated output) — doorbell fix WORKS; engine completes 1000; reads have errors=1
 
 This is the actual board output (gated: firmware at `litenvme>`, build linked, board
