@@ -1842,31 +1842,18 @@ static void nvme_engine_diag_cmd(char *str)
 	nvme_engine_engine_enable_write(1);
 	nvme_gen_ctrl_write(1);
 
-	puts("== run trace ==");
+	/* Poll to done (or ~2s timeout). */
 	uint32_t start = bench_timer_get();
-	for (int i = 0; i < 20; i++) {
-		uint32_t est  = nvme_engine_engine_status_read();
-		uint32_t esub = nvme_engine_engine_submitted_read();
-		uint32_t ecmp = nvme_engine_engine_completed_read();
-		uint32_t gst  = nvme_gen_status_read();
-		uint32_t gcmp = nvme_gen_completed_read();
-		uint32_t gerr = nvme_gen_errors_read();
-		printf("t=%2d eng[sub=%u busy=%u inflight=%u cmp=%u] gen[done=%u cmp=%u err=%u]\n",
-		       i, (unsigned)esub, (unsigned)(est & 0x1u), (unsigned)((est >> 8) & 0xffu),
-		       (unsigned)ecmp, (unsigned)(gst & 0x1u), (unsigned)gcmp, (unsigned)gerr);
-		if ((gst & 0x1u) && gcmp >= count)
+	while (!((nvme_gen_status_read() & 0x1u) && nvme_gen_completed_read() >= count)) {
+		if (bench_ticks_elapsed(start, bench_timer_get()) > (uint64_t)CONFIG_CLOCK_FREQUENCY * 2ull)
 			break;
-		/* ~100 ms between samples. */
-		while (!bench_timeout_expired(start, CONFIG_CLOCK_FREQUENCY / 10))
-			;
-		start = bench_timer_get();
 	}
 
 	uint32_t cycles      = nvme_gen_cycles_read();
 	uint32_t last_status = nvme_gen_last_status_read();
-	printf("final: gen_completed=%u gen_errors=%u eng_submitted=%u cycles=%u last_cqe_status=0x%04x\n",
-	       (unsigned)nvme_gen_completed_read(), (unsigned)nvme_gen_errors_read(),
-	       (unsigned)nvme_engine_engine_submitted_read(), (unsigned)cycles, (unsigned)last_status);
+	printf("final sub=%u cmp=%u err=%u cyc=%u st=%04x\n",
+	       (unsigned)nvme_engine_engine_submitted_read(), (unsigned)nvme_gen_completed_read(),
+	       (unsigned)nvme_gen_errors_read(), (unsigned)cycles, (unsigned)last_status);
 
 	/*
 	 * Doorbell-rescue probe: if the engine submitted SQEs but got no completions, ring the
