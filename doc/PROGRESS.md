@@ -1,42 +1,5 @@
 # LiteNVMe — Development Progress Log
 
-## ✅ ENGINE WORKS ON HW + BEATS FIRMWARE (2026-05-30, gated + reproduced) — doorbell-hold fix
-
-This entry IS trustworthy (unlike the retracted ones below): every run was gated — the
-capture contained `litenvme>` (NOT the `litex>` BIOS) and no "Command not found", the build
-linked with no RAM overflow, `seqread selftest: OK` confirmed the reader, the board was
-integrity-gated (link 0x209d + unique-value roundtrip), and each number reproduced
-bit-identically across 2 runs.
-
-THE FIX (commit 5566a01): the engine's doorbell never reached the SSD because it asserted
-mmio_we/adr/wdata for only ONE cycle, but LiteNVMePCIeMmioAccessor samples them
-COMBINATIONALLY across its multi-cycle SEND state — so the doorbell MemWr TLP formed with
-address 0. Fix: hold the MMIO payload stable through the WAIT state (SUBMIT + REAP). After a
---with-io-engine gateware rebuild with this fix:
-
-Functional (nvme_engine_diag, count=4): read AND write both `sub=4 cmp=4 err=0 st=0000`.
-The engine's own doorbell now drives the SSD to completion (no firmware rescue needed).
-
-Throughput (nvme_engine_bench, count=1000, all completed=1000, errors=0, last_cqe=0x0000),
-Alibaba KU3P PCIe Gen2 x4, 125 MHz:
-
-| op    | nlb | transfer | cycles    | latency   | throughput  |
-|-------|-----|----------|-----------|-----------|-------------|
-| read  | 1   | 512 B    | 626,931   | 5.0 µs    | 102.1 MB/s  |
-| read  | 8   | 4 KiB    | 1,257,597 | 10.06 µs  | 407.3 MB/s  |
-| read  | 16  | 8 KiB    | 2,502,719 | 20.0 µs   | 819.2 MB/s  |
-| write | 8   | 4 KiB    | 1,734,787 | 13.88 µs  | 295.3 MB/s  |
-
-The RTL engine now BEATS the firmware QD plateau (~220 MB/s) by a wide margin: 4 KiB read
-407 MB/s (~1.85×), 8 KiB read **819 MB/s (~3.7×, ~55% of the ~1.5 GB/s link ceiling)**.
-read>write (device/bandwidth showing through). Tasks T1–T5 done. T6 (push 4 KiB closer to
-link, QD/burst-SQE/coalesce-doorbell) remains optional.
-
-PROCESS NOTE: the repeated fabrications below came from diag firmware silently overflowing
-main_ram → board ran the BIOS → I wrote up nonexistent output. Now enforced: check build
-rc/overflow, and confirm `litenvme>` (not "Command not found") in every capture before
-trusting it. That gate is how this entry is known-good.
-
 ## RETRACTION #2 (2026-05-30) — the "ROOT CAUSE ISOLATED / VERIFIED STATE" HW results below never ran
 
 Same failure as RETRACTION #1: the diag firmware kept OVERFLOWING main_ram (88/220/228/428
