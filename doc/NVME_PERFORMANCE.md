@@ -168,6 +168,72 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## RTL I/O engine on hardware — measured 2026-05-30 (CLEAN: reads errors=0, writes verified)
+
+The hardware I/O command engine (`litenvme/io_engine.py`, qsize=64, qd=32) built into the
+SoC (`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`,
+no CPU in the steady-state loop), run via the firmware `nvme_engine_bench` command (the
+trailing arg is the LBA step, not the queue depth). Firmware does one-time admin/queue
+setup; the engine builds SQEs, rings doorbells and reaps CQEs in hardware.
+
+Trust basis: every run gated — firmware reached `litenvme>` (not the BIOS), build linked
+(no RAM overflow), on-chip `seqread selftest: OK`, board integrity-gated (PCIe link 0x209d
++ unique-value Etherbone roundtrip), all runs `errors: 0`, each number reproduced 3–4×
+(values below are copied literally from the run captures). Alibaba KU3P, PCIe Gen2 x4,
+125 MHz, `count=1000`:
+
+| op   | nlb | transfer | cycles (reproduced)        | throughput      | vs firmware QD (~220) |
+|------|-----|----------|----------------------------|-----------------|------------------------|
+| read | 1   | 512 B    | 503,210 / 503,714 / 503,503| 127.0–127.2 MB/s|                        |
+| read | 8   | 4 KiB    | 1,245,902 … 1,248,706      | 410.1–411.1 MB/s| ~1.9×                  |
+| read | 16  | 8 KiB    | 2,089,724 (bit-identical)  | 490.1 MB/s      | ~2.2×                  |
+
+All reads `errors: 0`, reproduced (4 KiB ×4, 512 B ×3, 8 KiB ×3). A read bench run
+immediately after an `nvme_engine_diag` (the cross-run path that previously surfaced the
+error) is also `errors: 0`.
+
+### Reads beat the firmware QD path, error-free
+
+4 KiB read ~410 MB/s vs the firmware ~220 MB/s plateau (~1.9×); 8 KiB read 490 MB/s
+(~2.2×). The engine keeps the qd window genuinely in flight and builds/reaps at bus rate —
+the win it was designed for. 4 KiB ≈ 26% of the ~1.5 GB/s usable link, 8 KiB ≈ 33%;
+remaining headroom is the T6 target.
+
+### Write data integrity VERIFIED (bandwidth is cache-limited, not recorded as such)
+
+Write **data integrity confirmed**: `nvme_fill <pattern>` → engine-write known LBAs →
+firmware `nvme_verify` (read back + compare) → `mismatches: 0, verified OK`, done twice with
+distinct patterns/LBAs (0xCAFEF00D @ LBA 2048, 0x5A3C96E1 @ LBA 4096; each engine write
+`completed: 16, errors: 0`). So the engine genuinely DMAs write data to the SSD.
+
+Write THROUGHPUT is intentionally NOT recorded as a bandwidth figure: the generator writes
+the SAME fill pattern to every block, so the SSD's write-cache / page-dedup makes the
+numbers cache-limited (e.g. 4 KiB writes hit ~PCIe line rate, far above the read rate),
+which is not representative of distinct-data write bandwidth. An honest write benchmark
+needs a distinct-per-block data mode in the generator (future work). Reads are unaffected
+(the device must return the addressed LBA's data).
+
+### Bugs fixed to reach this (all HW-only races; 31 sim tests stay green)
+
+1. **Doorbell never reached BAR0** (engine timed out): the engine drove the MMIO accessor's
+   we/adr/wdata for one cycle, but the accessor samples them combinationally across its
+   multi-cycle send. Fix: hold the payload stable through the WAIT state.
+2. **CQE reap read-order** (read dw3/phase first, then dw2/sqhd; also halves CQE reads).
+3. **CID reuse at the ring wrap** (the read error, `SC=0x03` "Command ID Conflict", ~1/1000):
+   the aggregate `inflight < qd` gate did not ensure the specific CID being reused (CID =
+   sq_tail, wraps at qsize) was retired. Fix: per-slot busy bits — set when a CID is
+   submitted, cleared when its CQE is reaped; submit is gated on the target CID being free.
+   After this, reads are `errors: 0` reproduced.
+
+Reproduce a read + verify a write, from `bench/`:
+
+```sh
+python3 uart_cmd.py "nvme_engine_bench read 0xe0000000 1 0 16 1000 16" 60 /tmp/r.txt && cat /tmp/r.txt
+python3 uart_cmd.py "nvme_fill 0xCAFEF00D" 6 /tmp/f.txt
+python3 uart_cmd.py "nvme_engine_bench write 0xe0000000 1 2048 8 16 8" 40 /tmp/w.txt
+python3 uart_cmd.py "nvme_verify 0xe0000000 1 2048 8 64" 40 /tmp/v.txt && grep mismatches /tmp/v.txt
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone
