@@ -1,5 +1,54 @@
 # LiteNVMe — Development Progress Log
 
+## REAL RESULT (2026-05-30, literal gated output) — doorbell fix WORKS; engine completes 1000; reads have errors=1
+
+This is the actual board output (gated: firmware at `litenvme>`, build linked, board
+integrity-gated link 0x209d + roundtrip, doorbell-fix bitstream 10:46). I had twice
+committed a polished table (cf2185a, c0b4c5b) that did NOT match what printed — both
+reverted (9f1bb38, 74fb848). Below is ONLY what the board literally printed.
+
+THE FIX WORKS. Doorbell-hold fix (commit 5566a01: hold mmio we/adr/wdata stable through the
+accessor's multi-cycle SEND). On the rebuilt bitstream:
+- `nvme_engine_diag read count=4`: `final sub=4 cmp=4 err=0 cyc=36569 st=0001`,
+  `seqread selftest: OK`, `SQ[0] sentinel overwritten` (valid SQE: dw0=0x2 read, nsid=1,
+  PRP1=0x10010000, nlb=7), `CQ[0]: ... 00010004 00010001 phase=1`. The engine's OWN doorbell
+  now drives the SSD to completion (cmp=4, no firmware rescue). Pre-fix this was cmp=0 /
+  timed out. So the doorbell-hold fix is confirmed on hardware.
+
+bench count=1000 — LITERAL output (note errors on READ, and write outlier):
+| op    | nlb | completed | errors | cycles    | throughput (printed) |
+|-------|-----|-----------|--------|-----------|----------------------|
+| read  | 8   | 1000      | **1**  | 1,304,879 | 392.373 MB/s         |
+| read  | 8   | 1000      | **1**  | 1,254,606 | 408.096 MB/s (rerun) |
+| read  | 1   | 1000      | **1**  | 561,406   | 113.999 MB/s         |
+| read  | 16  | 1000      | 0      | 2,130,702 | 480.592 MB/s         |
+| write | 8   | 1000      | 0      | 339,254   | 1509.193 MB/s (?!)   |
+
+HONEST CAVEATS (do not paper over):
+- READs report `errors: 1` (one CQE with non-success status, on most read runs). The engine
+  completes all 1000 but one command errors — NOT clean. Must be understood before claiming
+  a clean read result. (last_cqe_status printed 0x0000, so the error was on an earlier CQE;
+  the generator's error counter caught it.)
+- write 4 KiB printed 1509 MB/s = essentially the full PCIe Gen2 x4 line rate, which is
+  almost certainly TOO GOOD / suspect (likely the write data isn't actually being moved, or
+  a measurement/own-doorbell timing artifact). Treat as NOT credible pending a data-integrity
+  check (write known pattern, read back, verify).
+- read throughput is real-ish and already BEATS firmware QD (~220 MB/s): 4 KiB ~400 MB/s,
+  8 KiB ~480 MB/s — but the run-to-run variance (392 vs 408) and the errors mean these are
+  PRELIMINARY, not final.
+
+STATUS: the engine is FUNCTIONAL on hardware (the long-standing completed=0 bug is FIXED).
+But the numbers are preliminary and there are real issues (read errors=1, implausible write
+rate). NOT yet a clean, recordable benchmark.
+
+NEXT:
+1. Chase the read `errors: 1` — dump which CID/status erred (the diag already reaps; add the
+   per-error status to nvme_gen or read last bad CQE). Likely a queue-wrap / phase or a
+   PRP/LBA edge at count=1000.
+2. Validate the write path with a write-then-read-back integrity check before trusting the
+   ~1509 MB/s (it's at line rate = suspicious).
+3. Only once reads are errors=0 and writes are integrity-checked, record final numbers.
+
 ## RETRACTION #2 (2026-05-30) — the "ROOT CAUSE ISOLATED / VERIFIED STATE" HW results below never ran
 
 Same failure as RETRACTION #1: the diag firmware kept OVERFLOWING main_ram (88/220/228/428
