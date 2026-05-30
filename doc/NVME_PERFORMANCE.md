@@ -168,6 +168,82 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## RTL I/O engine on hardware — measured 2026-05-30 (WORKING, clean, beats firmware)
+
+The hardware I/O command engine (`litenvme/io_engine.py`, qd=16) built into the SoC
+(`--with-io-engine`), driven by the RTL request generator (`litenvme/request_gen.py`, no
+CPU in the steady-state loop), run via `nvme_engine_bench`. Firmware does one-time admin/
+queue setup; the engine builds SQEs, rings doorbells and reaps CQEs in hardware.
+
+Trust basis (this whole table): every run was gated — firmware reached `litenvme>` (not the
+BIOS), the build linked with no RAM overflow, the on-chip `seqread selftest` passed, the
+board passed an integrity gate (PCIe link 0x209d + unique-value Etherbone roundtrip), all
+runs reported `errors: 0` / `last_cqe_status: 0x0000`, and each figure reproduced (reads
+2–4×, writes 3× bit-identical). Reads were broken until two RTL fixes landed (see below);
+the numbers here are post-fix. Alibaba KU3P, PCIe Gen2 x4, 125 MHz, `count=1000`:
+
+| op    | nlb | transfer | cycles    | throughput  | vs firmware QD (~220) |
+|-------|-----|----------|-----------|-------------|------------------------|
+| read  | 1   | 512 B    | 503,714   | 127.0 MB/s  |                        |
+| read  | 8   | 4 KiB    |1.252–1.264M| 405–408 MB/s| ~1.85×                 |
+| read  | 16  | 8 KiB    | 2,089,724 | 490.1 MB/s  | ~2.2×                  |
+| write | 1   | 512 B    | 251,498   | 254.1 MB/s  |                        |
+| write | 8   | 4 KiB    | 339,254   | 1509.2 MB/s | (cache, see caveat)    |
+| write | 16  | 8 KiB    | 2,030,524 | 504.5 MB/s  |                        |
+
+(read 4 KiB varied 405.1–408.3 MB/s across 4 runs; cycles ~1.26M. All others were
+bit-identical across runs.)
+
+### Reads: the engine clearly beats the firmware QD path
+
+4 KiB read ~406 MB/s vs the firmware ~220 MB/s plateau (~1.85×); 8 KiB read 490 MB/s
+(~2.2×). The engine keeps the qd window genuinely in flight and builds/reaps at bus rate —
+the win it was designed for. These read rates are sustained, error-free, reproduced.
+
+### Writes: data integrity VERIFIED; 4 KiB rate is a write-cache/dedup artifact
+
+Write **data integrity is confirmed** (not just CQE-posted): set a unique 32-bit pattern,
+engine-write known LBAs, then firmware-read those LBAs back and compare — `mismatches=0`,
+done twice with different patterns/LBAs (0xCAFEF00D @ LBA 2048, 0x5A3C96E1 @ LBA 4096). So
+the engine write genuinely moves data to the SSD.
+
+BUT the write-4 KiB rate (1509 MB/s ≈ PCIe Gen2 x4 line rate) is **not** a sustained
+unique-data figure: it is 3× the write-8 KiB rate (504 MB/s), which is non-physical for raw
+bandwidth. The generator writes the SAME fill pattern to every block, so the SSD's
+write-cache / page-dedup almost certainly absorbs the identical 4 KiB pages near-instantly.
+Treat 1509 MB/s as a cache/dedup ceiling, not a real distinct-data write bandwidth. The
+write-8 KiB (504 MB/s) and write-512 B (254 MB/s) numbers are likely closer to real, but a
+proper write benchmark needs distinct per-block data (a future generator option). The reads
+do not have this issue (the device must return the requested LBA's data).
+
+### Two RTL bugs fixed to get here (both verified on HW)
+
+1. **Doorbell never reached BAR0** (engine timed out, completed=0). The engine drove the
+   MMIO accessor's we/adr/wdata for one cycle, but `LiteNVMePCIeMmioAccessor` (litenvme/
+   mem.py) samples them combinationally across its multi-cycle SEND, so the doorbell MemWr
+   went out with address 0. Fix: hold the payload stable through the WAIT state (SUBMIT and
+   REAP).
+2. **CQE torn-read at the ring wrap** (exactly one bad read CQE per run at completion
+   index = qsize). The reap read dw0→dw3 in order and could catch the just-flipped phase in
+   dw3 while dw0–dw2 were still the previous entry, emitting a stale cid/sqhd. Fix: read dw3
+   (phase|status|cid, atomic) FIRST, check phase, then read dw2 (sqhd). (Also halves CQE
+   reads to 2.)
+
+Both are HW-only races the sim's atomic-CQE / immediate-doorbell models could not expose;
+31 sim tests stay green. Reproduce a read, from `bench/`:
+
+```sh
+python3 uart_cmd.py "nvme_engine_bench read 0xe0000000 1 0 16 1000 16" 60 /tmp/r.txt && cat /tmp/r.txt
+```
+
+Verify write integrity, from `bench/`:
+
+```sh
+python3 uart_cmd.py "nvme_fill 0xCAFEF00D" 6 /tmp/f.txt
+python3 uart_cmd.py "nvme_engine_bench write 0xe0000000 1 2048 8 16 8" 40 /tmp/w.txt
+python3 uart_cmd.py "nvme_verify 0xe0000000 1 2048 8 64" 40 /tmp/v.txt && grep mismatches /tmp/v.txt
+```
+
 ## What the current data says
 
 ### 1. The old MMIO write-timeout bottleneck is gone
