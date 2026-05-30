@@ -864,3 +864,29 @@ TO RESUME (needs a healthy board — power-cycle if Etherbone still times out):
   firmware or unverifiable RTL — captured the design in docs instead so execution is
   fast on resume. `Write` of new docs persisted through the outage.
 - NEXT: see "Next actions" above. Start with confirming files + board, then P1.
+
+## NOTE on the idx=64 read error — sim does NOT catch it (concurrency, not logic)
+
+Checked: the sim tests DO cross the qsize wrap (test_io_engine_integration qsize=8 n_cmds=16
+= 2 wraps; test_io_engine models phase toggle cq_phase=1^((k//qsize)&1)) and pass. So the
+CQ-wrap handling is logically correct. The HW error at exactly idx=qsize, intermittent,
+with cid not matching the slot and sc=0x03, is therefore a HW concurrency issue the sim's
+atomic CQE model cannot reproduce: at the wrap (cq_head 63->0, cq_phase flips), the engine
+reaps CQ[0] and can read a TORN / not-fully-written CQE — the SSD's CQE DMA-write and the
+engine's reap read have no ordering guarantee, and CQ[0] is special because it's the slot
+whose phase just flipped. Sim posts CQEs in one atomic smem_write burst so the race is
+absent.
+
+Candidate fixes (RTL, litemvme/io_engine.py REAP-CHECK/REAP-EMIT), to try + sim-keep-green
+then HW-verify with the err0 instrumentation (expect errors=0 at idx=64):
+1. On phase match, RE-READ the CQE dwords once and require the phase bit stable across both
+   reads before accepting (defeats torn-read on the just-flipped slot).
+2. Or validate the reaped cid is one of the outstanding cids before counting; on mismatch,
+   re-read rather than emit.
+3. Or gate the CQ read so dw3 (phase/status) is read LAST and the data dwords are re-fetched
+   if phase was the only thing set.
+Reproating in sim needs a model SSD that writes the CQE NON-atomically (phase dword first,
+or data last) around the wrap — add such a case to test_io_engine_integration.py.
+
+This is the remaining correctness item before recordable read numbers. Write-path integrity
+(the ~1509 MB/s question) is independent and still pending.
