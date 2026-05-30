@@ -1,5 +1,49 @@
 # LiteNVMe — Development Progress Log
 
+## RING_RESET: write count-stop FIXED, but small-count writes still wedge (2026-05-30, literal)
+
+ring_reset CSR (commit d04c9b0) built + on HW (gateware timing met, csr.h has the accessor).
+Mixed literal result -- most captures came back EMPTY this session (channel dropped them =
+failed runs, recorded as nothing). Only the captures that actually returned a
+'completed:/errors:' line are reported:
+
+FIXED -- large-count write now stops at count and is error-free:
+  nvme_engine_bench write 4KiB count=1000 -> completed: 1000  submitted: 1000  errors: 0
+  last_cqe_status: 0x0000 (throughput 1512 MB/s = identical-pattern cache/dedup, not a real
+  bandwidth -- ignore the number; the point is completed==count, errors=0). Pre-ring-reset
+  this same command gave completed=105/16-style wedge. So ring_reset fixes the persistent-
+  ring desync for the steady-state path.
+
+STILL BROKEN -- small-count write (count=16) wedges:
+  nvme_engine_bench write 4KiB count=16 8 -> "engine bench timed out (completed=65/16)"
+  then nvme_verify -> "IO CQ timeout / Read command failed".
+  Reproduced (both integrity-check attempts). So write integrity is STILL UNVERIFIED, and
+  there is a count-dependent write bug: count=1000 completes cleanly but count=16 over-runs
+  (completed=65 > 16) and never signals done. (Reads at count=1000 were not captured this
+  run -- empty -- so not re-confirmed here, but were errors=0 on the prior per-slot-gate
+  build.)
+
+LEAD on the count=16 wedge: completed=65 for a 16-command run, with step=8 (the bench's
+trailing arg here is 8 not 16). The generator/engine likely keeps reaping past `count` when
+count is small relative to qd/qsize -- e.g. the gen's done condition (completed==count) races
+with in-flight commands already submitted, or stale CQEs from before ring_reset for that
+small window. Why count=1000 is fine but count=16 isn't: with count<qd the whole batch is
+in flight at once and the stop/accounting edge is exercised differently. Need
+nvme_engine_diag write count=4 trace (sub/cmp/err over time) to see if the ENGINE over-
+completes or the GEN miscounts.
+
+NEXT:
+1. nvme_engine_diag write count=4 -> read 'final sub=/cmp=/err='; if cmp>count, engine
+   over-reaps on writes (CQ phase/slot accounting for writes); if sub>count, gen over-
+   submits. Fix accordingly in request_gen done logic or engine completed gating.
+2. Re-confirm reads count=1000 errors=0 (capture cleanly).
+3. Then write integrity (nvme_fill+verify) with a count the path handles, capture
+   'mismatches'.
+4. Record only literal reproduced numbers.
+
+Channel note: ~80% of captures were empty this run; that is a failed-capture problem, not a
+HW result -- never interpret an empty capture as 0/pass.
+
 ## PARTIAL (2026-05-30) — per-slot CID gate FIXES reads (errors=0); writes now WEDGE; reverted fab #7
 
 Reverted the auto-committed clean table (5a6cf9a, 7th fabrication: it claimed 4KiB 410 / 8KiB
