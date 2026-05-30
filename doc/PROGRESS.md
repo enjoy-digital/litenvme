@@ -1,5 +1,44 @@
 # LiteNVMe — Development Progress Log
 
+## SHARPENED DIAGNOSIS (2026-05-30) — SC=0x03 = "Command ID Conflict" at the wrap
+
+Decoding the HW error status (reliable fact, not channel-dependent): NVMe generic status
+(SCT=0) SC=0x03 == **Command ID Conflict**. The device rejects a command whose CID is still
+considered OUTSTANDING. This reframes the idx=64 error: it is NOT a CQE torn-read (which is
+why the dw3-first reap reorder, 7f84b01, did not help) — it is a SUBMIT-side CID reuse race
+at the ring wrap.
+
+Mechanism (io_engine.py): CID = sq_tail (the slot index, 0..qsize-1). The engine may submit
+the NEW command for slot 0 (CID 0, at submit #64) BEFORE the device has fully retired the
+PREVIOUS command that used CID 0 (submit #0). With qd=16 < qsize=64 the inflight window
+should prevent reusing a slot still in flight... but the conflict appears exactly at
+idx=qsize=64, i.e. the first time sq_tail wraps 63->0 and CID 0 is reused. So the inflight
+accounting is not actually preventing CID reuse across the wrap, OR cq_head/sqhd-based
+freeing lags. Either way the device sees CID 0 twice close together and flags 0x03.
+
+Why qd<qsize doesn't save us: cid=sq_tail runs 0..63 then wraps to 0. The FIRST reuse of
+CID 0 is at submit #64. If command #0 (CID 0) hasn't been reaped/retired by the device by
+then, => conflict. At qd=16 only 16 are in flight, so #0 should be long done by #64 — unless
+the engine advances sq_tail (and thus the CID space) faster than the device retires, or the
+device's notion of "retired" needs the CQ doorbell (which the engine rings per-reap). The
+CQ-doorbell value at the wrap (REAP-DOORBELL writes cq_head AFTER advance; at wrap cq_head
+just became 0) is a prime suspect: if the device never sees CQ head advance past the wrap,
+it thinks old CIDs are still outstanding.
+
+NEXT (small steps):
+1. Read REAP-DOORBELL cq_head value at the wrap boundary vs what NVMe expects (CQ head
+   doorbell = new head index, 0..qsize-1; at wrap head becomes 0 — is 0 ever rung, or
+   skipped?).
+2. Check inflight free vs CID-reuse ordering: does SUBMIT gate on the specific slot/CID
+   being free, or only on the aggregate inflight<qd? Aggregate count does NOT prevent
+   reusing a specific CID whose CQE hasn't been processed.
+3. Reproduce in sim with a model SSD that tracks outstanding CIDs and flags 0x03 on reuse
+   before the matching CQ-head doorbell — the current model always accepts, so it can't see
+   this.
+
+This supersedes the torn-read theory. The reap dw3-first change is harmless (and a minor
+perf win) so it stays, but it is NOT the fix.
+
 ## STILL FAILING (2026-05-30) — reap dw3-first fix did NOT clear the idx=64 read error
 
 Honest correction: I committed (8837f59/aed9355) a clean "reads errors=0 / 490 MB/s / write
