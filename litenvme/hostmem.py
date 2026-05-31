@@ -69,28 +69,32 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
             buffered = False,
         )
 
-        # Write-side latches.
-        aw_pending = Signal()
-        w_pending  = Signal()
-        b_pending  = Signal()
-        aw_addr    = Signal(address_width)
-        aw_id      = Signal(id_width)
-        w_data     = Signal(data_width)
-        w_strb     = Signal(beat_bytes)
-        b_id       = Signal(id_width)
+        # Pipelined write path: independent 1-deep AW/W skid slots + a B-response FIFO, so
+        # the device->host (NVMe read) data path runs ~1 beat/clk instead of stalling
+        # AW->W->B per 16B beat.
+        self.submodules.wr_b_fifo = wr_b_fifo = stream.SyncFIFO(
+            [("id", id_width)], depth=32, buffered=False)
+        aw_full   = Signal()
+        w_full    = Signal()
+        wr_commit = Signal()
+        aw_addr   = Signal(address_width)
+        aw_id     = Signal(id_width)
+        w_data    = Signal(data_width)
+        w_strb    = Signal(beat_bytes)
 
         # # #
 
         # Defaults.
         self.comb += [
-            # AXI write address/data handshakes.
-            self.axi.aw.ready.eq(~aw_pending & ~b_pending),
-            self.axi.w.ready.eq(~w_pending  & ~b_pending),
+            # AXI write handshakes (pipelined): accept an AW whenever its slot is free or is
+            # being committed this cycle; same for W. B drains from the FIFO.
+            self.axi.aw.ready.eq(~aw_full | wr_commit),
+            self.axi.w.ready.eq(~w_full  | wr_commit),
 
-            # AXI write response.
-            self.axi.b.valid.eq(b_pending),
+            # AXI write response (from the B FIFO).
+            self.axi.b.valid.eq(wr_b_fifo.source.valid),
             self.axi.b.resp.eq(axi.RESP_OKAY),
-            self.axi.b.id.eq(b_id),
+            self.axi.b.id.eq(wr_b_fifo.source.id),
 
             # AXI read response.
             self.axi.r.valid.eq(rd_resp_fifo.source.valid),
@@ -133,16 +137,18 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
             rd_resp_fifo.sink.last.eq(1),
         ]
 
-        # Write commit to memory.
-        write_fire = Signal()
-        self.comb += write_fire.eq(aw_pending & w_pending & ~b_pending)
-
+        # Commit a beat when both slots are full and the B FIFO has room; write BRAM that
+        # cycle and queue the B response.
+        self.comb += wr_commit.eq(aw_full & w_full & wr_b_fifo.sink.ready)
         self.comb += [
             wp.adr.eq(aw_addr[beat_bytes_shift:]),
             wp.dat_w.eq(w_data),
+            wr_b_fifo.sink.valid.eq(wr_commit),
+            wr_b_fifo.sink.id.eq(aw_id),
+            wr_b_fifo.source.ready.eq(self.axi.b.ready),
         ]
         for i in range(beat_bytes):
-            self.comb += wp.we[i].eq(write_fire & w_strb[i])
+            self.comb += wp.we[i].eq(wr_commit & w_strb[i])
 
         # Debug read port (word address).
         self.comb += [
@@ -152,28 +158,17 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
         ]
 
         self.sync += [
-            # Latch AW.
+            # Latch AW into its slot; a freshly-accepted AW wins over free-on-commit so we
+            # pipeline back-to-back beats.
             If(self.axi.aw.valid & self.axi.aw.ready,
-                aw_pending.eq(1),
-                aw_addr.eq(self.axi.aw.addr),
-                aw_id.eq(self.axi.aw.id),
+                aw_full.eq(1), aw_addr.eq(self.axi.aw.addr), aw_id.eq(self.axi.aw.id),
+            ).Elif(wr_commit,
+                aw_full.eq(0),
             ),
-            # Latch W.
             If(self.axi.w.valid & self.axi.w.ready,
-                w_pending.eq(1),
-                w_data.eq(self.axi.w.data),
-                w_strb.eq(self.axi.w.strb),
-            ),
-            # Commit write when both AW/W are available.
-            If(write_fire,
-                aw_pending.eq(0),
-                w_pending.eq(0),
-                b_pending.eq(1),
-                b_id.eq(aw_id),
-            ),
-            # Complete write response.
-            If(self.axi.b.valid & self.axi.b.ready,
-                b_pending.eq(0),
+                w_full.eq(1), w_data.eq(self.axi.w.data), w_strb.eq(self.axi.w.strb),
+            ).Elif(wr_commit,
+                w_full.eq(0),
             ),
         ]
 
@@ -478,52 +473,41 @@ class LiteNVMeHostMemDMA(LiteXModule):
         ]
 
         # AXI write engine.
-        wr_active = Signal()
-        aw_sent   = Signal()
-        w_sent    = Signal()
-        wr_addr   = Signal(32)
-        wr_data   = Signal(data_width)
-        wr_strb_l = Signal(beat_bytes)
-
-        take_wr = Signal()
-        self.comb += take_wr.eq(~wr_active & wr_fifo.source.valid)
-        self.comb += wr_fifo.source.ready.eq(~wr_active)
-
+        # Stream AW+W for each beat: AW and W are independent channels, so deassert each once
+        # accepted (aw_done/w_done), advance to the next beat when BOTH are accepted, and drain
+        # B unconditionally (no per-beat B wait). ~1 beat/clk with the pipelined backend.
+        aw_done = Signal()
+        w_done  = Signal()
+        beat_v  = Signal()
+        aw_ok   = Signal()
+        w_ok    = Signal()
         self.comb += [
-            self.axi.aw.valid.eq(wr_active & ~aw_sent),
-            self.axi.aw.addr.eq(wr_addr),
+            beat_v.eq(wr_fifo.source.valid),
+            self.axi.aw.valid.eq(beat_v & ~aw_done),
+            self.axi.aw.addr.eq(wr_fifo.source.addr),
             self.axi.aw.len.eq(0),
             self.axi.aw.size.eq(axi_size),
             self.axi.aw.burst.eq(axi.BURST_INCR),
             self.axi.aw.id.eq(0),
 
-            self.axi.w.valid.eq(wr_active & ~w_sent),
-            self.axi.w.data.eq(wr_data),
-            self.axi.w.strb.eq(wr_strb_l),
+            self.axi.w.valid.eq(beat_v & ~w_done),
+            self.axi.w.data.eq(wr_fifo.source.data),
+            self.axi.w.strb.eq(wr_fifo.source.strb),
             self.axi.w.last.eq(1),
 
-            self.axi.b.ready.eq(wr_active & aw_sent & w_sent),
-        ]
+            self.axi.b.ready.eq(1),
 
+            aw_ok.eq(aw_done | (self.axi.aw.valid & self.axi.aw.ready)),
+            w_ok.eq(w_done | (self.axi.w.valid & self.axi.w.ready)),
+            wr_fifo.source.ready.eq(beat_v & aw_ok & w_ok),
+        ]
         self.sync += [
-            If(take_wr,
-                wr_active.eq(1),
-                wr_addr.eq(wr_fifo.source.addr),
-                wr_data.eq(wr_fifo.source.data),
-                wr_strb_l.eq(wr_fifo.source.strb),
-                aw_sent.eq(0),
-                w_sent.eq(0),
-            ),
-            If(wr_active & self.axi.aw.valid & self.axi.aw.ready,
-                aw_sent.eq(1),
-            ),
-            If(wr_active & self.axi.w.valid & self.axi.w.ready,
-                w_sent.eq(1),
-            ),
-            If(wr_active & aw_sent & w_sent & self.axi.b.valid & self.axi.b.ready,
-                wr_active.eq(0),
-                aw_sent.eq(0),
-                w_sent.eq(0),
+            If(wr_fifo.source.ready,
+                aw_done.eq(0),
+                w_done.eq(0),
+            ).Else(
+                If(self.axi.aw.valid & self.axi.aw.ready, aw_done.eq(1)),
+                If(self.axi.w.valid & self.axi.w.ready,  w_done.eq(1)),
             ),
         ]
 
