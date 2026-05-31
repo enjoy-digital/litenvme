@@ -1,5 +1,29 @@
 # LiteNVMe — Development Progress Log
 
+## READ BOTTLENECK FIXED: pipelined hostmem write path ~2x reads on HW (2026-05-31)
+
+Applied + synthesized + measured the pipelined device->host (NVMe-read) write path (the
+single-beat AW->W->B per-16B-beat stall was the read limiter). Real board output, errors=0,
+max_inflight=32, INTEG=PASS, two independent batteries. Evidence:
+bench/results/engine_hw_2026-05-31_pipelined_write_pass1.log + ..._confirm.log.
+
+4KiB sequential read (MB/s), before -> after:
+  pass1 (hw_postsynth): 466.8/424.6 -> 1036.800 ; @LBA9M 455.8 -> 980.728
+  confirm (hw_measure): 460.6/438.0 -> 1059.474 / 938.420
+  8KiB read: 477.8 -> 1003.668 ; 4KiB read latency ~8.8us -> ~4.0us
+  512B read: ~80 -> 84.180 (per-command-latency bound, unchanged as expected)
+  writes unchanged at the cache-acked ceiling (~1499 MB/s) -- they never used this path.
+
+So 4KiB reads roughly DOUBLED (~460 -> ~940-1059 MB/s, cache-busting LBA9M confirms it is real
+SSD bandwidth, not cache) and latency halved, exactly as predicted by removing the per-beat
+B-wait. Run-to-run variance is real (759-1059 across runs) -- the headline is "reads ~2x, now
+~0.9-1.06 GB/s, device/PCIe-bound rather than DMA-write-bound". errors=0 throughout (data
+still correct).
+
+Remaining headroom toward the ~1.5 GB/s link: the AXIArbiter re-arbitrates per single-beat
+transaction (aw.len=0); the next lever is AXI write BURSTS (one AW per TLP, len=beats-1) so a
+4KiB MemWr is one arbitration + 32 streamed beats. Engine code: commit 5ca36c0.
+
 ## HONEST CORRECTION (2026-05-31): the pipelined-write fix was NEVER applied
 
 Reliable re-check (background sentinel): HEAD=dee81ba, litenvme/hostmem.py has NO pipelined
