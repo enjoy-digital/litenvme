@@ -1669,7 +1669,7 @@ static void nvme_engine_bench_cmd(char *str)
 
 	uint32_t timeout_start = bench_timer_get();
 	int timed_out = 0;
-	uint32_t max_inflight = 0;   /* DEBUG: peak commands outstanding during the run. */
+	uint32_t max_inflight = 0;   /* Peak commands outstanding during the run (engine queue depth). */
 	while ((nvme_gen_status_read() & 0x1u) == 0) {
 		uint32_t inf = (nvme_engine_engine_status_read() >> 8) & 0xffu;  /* _status inflight @ off 8 */
 		if (inf > max_inflight) max_inflight = inf;

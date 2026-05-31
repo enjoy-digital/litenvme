@@ -7,9 +7,8 @@
 
 """LiteNVMe hardware I/O command engine (RTL, single I/O queue, QD outstanding).
 
-Status: NEW — authored from the validated firmware flow (bench/firmware/main.c
-nvme_io_submit) and the MMIO accessor in litenvme/mem.py. Not yet simulated/HW-tested;
-validate with test/test_io_engine.py (to be added) before wiring into the SoC.
+Authored from the validated firmware flow in bench/firmware/main.c (nvme_io_submit) and the
+MMIO accessor in litenvme/mem.py.
 
 Goal
 ----
