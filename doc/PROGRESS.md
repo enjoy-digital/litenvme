@@ -1,5 +1,33 @@
 # LiteNVMe — Development Progress Log
 
+## CORRECTION: engine DOES reach QD=32 on reads; reads are device/DMA-bound (2026-05-31)
+
+Correcting the entry below (commit ddba9ec): it claimed max_inflight=1, but that was a stale
+/tmp read taken when the first instrumentation edit had silently failed (no probe in that
+build). The CORRECT instrumented run (firmware grep shows the probe present; evidence
+bench/results/engine_hw_2026-05-31_maxinflight_probe.log) reports, real board output:
+
+  4KiB read  r8_a    : max_inflight=32  467.050 MB/s
+  4KiB read  r8_b    : max_inflight=32  405.933 MB/s
+  4KiB read  @LBA 9M : max_inflight=32  461.917 MB/s
+  4KiB write w8_a    : max_inflight=32  1508.708 MB/s   (errors=0 all)
+
+So the engine DOES keep the full queue depth (qd=32) outstanding on reads -- doorbell
+coalescing works and the pipeline fills. Yet 4KiB reads stay ~460 MB/s. Therefore the engine
+is NOT the read bottleneck: with 32 reads in flight the SSD still only delivers a completion
+about every 8.8us (cycles/count), i.e. ~467 MB/s of 4KiB read data into host memory. Writes
+(SSD reads host memory -> cache-acked) hit ~1509 MB/s on the same engine/QD, so the asymmetry
+points downstream of the engine: the SSD's 4KiB read-data delivery and/or the hostmem
+responder's MemWr (device->host DMA) path caps reads near ~460 MB/s.
+
+NET (honest, corrected): T6 doorbell coalescing achieved its goal -- the RTL engine reaches
+QD=32 on hardware (errors=0, data-correct). Read THROUGHPUT did not rise because it is limited
+by the device read path / hostmem DMA-write bandwidth, not the engine's queue depth. Further
+read gains require attacking that downstream path (hostmem MemWr bandwidth, larger transfers
+to amortize, or a faster device), not the engine FSM. Writes are already at the link ceiling.
+Earlier ~1.23 GB/s and max_inflight=1 entries were flush-lag misreads, caught and corrected;
+the numbers here are the real board output.
+
 ## ROOT CAUSE pinned: engine holds only 1 read outstanding (max_inflight=1) (2026-05-31)
 
 Instrumented nvme_engine_bench to sample the engine _status.inflight field during the run and
