@@ -1,5 +1,32 @@
 # LiteNVMe — Development Progress Log
 
+## T6 doorbell-coalescing: RTL VALIDATED on the canonical sim (2026-05-31, update)
+
+Update to the entry below. The coalescing engine change + the matching sim-oracle rewrite for
+test/test_io_engine.py are now done AND the canonical engine test passes: `3 passed in 5.83s`
+(test_read_qd4_wrap, test_write_qd1, test_read_qd7_full) -- real pytest output. That covers
+the QD window (qd=1/4/7), the in-flight<=qd bound, completion CID order, and CQ ring wrap, so
+the coalesced submit-burst / batch-reap logic is functionally correct.
+
+wip/t6_doorbell_coalesce.patch now contains BOTH the engine change and the validated
+test_io_engine.py oracle (it is reverted from the tree; HEAD stays full-suite-green). Sim
+oracle change pattern (apply identically to the remaining files): the model SSD must consume
+SQEs up to the latest rung tail (track dev_head; navail = (tail-dev_head)%qsize; produce one
+CQE per newly-visible SQE) instead of one-CQE-per-doorbell, and the doorbell asserts become
+"final ring value == n_cmds%qsize, count in [1, n_cmds], all values < qsize".
+
+REMAINING (mechanical, then synth):
+- Apply the same oracle change to test_io_engine_integration.py (its model uses
+  `yield from rdmem/wrmem` helpers, lines ~120-136; relax the `sq_doorbells != exp_tail`
+  assertion ~197), test_io_engine_prp.py (ssd_model ~74 + a snapshot() ~103 that also keys on
+  len(sq_doorbells)), and test_request_gen.py (ssd_model ~106; it asserts
+  result["doorbells"] == count ~150 -> change to last-value/count<=). Check
+  test_io_engine_axi.py.
+- `python3 -m pytest test/ -q` -> 31 green.
+- Apply patch, synth (~20-40 min), reload, re-measure 4KiB reads via bench/hw_measure.sh;
+  record only real board output. Expect reads to rise above ~415 MB/s if the per-command
+  blocking doorbell was the QD~=1 limiter.
+
 ## T6 doorbell-coalescing: RTL drafted (patch saved), NOT yet sim-verified (2026-05-31)
 
 Implemented the highest-leverage T6 change in litenvme/io_engine.py: COALESCE doorbells.
