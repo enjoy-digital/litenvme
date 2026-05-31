@@ -1,5 +1,36 @@
 # LiteNVMe — Development Progress Log
 
+## ROOT CAUSE pinned: engine holds only 1 read outstanding (max_inflight=1) (2026-05-31)
+
+Instrumented nvme_engine_bench to sample the engine _status.inflight field during the run and
+print the peak (bench/firmware/main.c; firmware rebuild only, same coalesced bitstream).
+Real board output (evidence bench/results/engine_hw_2026-05-31_maxinflight_probe.log):
+
+  4KiB read  r8_a    : max_inflight=1  throughput 466.969 MB/s
+  4KiB read  r8_b    : max_inflight=1  throughput 422.601 MB/s
+  4KiB read  @LBA 9M : max_inflight=1  throughput 461.787 MB/s
+  4KiB write w8_a    : max_inflight=5  throughput 1508.984 MB/s   (errors=0 all)
+
+So the engine is genuinely QD~=1 for reads: it submits one read, waits ~9us for that CQE,
+reaps, submits the next -- the SSD read latency is never overlapped. Doorbell coalescing
+changed WHEN doorbells ring but did NOT make the engine keep a burst of reads outstanding.
+Writes only reach inflight=5 because their completions return fast; the engine is not bursting
+to qd=32 for either op.
+
+Why the sim didn't catch it: test/test_io_engine*.py's model SSD posts the CQE IMMEDIATELY
+(one cycle after the doorbell), so completions are never outstanding -- the sim exercises
+correctness but never QD overlap under realistic (slow) read latency. With instant completion,
+QD~=1 and QD~=32 look the same.
+
+So coalescing was necessary-but-not-sufficient; the real limiter is that the engine does not
+actually keep many reads in flight. NEXT (the real fix): (1) add a DELAYED-completion SSD
+model to the sim (N-cycle latency) and a throughput/peak-inflight assertion so the bug
+reproduces in sim; (2) find why can_submit/sink.valid does not sustain a submit burst while a
+read CQE is pending -- inspect the LiteNVMeIOEngineAXI wrapper + the gen->engine.sink path
+(possible 1-deep handshake / stream buffer), or LiteScope the sink handshake on HW; (3) make
+submit and reap truly concurrent so up to qd reads are outstanding; re-synth and re-measure.
+Engine is functional + data-correct throughout (errors=0); this is purely a throughput limiter.
+
 ## T6 doorbell coalescing on HW: functional but NO read speedup (negative result, 2026-05-31)
 
 Synthesized the coalesced-doorbell engine (--with-io-engine, timing met: WNS=+1.217ns, full

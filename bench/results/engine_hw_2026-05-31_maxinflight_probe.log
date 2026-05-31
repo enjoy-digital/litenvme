@@ -1,0 +1,96 @@
+[12:05:44] bit: -rw-rw-r-- 1 florent florent 8599287 mai   31 11:51 build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit
+[12:05:46] loading bitstream...
+[12:06:00] load OK
+[12:06:06] PING ok
+[12:06:06] litex_server pid=2951954
+LINK=0x209d INTEG=PASS
+[12:06:10] serialboot firmware...
+[12:06:17] boot banner seen
+[12:06:23] firmware at prompt; running battery
+[12:06:23] CMD diag: nvme_engine_diag read 0xe0000000 1 0 8 4
+CAP bytes=426 valid=1 at_fw=1 at_bios=0 -> /tmp/postsynth_diag.txt
+----- diag -----
+nvme_engine_diag read 0xe0000000 1 0 8 4
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+cfg sqb=10004000 cqb=10003000 sqdb=e0001008 cqdb=e000100c
+gen op=0 nlb=8 count=4 buf=10010000 stride=1000 qmod=64
+seqread selftest: OK
+sentinel: wrote 0x5E471A10 read 0x5e471a10 (CSR path OK)
+final sub=4 cmp=4 err=0 cyc=9467 st=0001
+litenvme> ----- end diag -----
+[12:06:26] CMD r8_a: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=326 valid=1 at_fw=1 at_bios=0 -> /tmp/postsynth_r8_a.txt
+----- r8_a -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 1004
+errors: 0
+last_cqe_status: 0x0000
+cycles: 1096241
+max_inflight: 32
+latency_avg: 8.769 us
+throughput: 467.050 MB/s
+iops: 114026.021 IOPS
+payload_bytes: 4096000
+litenvme> ----- end r8_a -----
+[12:06:30] CMD r8_b: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=326 valid=1 at_fw=1 at_bios=0 -> /tmp/postsynth_r8_b.txt
+----- r8_b -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 2004
+errors: 0
+last_cqe_status: 0x0000
+cycles: 1261289
+max_inflight: 32
+latency_avg: 10.090 us
+throughput: 405.933 MB/s
+iops: 99104.963 IOPS
+payload_bytes: 4096000
+litenvme> ----- end r8_b -----
+[12:06:34] CMD r8_lba9m: nvme_engine_bench read 0xe0000000 1 9000000 8 1000 8
+CAP bytes=338 valid=1 at_fw=1 at_bios=0 -> /tmp/postsynth_r8_lba9m.txt
+----- r8_lba9m -----
+nvme_engine_bench read 0xe0000000 1 9000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=9000000 step=8
+completed: 1000
+submitted: 3004
+errors: 0
+last_cqe_status: 0x0001
+cycles: 1108423
+max_inflight: 32
+latency_avg: 8.867 us
+throughput: 461.917 MB/s
+iops: 112772.831 IOPS
+payload_bytes: 4096000
+litenvme> ----- end r8_lba9m -----
+[12:06:37] CMD w8_a: nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+CAP bytes=328 valid=1 at_fw=1 at_bios=0 -> /tmp/postsynth_w8_a.txt
+----- w8_a -----
+nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+Engine bench write: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 4004
+errors: 0
+last_cqe_status: 0x0001
+cycles: 339363
+max_inflight: 32
+latency_avg: 2.714 us
+throughput: 1508.708 MB/s
+iops: 368337.149 IOPS
+payload_bytes: 4096000
+litenvme> ----- end w8_a -----
+=== SUMMARY (coalesced engine) ===
+r8_a | completed: 1000 | errors: 0 | throughput: 467.050 MB/s | latency_avg: 8.769 us
+r8_b | completed: 1000 | errors: 0 | throughput: 405.933 MB/s | latency_avg: 10.090 us
+r8_lba9m | completed: 1000 | errors: 0 | throughput: 461.917 MB/s | latency_avg: 8.867 us
+w8_a | completed: 1000 | errors: 0 | throughput: 1508.708 MB/s | latency_avg: 2.714 us
+diag: final sub=4 cmp=4 err=0 cyc=9467 st=0001
+[12:06:41] stopping litex_server
+[12:06:41] DONE_POSTSYNTH
+POSTSYNTH_DONE

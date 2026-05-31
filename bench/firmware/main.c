@@ -1669,7 +1669,10 @@ static void nvme_engine_bench_cmd(char *str)
 
 	uint32_t timeout_start = bench_timer_get();
 	int timed_out = 0;
+	uint32_t max_inflight = 0;   /* DEBUG: peak commands outstanding during the run. */
 	while ((nvme_gen_status_read() & 0x1u) == 0) {
+		uint32_t inf = (nvme_engine_engine_status_read() >> 8) & 0xffu;  /* _status inflight @ off 8 */
+		if (inf > max_inflight) max_inflight = inf;
 		/* Generous timeout: count * worst-case device latency. */
 		if (bench_timeout_expired(timeout_start, (uint32_t)(NVME_CQE_TIMEOUT_TICKS) ) &&
 		    nvme_gen_completed_read() == 0) {
@@ -1711,6 +1714,7 @@ static void nvme_engine_bench_cmd(char *str)
 	}
 	printf("last_cqe_status: 0x%04" PRIx32 "\n", last_status);
 	printf("cycles: %" PRIu32 "\n", cycles);
+	printf("max_inflight: %u\n", (unsigned)max_inflight);
 	print_fixed3_u64("latency_avg", (uint64_t)cycles * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
 	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, (uint64_t)cycles * 1000000ull, "MB/s");
 	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, (uint64_t)cycles, "IOPS");
