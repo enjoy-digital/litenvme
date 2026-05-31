@@ -73,16 +73,28 @@ class TestIOEnginePRP(unittest.TestCase):
         @passive
         def ssd_model():
             produced = 0
+            dev_head = 0
             while True:
-                if produced < len(sq_doorbells):
-                    k = produced; slot = k % QSIZE
+                tail   = sq_doorbells[-1] if sq_doorbells else 0
+                navail = (tail - dev_head) % QSIZE
+                if produced < len(nlb_list) and navail > 0:
+                    k = produced; slot = dev_head
+                    # Capture the SQE + list page HERE, at device-consume time: it is present
+                    # (doorbell rung past it) and provably not yet reused (the engine can only
+                    # reuse this slot after we post its CQE below -> reap -> resubmit). Doing it
+                    # in a separate process races slot reuse once doorbells are coalesced.
+                    base = sq_dw + slot*SQE_DWORDS
+                    sqe_snap[k] = [mem.get(base+i, 0) for i in range(SQE_DWORDS)]
+                    lp = (prp_base + (slot << 12)) >> 2
+                    sqe_snap[(k, "list")] = [mem.get(lp+i, 0) for i in range(1024)]
                     dw0 = mem.get(sq_dw + slot*SQE_DWORDS + 0, 0)
                     cid = (dw0 >> 16) & 0xffff
                     phase = 1 ^ ((k // QSIZE) & 1)
-                    sqhd = (k + 1) % QSIZE
-                    b = cq_dw + slot*CQE_DWORDS
+                    sqhd = (slot + 1) % QSIZE
+                    b = cq_dw + (k % QSIZE)*CQE_DWORDS
                     mem[b+0] = 0; mem[b+1] = 0; mem[b+2] = sqhd & 0xffff
                     mem[b+3] = (cid & 0xffff) | ((phase & 1) << 16)
+                    dev_head = (dev_head + 1) % QSIZE
                     produced += 1
                 yield
 
@@ -100,14 +112,18 @@ class TestIOEnginePRP(unittest.TestCase):
         @passive
         def snapshot():
             seen = 0
+            dev_head = 0
             while True:
-                if seen < len(sq_doorbells):
-                    k = seen; slot = k % QSIZE
+                tail   = sq_doorbells[-1] if sq_doorbells else 0
+                navail = (tail - dev_head) % QSIZE
+                if seen < len(nlb_list) and navail > 0:
+                    k = seen; slot = dev_head
                     base = sq_dw + slot*SQE_DWORDS
                     sqe_snap[k] = [mem.get(base+i, 0) for i in range(SQE_DWORDS)]
                     # Also snapshot the list page for this slot.
                     lp = (prp_base + (slot << 12)) >> 2
                     sqe_snap[(k, "list")] = [mem.get(lp+i, 0) for i in range(1024)]
+                    dev_head = (dev_head + 1) % QSIZE
                     seen += 1
                 yield
 
@@ -141,7 +157,9 @@ class TestIOEnginePRP(unittest.TestCase):
                     break
                 yield
 
-        run_simulation(dut, [drv(), mem_model(), mmio_model(), ssd_model(), cpl_sink(), snapshot()])
+        # NOTE: snapshot() is intentionally NOT run -- the SQE/list capture now happens inside
+        # ssd_model at consume time, which is race-free against slot reuse under coalescing.
+        run_simulation(dut, [drv(), mem_model(), mmio_model(), ssd_model(), cpl_sink()])
 
         if len(completions) != len(nlb_list):
             raise AssertionError(f"expected {len(nlb_list)} completions, got {len(completions)}")

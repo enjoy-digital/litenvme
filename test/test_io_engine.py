@@ -110,25 +110,33 @@ class TestIOEngine(unittest.TestCase):
         cq_dword = (cq_base >> 2)
         sqe_snapshots = {}        # submission index k -> [16 dwords] (captured before reuse).
 
+        # The engine now COALESCES doorbells (one ring can cover several SQEs), so the device
+        # must consume SQEs by the latest rung tail, not one-per-doorbell. It tracks its own
+        # SQ head and produces one CQE per newly-visible SQE. The engine's qd<=qsize-1 window
+        # bounds outstanding to < qsize, so the in-order CQ slot is always free (no overwrite).
         @passive
         def ssd_model():
             produced = 0
+            dev_head = 0
             while True:
-                if produced < len(sq_doorbells):
+                tail   = sq_doorbells[-1] if sq_doorbells else 0
+                navail = (tail - dev_head) % qsize
+                if produced < n_cmds and navail > 0:
                     k    = produced
-                    slot = k % qsize
+                    slot = dev_head
                     sqe_base = sq_dword + slot*SQE_DWORDS
                     sqe_snapshots[k] = [mem.get(sqe_base + i, 0) for i in range(SQE_DWORDS)]
                     sqe_dw0 = sqe_snapshots[k][0]
                     cid = (sqe_dw0 >> 16) & 0xffff
                     cq_slot  = k % qsize
                     cq_phase = 1 ^ ((k // qsize) & 1)   # start 1, toggle each wrap.
-                    sqhd     = (k + 1) % qsize
+                    sqhd     = (slot + 1) % qsize
                     b = cq_dword + cq_slot*CQE_DWORDS
                     mem[b + 0] = 0
                     mem[b + 1] = 0
                     mem[b + 2] = sqhd & 0xffff
                     mem[b + 3] = (cid & 0xffff) | ((cq_phase & 1) << 16)   # SC/SCT = 0.
+                    dev_head = (dev_head + 1) % qsize
                     produced += 1
                 yield
 
@@ -196,12 +204,21 @@ class TestIOEngine(unittest.TestCase):
         self.assertLessEqual(inflight_hi[0], qd,
                              msg=f"inflight high-water {inflight_hi[0]} > qd {qd}")
 
-        self.assertEqual(len(sq_doorbells), n_cmds,
-                         msg=f"expected {n_cmds} SQ doorbells, got {len(sq_doorbells)}")
-        exp_tail = [((k + 1) % qsize) for k in range(n_cmds)]
-        self.assertEqual(sq_doorbells, exp_tail, msg="SQ doorbell tail sequence mismatch")
-        self.assertEqual(len(cq_doorbells), n_cmds,
-                         msg=f"expected {n_cmds} CQ doorbells, got {len(cq_doorbells)}")
+        # Doorbells are COALESCED now, so we no longer expect one ring per command. What must
+        # still hold: at least one ring of each, the final values equal the final ring
+        # pointers (tail/head after n_cmds commands), coalescing did not INCREASE the count,
+        # and every doorbell value is a valid in-range ring pointer.
+        self.assertGreaterEqual(len(sq_doorbells), 1, msg="no SQ doorbell rung")
+        self.assertLessEqual(len(sq_doorbells), n_cmds, msg="coalescing should not add SQ doorbells")
+        self.assertEqual(sq_doorbells[-1], n_cmds % qsize, msg="final SQ tail mismatch")
+        self.assertGreaterEqual(len(cq_doorbells), 1, msg="no CQ doorbell rung")
+        self.assertLessEqual(len(cq_doorbells), n_cmds, msg="coalescing should not add CQ doorbells")
+        # NB: do NOT assert the final CQ-head value: the sim stops the cycle the last completion
+        # is emitted, which is BEFORE the engine rings the trailing CQ doorbell for that batch,
+        # so cq_doorbells[-1] legitimately lags the final head. Correctness is already covered
+        # by completions count + CID order + status==0 + inflight<=qd above.
+        for v in sq_doorbells + cq_doorbells:
+            self.assertLess(v, qsize, msg="doorbell value out of ring range")
 
         # Verify every command's SQE fields, snapshotted at submission (slots get reused
         # when qd < qsize, so we cannot read them back from host memory after the run).

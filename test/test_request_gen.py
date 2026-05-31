@@ -105,17 +105,21 @@ class TestRequestGen(unittest.TestCase):
         @passive
         def ssd_model():
             produced = 0
+            dev_head = 0
             yield smem.stb.eq(0)
             while True:
-                if produced < len(sq_doorbells):
-                    k = produced; slot = k % qsize
+                tail   = sq_doorbells[-1] if sq_doorbells else 0
+                navail = (tail - dev_head) % qsize
+                if produced < count and navail > 0:
+                    k = produced; slot = dev_head
                     dw0 = yield from smem_read(sq_base // 4 + slot*SQE_DWORDS)
                     cid = (dw0 >> 16) & 0xffff
-                    phase = 1 ^ ((k // qsize) & 1); sqhd = (k + 1) % qsize
-                    cqe_dw = cq_base // 4 + slot*CQE_DWORDS
+                    phase = 1 ^ ((k // qsize) & 1); sqhd = (slot + 1) % qsize
+                    cqe_dw = cq_base // 4 + (k % qsize)*CQE_DWORDS
                     cqe = [0, 0, sqhd & 0xffff, (cid & 0xffff) | ((phase & 1) << 16)]
                     for d in range(CQE_DWORDS):
                         yield from smem_write(cqe_dw + d, cqe[d])
+                    dev_head = (dev_head + 1) % qsize
                     produced += 1
                 else:
                     yield
@@ -147,8 +151,8 @@ class TestRequestGen(unittest.TestCase):
             raise AssertionError(f"completed {result.get('completed')} != count {count}")
         if result.get("errors") != 0:
             raise AssertionError(f"errors = {result.get('errors')} (expected 0)")
-        if result.get("doorbells") != count:
-            raise AssertionError(f"SQ doorbells {result.get('doorbells')} != count {count}")
+        if not (1 <= result.get("doorbells", 0) <= count):
+            raise AssertionError(f"SQ doorbells {result.get('doorbells')} not in [1, {count}]")
         if not (0 < result["cycles"] < 200000):
             raise AssertionError(f"cycles out of range: {result['cycles']}")
         return result

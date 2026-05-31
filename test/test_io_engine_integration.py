@@ -119,20 +119,24 @@ class TestIOEngineIntegration(unittest.TestCase):
         @passive
         def ssd_model():
             produced = 0
+            dev_head = 0
             yield smem.stb.eq(0)
             while True:
-                if produced < len(sq_doorbells):
+                tail   = sq_doorbells[-1] if sq_doorbells else 0
+                navail = (tail - dev_head) % qsize
+                if produced < n_cmds and navail > 0:
                     k    = produced
-                    slot = k % qsize
+                    slot = dev_head
                     sqe_dw0 = sq_base // 4 + slot * SQE_DWORDS + 0
                     dw0     = yield from smem_read(sqe_dw0)
                     cid     = (dw0 >> 16) & 0xffff
                     phase = 1 ^ ((k // qsize) & 1)
-                    sqhd  = (k + 1) % qsize
-                    cqe_dw = cq_base // 4 + slot * CQE_DWORDS
+                    sqhd  = (slot + 1) % qsize
+                    cqe_dw = cq_base // 4 + (k % qsize) * CQE_DWORDS
                     cqe_dws = [0, 0, sqhd & 0xffff, (cid & 0xffff) | ((phase & 1) << 16)]
                     for d in range(CQE_DWORDS):
                         yield from smem_write(cqe_dw + d, cqe_dws[d])
+                    dev_head = (dev_head + 1) % qsize
                     produced += 1
                 else:
                     yield
@@ -193,9 +197,13 @@ class TestIOEngineIntegration(unittest.TestCase):
                 raise AssertionError(f"cid {c}: non-success status 0x{s:04x}")
         if inflight_hi[0] > qd:
             raise AssertionError(f"inflight high-water {inflight_hi[0]} > qd {qd}")
-        exp_tail = [((k + 1) % qsize) for k in range(n_cmds)]
-        if sq_doorbells != exp_tail:
-            raise AssertionError(f"SQ doorbell sequence mismatch: {sq_doorbells} != {exp_tail}")
+        # Coalesced doorbells: don't expect one per command; check final tail + bounds.
+        if not sq_doorbells:
+            raise AssertionError("no SQ doorbell rung")
+        if sq_doorbells[-1] != n_cmds % qsize:
+            raise AssertionError(f"final SQ tail {sq_doorbells[-1]} != {n_cmds % qsize}")
+        if len(sq_doorbells) > n_cmds:
+            raise AssertionError(f"coalescing added SQ doorbells: {len(sq_doorbells)} > {n_cmds}")
 
     # Public tests -----------------------------------------------------------------------
 
