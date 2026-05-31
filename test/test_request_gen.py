@@ -36,6 +36,8 @@ from litenvme.io_engine import (
 )
 from litenvme.hostmem import LiteNVMeHostMemAXIRAM
 
+from models import make_mmio_model
+
 
 class _DUT(Module):
     def __init__(self, data_width, size, qsize, qd):
