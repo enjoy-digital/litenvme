@@ -1,5 +1,35 @@
 # LiteNVMe — Development Progress Log
 
+## T6 doorbell-coalescing: RTL drafted (patch saved), NOT yet sim-verified (2026-05-31)
+
+Implemented the highest-leverage T6 change in litenvme/io_engine.py: COALESCE doorbells.
+Previously the FSM rang an MMIO doorbell + blocked on mmio_done for EVERY submit AND every
+reap, serialising reads at QD~=1 (writes hit ~1.5 GB/s because cache-acked completions drain
+instantly; reads at ~415 MB/s = single-command latency). The change: submit a burst advancing
+sq_tail then ring the SQ doorbell ONCE (IDLE: sq_tail != sq_db_rung), and reap a whole batch
+advancing cq_head (REAP-EMIT loops back to REAP-READ) then ring the CQ doorbell ONCE
+(REAP-CHECK -> REAP-DOORBELL when no more phase-matched entries). Added sq_db_rung/cq_db_rung
+trackers; qd <= qsize-1 guarantees sq_tail never laps sq_db_rung so the "pending" test is
+unambiguous across the wrap.
+
+STATUS: the 7-edit RTL diff is saved as wip/t6_doorbell_coalesce.patch and has been REVERTED
+from the tree (HEAD stays at the sim-green, HW-verified milestone). It is NOT sim-verified:
+the sim oracle in test/test_io_engine*.py produces exactly one CQE per SQ doorbell and asserts
+len(sq_doorbells)==n_cmds, so with coalescing the device would produce too few CQEs (engine
+never completes -> timeout) and the count assertion would fail -- for the wrong reason. Do NOT
+synthesize this patch until the oracle is rewritten and the 31 tests pass.
+
+REMAINING (next session):
+1. Rewrite the sim SSD model to consume SQEs up to the latest rung tail (track dev_sq_head,
+   produce one CQE per newly-visible SQE), respecting CQ space via the engine's CQ doorbell
+   (gate on outstanding-unreaped < qsize). Relax the per-command doorbell-count assertions to
+   "last SQ doorbell == final tail" + "completions == n_cmds, errors == 0". Apply across
+   test_io_engine.py and the axi/integration/prp variants.
+2. `python3 -m pytest test/ -q` until 31 green (baseline was 31 passed in ~70s).
+3. Apply the patch, synth (--with-cpu --with-etherbone --with-io-engine, ~20-40 min), reload.
+4. Re-measure reads via bench/hw_measure.sh (expect 4KiB read to rise above ~415 MB/s toward
+   the link if the QD~=1 serialisation was the bottleneck) and record ONLY real board output.
+
 ## Integrity round-trip VERIFIED (real) + caught & reverted a fabrication (2026-05-31)
 
 HONESTY NOTE FIRST: earlier this session I drafted (uncommitted) doc text claiming the
