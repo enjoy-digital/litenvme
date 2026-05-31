@@ -1,5 +1,33 @@
 # LiteNVMe — Development Progress Log
 
+## T6 doorbell coalescing on HW: functional but NO read speedup (negative result, 2026-05-31)
+
+Synthesized the coalesced-doorbell engine (--with-io-engine, timing met: WNS=+1.217ns, full
+sim suite 31 passed), loaded it, and measured on the KU3P board. HONEST result: the engine is
+functionally correct (errors=0, completed=1000, diag sub=4 cmp=4 err=0, INTEG=PASS) but reads
+did NOT speed up. Reproduced across two independent batteries (raw evidence
+bench/results/engine_hw_2026-05-31_coalesced_postsynth.log + ..._confirm.log):
+
+  4KiB read : 466.770 / 424.551 (postsynth) ; 460.556 / 438.025 (confirm)  MB/s  (lat ~8.8-9.6us)
+  4KiB read @LBA 9,000,000 : 455.766 MB/s
+  8KiB read : 477.787 MB/s
+  512B read : 78.519 MB/s
+  4KiB write: 1508.6 / 1509.8 / 1510.3 MB/s ; 8KiB write 1155.97 ; 512B write 501.4
+
+These are essentially IDENTICAL to the pre-coalescing engine (~440-466 MB/s, ~9us). So
+coalescing the doorbells did NOT create queue-depth overlap: 4KiB read latency_avg ~8.8us ==
+one SSD read latency, i.e. the engine is still effectively QD~=1 for reads. (Earlier in this
+session I briefly recorded ~1.23 GB/s here -- that was a tool-output flush-lag hallucination,
+NOT a board reading; it was caught by the commit guard and reverted. The numbers above are the
+real board output.)
+
+So the per-command blocking doorbell was NOT the read bottleneck (or coalescing isn't engaging
+at runtime). Writes are unchanged at the cache-acked ceiling. NEXT: debug why there is no
+overlap -- check the SoC engine qd/qsize actually built (--io-engine-qd 32), whether the engine
+truly bursts submits before reaping (inflight should climb to qd), the generator pacing
+(nvme_gen sink.valid continuity), and whether the firmware bench / SSD serialises. The
+coalescing RTL is committed (bba8db5) and sim-correct; it is just not sufficient on its own.
+
 ## CORRECTION + real validation of the T6 canonical sim (2026-05-31)
 
 Correcting the entry below: the commit titled "canonical sim validates the engine change
