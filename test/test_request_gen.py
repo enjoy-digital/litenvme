@@ -72,17 +72,8 @@ class TestRequestGen(unittest.TestCase):
         eng, gen, smem = dut.eng, dut.gen, dut.ssd_mem
         sq_doorbells = []
 
-        @passive
-        def mmio_model():
-            yield eng.mmio_done.eq(0)
-            while True:
-                if (yield eng.mmio_start):
-                    if (yield eng.mmio_adr) == sq_db_adr:
-                        sq_doorbells.append((yield eng.mmio_wdata))
-                    yield eng.mmio_done.eq(1); yield
-                    yield eng.mmio_done.eq(0); yield
-                else:
-                    yield eng.mmio_done.eq(0); yield
+        # Shared MMIO doorbell model (see test/models.py).
+        mmio_model = make_mmio_model(eng, sq_db_adr, sq_doorbells)
 
         def smem_read(a):
             yield smem.adr.eq(a); yield smem.we.eq(0); yield smem.stb.eq(1); yield

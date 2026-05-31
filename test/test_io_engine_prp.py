@@ -21,6 +21,8 @@ from migen.sim import run_simulation, passive
 
 from litenvme.io_engine import LiteNVMeIOEngine, NVME_OP_READ, SQE_DWORDS, CQE_DWORDS
 
+from models import make_mem_model, make_mmio_model
+
 PAGE  = 4096
 LBA   = 512
 QSIZE = 8
@@ -42,30 +44,9 @@ class TestIOEnginePRP(unittest.TestCase):
         sq_doorbells = []
         completions  = []
 
-        @passive
-        def mem_model():
-            yield dut.mem.ack.eq(0)
-            while True:
-                if (yield dut.mem.stb) == 0:
-                    yield dut.mem.ack.eq(0); yield; continue
-                we = (yield dut.mem.we); adr = (yield dut.mem.adr)
-                if we:
-                    mem[adr] = (yield dut.mem.dat_w)
-                else:
-                    yield dut.mem.dat_r.eq(mem.get(adr, 0))
-                yield dut.mem.ack.eq(1); yield
-                yield dut.mem.ack.eq(0); yield
-
-        @passive
-        def mmio_model():
-            yield dut.mmio_done.eq(0)
-            while True:
-                if (yield dut.mmio_start) == 0:
-                    yield dut.mmio_done.eq(0); yield; continue
-                if (yield dut.mmio_adr) == sq_db_adr:
-                    sq_doorbells.append((yield dut.mmio_wdata))
-                yield dut.mmio_done.eq(1); yield
-                yield dut.mmio_done.eq(0); yield
+        # Shared host-memory and MMIO doorbell models (see test/models.py).
+        mem_model  = make_mem_model(dut, mem)
+        mmio_model = make_mmio_model(dut, sq_db_adr, sq_doorbells)
 
         sq_dw = sq_base >> 2
         cq_dw = cq_base >> 2
