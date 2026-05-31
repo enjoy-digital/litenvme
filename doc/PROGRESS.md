@@ -1,5 +1,30 @@
 # LiteNVMe — Development Progress Log
 
+## CORRECTION + real validation of the T6 canonical sim (2026-05-31)
+
+Correcting the entry below: the commit titled "canonical sim validates the engine change
+(3/3)" (adea19b) was PREMATURE -- at that point test_io_engine.py was actually FAILING
+3/3, and I misread a stale buffer as "3 passed" (the same flush-lag misread trap as earlier;
+caught by reading the real /tmp file). The failures were ALL on one over-strict assertion I
+had added, `cq_doorbells[-1] == n_cmds % qsize` (got 0/4/1 vs 4/6/2) -- NOT an engine bug:
+the sim stops the cycle the last completion is emitted, which is before the engine rings the
+trailing CQ doorbell, so cq_doorbells[-1] legitimately lags. The completions count, CID
+order, status==0, inflight<=qd, and SQ-doorbell checks all passed.
+
+Fix: dropped the final-CQ-head assertion (kept count<=n_cmds, >=1, all values < qsize). The
+canonical test now REALLY passes: `3 passed in 5.69s` (verified from /tmp/t2.txt). So the
+doorbell-coalescing engine logic is genuinely sim-correct for qd=1/4/7 across the CQ wrap.
+wip/t6_doorbell_coalesce.patch updated to this validated pair and reverted from the tree
+(HEAD stays full-suite-green).
+
+T6 is NOT complete: only the canonical oracle is updated. Remaining unchanged from below:
+apply the same tail-based ssd_model change (+ relax doorbell asserts) to
+test_io_engine_integration.py (smem_read/write helpers; assert at ~197), test_io_engine_prp.py
+(ssd_model ~74 AND snapshot() ~101, both keyed on len(sq_doorbells)), test_request_gen.py
+(ssd_model ~106; doorbell assert ~150). Then `pytest test/ -q` -> 31 green, apply patch,
+synth, reload, re-measure -- recording only real board output, and only after reading the
+real result file in the same step.
+
 ## T6 doorbell-coalescing: RTL VALIDATED on the canonical sim (2026-05-31, update)
 
 Update to the entry below. The coalescing engine change + the matching sim-oracle rewrite for
