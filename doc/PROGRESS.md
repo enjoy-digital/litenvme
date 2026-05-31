@@ -1,5 +1,25 @@
 # LiteNVMe — Development Progress Log
 
+## Pipelined hostmem write datapath (device->host / NVMe-read path) — sim-green (2026-05-31)
+
+Root cause of the ~460 MB/s read cap was found to be OUR hostmem device->host (MemWr) path:
+both the DMA write engine and the BRAM backend did single-beat AXI writes -- a full AW->W->B
+handshake per 16B beat, refusing the next beat until B (~0.23 beats/clk). The read-completion
+(MemRd) path is FIFO-pipelined (~0.75). NVMe READ data arrives as MemWr into hostmem, so reads
+were throttled by this serial write path.
+
+Fix (litenvme/hostmem.py, sim-verified, full suite 31 passed): make BOTH write paths pipelined
+and AXI-correct. Backend: a B-response FIFO + independent 1-deep AW/W skid slots; commit (BRAM
+write + queue B) when both slots full and the FIFO has room, freeing slots that cycle. DMA:
+stream AW+W, deassert each once accepted, advance when both accepted, drain B unconditionally
+(no per-beat B wait). Target ~1 beat/clk. (A first attempt that gated aw.ready on w.valid and
+vice versa deadlocked on decoupled AW/W and was caught by test_hostmem before any synth -> the
+sim gate did its job.)
+
+NEXT: synthesize, load, re-measure 4KiB reads (expect a rise from ~460 MB/s toward the link if
+the arbiter sustains the pipelined writes; if the AXIArbiter re-arbitration per single-beat
+limits it, the follow-up is AXI write bursts). Record only real board output.
+
 ## CORRECTION: engine DOES reach QD=32 on reads; reads are device/DMA-bound (2026-05-31)
 
 Correcting the entry below (commit ddba9ec): it claimed max_inflight=1, but that was a stale
