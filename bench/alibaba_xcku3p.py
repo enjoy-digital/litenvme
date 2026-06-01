@@ -107,14 +107,18 @@ class BaseSoC(SoCCore):
         pcie_pads = platform.request("pcie_x4")
         pcie_pads_rst_n = pcie_pads.rst_n
         pcie_pads.rst_n = Signal()
+        # Gen3 x4: core datapath 256b @ sys (125MHz = 4.0 GB/s) matches the link; the hard IP runs
+        # its native x4 width 128b @ 250MHz (pcie domain, also 4.0 GB/s). PHYTX/RXDatapath bridge
+        # the 256<->128 width + sys<->pcie CDC. (Gen2 x4 was 128b@125 both sides = 2.0 GB/s.)
         self.pcie_phy = USPPCIEPHY(
             platform,
             pcie_pads,
-            speed         = "gen2",
-            data_width    = 128,
-            ip_name       = "pcie4_uscale_plus",
-            mode          = "RootPort",
-            with_cfg_mgmt = True,  # Expose local cfg_mgmt to program the root-port DevCtl.MPS.
+            speed           = "gen3",
+            data_width      = 256,
+            pcie_data_width = 128,
+            ip_name         = "pcie4_uscale_plus",
+            mode            = "RootPort",
+            with_cfg_mgmt   = True,  # Expose local cfg_mgmt to program the root-port DevCtl.MPS.
         )
         self.pcie_phy.update_config({
             "mode_selection"   : "Advanced",
@@ -123,7 +127,7 @@ class BaseSoC(SoCCore):
             "pcie_blk_locn"    : "X0Y0",
             "gen_x0y0"         : "true",
             "gen_x1y0"         : "false",
-            "plltype"          : "QPLL1",
+            "plltype"          : "QPLL0",  # Gen3 (8 GT/s) high-band PLL; was QPLL1 for Gen2.
         })
         self.pcie_endpoint = LitePCIeRootPort(
             phy        = self.pcie_phy,
