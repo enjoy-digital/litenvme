@@ -43,12 +43,13 @@ grep -q "ok=1" /tmp/gen3_bootchk.txt || { say "not at prompt"; kill $SRV 2>/dev/
 run(){ local n="$1" s="$2"; shift 2; say "CMD $n: $*"
   python3 engine_console.py cmd "$*" "$s" "/tmp/gen3_${n}.txt" >>"$LOG" 2>&1
   echo "----- $n -----" >>"$LOG"; cat "/tmp/gen3_${n}.txt" >>"$LOG" 2>&1; echo "----- end $n -----" >>"$LOG"; }
-# Reads (auto-MPS 512B in the first bar0_assign), then writes, a couple of sizes, reproduced.
-run rd4k_a  20 "nvme_engine_bench read  0xe0000000 1 1000000 8 1000 8"
-run rd4k_b  20 "nvme_engine_bench read  0xe0000000 1 2000000 8 1000 8"
-run rd8k    20 "nvme_engine_bench read  0xe0000000 1 0 16 1000 16"
-run wr4k_a  20 "nvme_engine_bench write 0xe0000000 1 3000000 8 1000 8"
-run wr4k_b  20 "nvme_engine_bench write 0xe0000000 1 4000000 8 1000 8"
+# Headline reads/writes at 8 KiB (nlb=16) -- the throughput sweet spot at the SSD's 512B MPS
+# ceiling (~+22% over 4 KiB). Auto-MPS 512B in the first bar0_assign. 4 KiB kept as a reference.
+run rd8k_a  20 "nvme_engine_bench read  0xe0000000 1 1000000 16 1000 16"
+run rd8k_b  20 "nvme_engine_bench read  0xe0000000 1 2000000 16 1000 16"
+run rd4k    20 "nvme_engine_bench read  0xe0000000 1 1500000 8 1000 8"
+run wr8k_a  20 "nvme_engine_bench write 0xe0000000 1 3000000 16 1000 16"
+run wr8k_b  20 "nvme_engine_bench write 0xe0000000 1 4000000 16 1000 16"
 run rootmps 12 "rootmps"
 say "stopping"; kill $SRV 2>/dev/null
 say "DONE"; echo "GEN3_DONE" >> "$LOG"
