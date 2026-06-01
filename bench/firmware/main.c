@@ -1469,6 +1469,34 @@ static int rootcfg_op(uint16_t dwaddr, int is_write, uint32_t wdata, uint32_t be
 	return 0;
 }
 static int rootcfg_rd32(uint16_t byte_off, uint32_t *val) { return rootcfg_op(byte_off / 4, 0, 0, 0xf, val); }
+static int rootcfg_wr32(uint16_t byte_off, uint32_t val, uint32_t be) { return rootcfg_op(byte_off / 4, 1, val, be, NULL); }
+
+/* Generic debug command: rootcfg rd <dwaddr> | rootcfg wr <dwaddr> <val> [be]. dwaddr is a
+ * DWORD index into the root port's own config space (byte_off/4). */
+static void rootcfg_cmd(char *str)
+{
+	char *op = get_token(&str);
+	if (!op || !strlen(op)) { puts("usage: rootcfg rd <dw> | rootcfg wr <dw> <val> [be]"); return; }
+	uint16_t dw = (uint16_t)strtoul(get_token(&str), NULL, 0);
+	if (strcmp(op, "rd") == 0) {
+		uint32_t v = 0;
+		if (rootcfg_op(dw, 0, 0, 0xf, &v)) { puts("ERR: rootcfg rd timeout."); return; }
+		printf("rootcfg[dw 0x%03x] = 0x%08x\n", (unsigned)dw, (unsigned)v);
+	} else if (strcmp(op, "wr") == 0) {
+		uint32_t val = (uint32_t)strtoul(get_token(&str), NULL, 0);
+		char *bt = get_token(&str);
+		uint32_t be = (bt && strlen(bt)) ? (uint32_t)strtoul(bt, NULL, 0) : 0xf;
+		uint32_t v0 = 0, v1 = 0;
+		rootcfg_op(dw, 0, 0, 0xf, &v0);
+		if (rootcfg_op(dw, 1, val, be, NULL)) { puts("WARN: rootcfg wr timeout."); }
+		rootcfg_op(dw, 0, 0, 0xf, &v1);
+		printf("rootcfg[dw 0x%03x]: before=0x%08x wrote=0x%08x be=0x%x after=0x%08x %s\n",
+		       (unsigned)dw, (unsigned)v0, (unsigned)val, (unsigned)be, (unsigned)v1,
+		       (v1 == v0) ? "(UNCHANGED)" : "(changed)");
+	} else {
+		puts("usage: rootcfg rd <dw> | rootcfg wr <dw> <val> [be]");
+	}
+}
 
 /* Find the PCIe Express Capability (id 0x10) in the root port's own config space. */
 static uint16_t rootcfg_express_cap(void)
@@ -1531,7 +1559,7 @@ static void rootmps_cmd(char *str)
 	                         : (((target & 0x7u) << 5) | ((target & 0x7u) << 12));
 	uint32_t newctl = (dc & ~clr) | setb;
 	/* Write only the low 16b (DevCtl); byte-enable the lower two bytes, keep DevSts. */
-	if (rootcfg_op(cap + 0x08, 1, (dc & 0xffff0000u) | (newctl & 0xffffu), 0x3, NULL))
+	if (rootcfg_wr32(cap + 0x08, (dc & 0xffff0000u) | (newctl & 0xffffu), 0x3))
 		puts("WARN: root DevCtl write timeout.");
 	if (rootcfg_rd32(cap + 0x08, &dc)) { puts("ERR: root DevCtl re-read failed."); return; }
 	printf("after: root devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
@@ -2538,6 +2566,8 @@ static void console_service(void)
 #ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
 	else if (strcmp(token, "rootmps") == 0)
 		rootmps_cmd(str);
+	else if (strcmp(token, "rootcfg") == 0)
+		rootcfg_cmd(str);
 #endif
 	else if (strcmp(token, "nvme_mps") == 0)
 		nvme_mps_cmd(str);

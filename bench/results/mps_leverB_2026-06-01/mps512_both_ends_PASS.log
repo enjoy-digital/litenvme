@@ -1,0 +1,137 @@
+[13:52:16] ==================== BOOT A: 128B baseline ====================
+[13:52:56] CMD a_rootmps: rootmps
+CAP bytes=200 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_a_rootmps.txt
+----- a_rootmps -----
+rootmps
+RootPort VID/DID = 0x902410ee
+RootPort Express Cap @ 0x70
+Root: mps_supported=3 (1024B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+RC op (hard IP): op_mps=128B  op_mrrs=512B
+litenvme>----- end a_rootmps -----
+[13:52:56] CMD a_rd4k: nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+CAP bytes=649 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_a_rd4k.txt
+----- a_rd4k -----
+nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+Engine bench read: count=1000 nlb=8 start_lba=1000000 step=8
+completed: 1000
+submitted: 1000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 412123
+max_inflight: 32
+latency_avg: 3.296 us
+throughput: 1242.347 MB/s
+iops: 303307.507 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260300
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3300
+hostmem_rd_tlps: 33000
+hostmem_rd_gap_max: 3161014915
+hostmem_rd_duty_pct: 63.160 %
+litenvme>----- end a_rd4k -----
+[13:53:00] ==================== BOOT B: 512B both ends ====================
+[13:53:39] CMD b_root_before: rootmps
+CAP bytes=200 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_b_root_before.txt
+----- b_root_before -----
+rootmps
+RootPort VID/DID = 0x902410ee
+RootPort Express Cap @ 0x70
+Root: mps_supported=3 (1024B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+RC op (hard IP): op_mps=128B  op_mrrs=512B
+litenvme>----- end b_root_before -----
+[13:53:40] CMD b_root_set: rootmps set 2
+CAP bytes=288 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_b_root_set.txt
+----- b_root_set -----
+rootmps set 2
+RootPort VID/DID = 0x902410ee
+RootPort Express Cap @ 0x70
+Root: mps_supported=3 (1024B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+RC op (hard IP): op_mps=128B  op_mrrs=512B
+after: root devctl_mps=2 (512B)  mrrs=2 (512B)
+RC op (hard IP) now: op_mps=512B
+litenvme>----- end b_root_set -----
+[13:53:40] CMD b_ssd_set: nvme_mps setmps 2
+CAP bytes=350 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_b_ssd_set.txt
+----- b_ssd_set -----
+nvme_mps setmps 2
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+SSD : mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+RC  : op_mps=512B  op_mrrs=512B  (root complex; firmware cannot raise this)
+after: devctl_mps=2 (512B)  mrrs=2 (512B)
+litenvme>----- end b_ssd_set -----
+[13:53:41] CMD b_rd4k_a: nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+CAP bytes=523 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_b_rd4k_a.txt
+----- b_rd4k_a -----
+nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=1000000 step=8
+completed: 1000
+submitted: 1000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 359865
+max_inflight: 32
+latency_avg: 2.878 us
+throughput: 1422.755 MB/s
+iops: 347352.479 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260213
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3213
+hostmem_rd_tlps: 9000
+hostmem_rd_gap_max: 3358600511
+hostmem_rd_duty_pct: 72.308 %
+litenvme>----- end b_rd4k_a -----
+[13:53:44] CMD b_rd4k_b: nvme_engine_bench read 0xe0000000 1 2000000 8 1000 8
+CAP bytes=523 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_b_rd4k_b.txt
+----- b_rd4k_b -----
+nvme_engine_bench read 0xe0000000 1 2000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=2000000 step=8
+completed: 1000
+submitted: 2000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 360295
+max_inflight: 32
+latency_avg: 2.882 us
+throughput: 1421.057 MB/s
+iops: 346937.925 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260209
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3209
+hostmem_rd_tlps: 9000
+hostmem_rd_gap_max: 3358600511
+hostmem_rd_duty_pct: 72.221 %
+litenvme>----- end b_rd4k_b -----
+[13:53:46] CMD b_rd8k: nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+CAP bytes=514 valid=1 at_fw=1 at_bios=0 -> /tmp/mps512_b_rd8k.txt
+----- b_rd8k -----
+nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+Engine bench read: count=1000 nlb=16 start_lba=0 step=16
+completed: 1000
+submitted: 3000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 856391
+max_inflight: 32
+latency_avg: 6.851 us
+throughput: 1195.715 MB/s
+iops: 145961.365 IOPS
+payload_bytes: 8192000
+hostmem_rd_present_cycles: 513043
+hostmem_rd_accept_cycles: 513000
+hostmem_rd_stall_cycles: 43
+hostmem_rd_tlps: 17000
+hostmem_rd_gap_max: 3358600511
+hostmem_rd_duty_pct: 59.907 %
+litenvme>----- end b_rd8k -----
+[13:53:49] DONE
+MPS512_DONE
