@@ -1,5 +1,26 @@
 # LiteNVMe — Development Progress Log
 
+## READ MPS RAISED TO 512B — 4KiB reads +14.5% (Lever B done, 2026-06-01)
+
+Resolved the 128B-MPS ceiling below by programming BOTH ends of the link to 512B. Our root
+complex's DevCtl.MPS was the blocker and is reachable only via the hard IP's cfg_mgmt port, so:
+- litepcie usppciephy.py gained `with_cfg_mgmt` (default off; separate repo, branch
+  `litenvme-cfg-mgmt`) to expose the cfg_mgmt port.
+- litenvme/cfg.py `LiteNVMeRootCfgMgmt` bridges it to sys-domain CSRs (CDC handshake).
+- firmware `rootmps [set <enc>]` walks OUR root Express Cap (@0x70, VID/DID 0x902410ee) and
+  sets its DevCtl.MPS; `rootcfg rd/wr` is a generic debug accessor.
+Synth: timing met, 0 errors. HW result (board-printed, errors=0, reproduced, same-boot A/B,
+evidence results/mps_leverB_2026-06-01/mps512_both_ends_PASS.log):
+
+  4KiB read @ MPS=128B: 1242.3 MB/s, 33000 TLPs/1000rd, duty 63.2%
+  4KiB read @ MPS=512B: 1422.8 / 1421.1 MB/s, 9000 TLPs, duty 72.3%   -> +14.5%
+
+`rootmps set 2` -> root `op_mps=512B` (confirmed from the hard-IP CSR); `nvme_mps setmps 2` ->
+SSD 512B. TLPs/4KiB drop 33->9 (4096/512=8 data + headers), duty 63->72%, link stable 0x209d.
+8KiB reads are unchanged (~1.19 GB/s, duty ~60%) — that case is limited by something other than
+MPS. Programming is currently manual (two firmware commands at boot); wiring it into init so
+plain reads get 512B automatically is the obvious next step.
+
 ## READ CEILING ROOT CAUSE = 128B MaxPayloadSize (Lever B, 2026-06-01)
 
 The "device/PCIe-bound" ceiling below is now pinned to a concrete, fixable cause: the link's
