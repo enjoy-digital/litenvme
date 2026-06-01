@@ -305,7 +305,7 @@ static int mmio_wait_done(unsigned int timeout, uint32_t *stat_out)
 	return 1;
 }
 
-static int mmio_rd32(uint64_t addr, uint32_t *val)
+static int mmio_rd32_once(uint64_t addr, uint32_t *val)
 {
 	uint32_t stat = 0;
 	uint32_t tick_start, tick_end;
@@ -318,6 +318,31 @@ static int mmio_rd32(uint64_t addr, uint32_t *val)
 	tick_end = bench_timer_get();
 	bench_mmio_rd_ticks += bench_ticks_elapsed(tick_start, tick_end);
 	*val = mmio_mem_rdata_read();
+	return 0;
+}
+
+static int mmio_rd32(uint64_t addr, uint32_t *val)
+{
+	/* Lag-safe read. The MMIO accessor (exactly like the CFG accessor, see cfg_rd32_retry) can
+	 * return a PREVIOUS transaction's data: it accepts any pending completion (read-lag through the
+	 * shared TLP controller). Benign at Gen2 timing, surfaces at Gen3/256b -- and the lag can be
+	 * >1 transaction right after CFG activity (channel switch). Read until two consecutive reads of
+	 * the same address agree: for the stable registers we read (CAP/CSTS/CC/AQA/ASQ) that is the
+	 * settled value regardless of lag depth. Bounded so a (rare) genuinely-changing field can't spin
+	 * forever -- it then returns the last value read. */
+	uint32_t prev = 0, cur = 0;
+	if (mmio_rd32_once(addr, &prev))
+		return 1;
+	for (int i = 0; i < 8; i++) {
+		if (mmio_rd32_once(addr, &cur))
+			return 1;
+		if (cur == prev) {
+			*val = cur;
+			return 0;
+		}
+		prev = cur;
+	}
+	*val = cur;
 	return 0;
 }
 
@@ -1676,6 +1701,15 @@ static int nvme_io_setup(uint64_t cap)
 	if (nvme_admin_submit(cap, cmd, cqe)) {
 		puts("ERR: Create IO CQ failed.");
 		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+		/* Diagnostic: dump the admin CQ region (slots 0..3). Tells us WHERE the SSD's CQE
+		 * landed -- slot 1 (correct) vs slot 0 (sub-beat write misalignment). */
+		printf("ACQ dump @0x%08x:\n", (unsigned)ACQ_ADDR);
+		for (uint32_t s = 0; s < 4; s++) {
+			uint32_t a = ACQ_ADDR + s * 16;
+			printf("  slot%u(+0x%02x): %08x %08x %08x %08x\n", s, s * 16,
+			       (unsigned)hostmem_rd32(a + 0), (unsigned)hostmem_rd32(a + 4),
+			       (unsigned)hostmem_rd32(a + 8), (unsigned)hostmem_rd32(a + 12));
+		}
 		return 1;
 	}
 
