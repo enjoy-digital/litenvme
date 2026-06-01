@@ -128,6 +128,12 @@ class BaseSoC(SoCCore):
             "gen_x0y0"         : "true",
             "gen_x1y0"         : "false",
             "plltype"          : "QPLL0",  # Gen3 (8 GT/s) high-band PLL; was QPLL1 for Gen2.
+            # Gen3 x4 with a 256-bit AXI-S interface runs the user clock at 125MHz (256b@125=4GB/s),
+            # not litepcie's default 250MHz (which is for the 128-bit interface). Core clock halves
+            # to match. This keeps the pcie domain at 125MHz = sys, so the datapath is a same-width
+            # same-rate CDC (no StrideConverter).
+            "axisten_freq"     : 125,
+            "coreclk_freq"     : 250,
         })
         self.pcie_endpoint = LitePCIeRootPort(
             phy        = self.pcie_phy,
@@ -230,6 +236,44 @@ class BaseSoC(SoCCore):
             extra_axi_masters = io_engine_masters,
         )
 
+
+    # LiteScope Probe (focused MMIO debug) ---------------------------------------------------------
+
+    def add_mmio_probe(self):
+        # Narrow, targeted capture to debug "MMIO read returns 0/garbage at 256b while CFG works".
+        # Avoids 256b payload buses; only low dwords + handshakes (~200 signals, depth 1024).
+        mem_req = self.mem_port.source   # MemRd/MemWr we issue to the SSD BAR0.
+        mem_cmp = self.mem_port.sink     # Completion routed back to the MMIO accessor.
+        cfg_cmp = self.cfg_port.sink     # CFG completion (works) -- reference.
+        cs      = self.pcie_phy.cmp_source  # Raw completion from the hard IP (after RC adapter).
+
+        sigs = []
+        def add(s): sigs.append(s)
+        def add_opt(o, n):
+            if hasattr(o, n): add(getattr(o, n))
+        def add_slice(sig, width, name):  # LiteScope needs named Signals, not raw _Slice.
+            s = Signal(width, name=name); self.comb += s.eq(sig); add(s)
+
+        add(self.pcie_phy._link_status.fields.status)
+
+        # MMIO request out (handshake + low address + tag).
+        for n in ("valid", "ready", "first", "last", "we"): add_opt(mem_req, n)
+        add_slice(mem_req.adr[0:32], 32, "memreq_adr_lo"); add_opt(mem_req, "tag"); add_opt(mem_req, "len")
+
+        # Raw completion in from the hard IP (does anything come back? header/data low 64b).
+        for n in ("valid", "ready", "first", "last"): add_opt(cs, n)
+        add_slice(cs.dat[0:64], 64, "cmpsrc_dat_lo")
+
+        # MMIO completion routed to the accessor (THE data the accessor latches).
+        for n in ("valid", "ready", "first", "last", "err"): add_opt(mem_cmp, n)
+        add_slice(mem_cmp.dat[0:32], 32, "memcmp_dat_lo"); add_opt(mem_cmp, "tag"); add_opt(mem_cmp, "len")
+
+        # CFG completion (reference: this path works).
+        for n in ("valid", "ready", "err"): add_opt(cfg_cmp, n)
+        add_slice(cfg_cmp.dat[0:32], 32, "cfgcmp_dat_lo"); add_opt(cfg_cmp, "tag")
+
+        self.analyzer = LiteScopeAnalyzer(sigs, depth=1024, clock_domain="sys",
+            register=True, csr_csv="analyzer.csv")
 
     # LiteScope Probe (Overview) -------------------------------------------------------------------
 
@@ -353,7 +397,7 @@ def main():
     parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
     parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
-    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
+    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie", "mmio"], help="Select LiteScope probe set.")
     parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     args = parser.parse_args()
@@ -371,6 +415,8 @@ def main():
         )
         if args.litescope_probe == "pcie":
             soc.add_pcie_probe()
+        elif args.litescope_probe == "mmio":
+            soc.add_mmio_probe()
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
