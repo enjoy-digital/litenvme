@@ -232,5 +232,112 @@ class TestHostMemIdentifyRead(unittest.TestCase):
         self._run_case(data_width=64, stall_prob=0.35, seed=0x64)
 
 
+# A port WITHOUT byte-enables, matching the real crossbar slave port the SSD writes through.
+
+def _req_layout_nobe(data_width):
+    return [
+        ("adr",    64),
+        ("we",     1),
+        ("len",    10),
+        ("tag",    8),
+        ("req_id", 16),
+        ("dat",    data_width),
+    ]
+
+
+class _PortNoBE(Module):
+    def __init__(self, data_width):
+        self.sink   = stream.Endpoint(_req_layout_nobe(data_width))
+        self.source = stream.Endpoint(_cmp_layout(data_width))
+
+
+class TestHostMemSubBeatWrite(unittest.TestCase):
+    """A MemWr to a non-beat-aligned address (e.g. a 16-byte admin CQE to ACQ+16, mid-beat at
+    data_width=256) must land at its byte offset within the beat and must NOT clobber the adjacent
+    CQ slot in the same beat. Uses a no-byte-enable port like the real one."""
+
+    def _run(self, data_width, off_bytes):
+        base = 0x1000_0000
+        size = 0x4000
+        port = _PortNoBE(data_width=data_width)
+        dut  = LiteNVMeHostMemResponder(port=port, base=base, size=size,
+                                        data_width=data_width, with_csr=True)
+
+        slot0_dw = (0x1000) // 4          # neighbour slot (must stay intact)
+        write_dw = (0x1000 + off_bytes) // 4
+        sentinel = [0x5E47_0000 + i for i in range(4)]
+        payload  = [0xAAAA_0000, 0xBBBB_1111, 0xCCCC_2222, 0x0001_0021]
+        result = {}
+
+        def csr_write_dw(dw_index, value):
+            yield dut.csr._csr_adr.storage.eq(dw_index)
+            yield dut.csr._csr_wdata.storage.eq(value)
+            yield dut.csr._csr_we.storage.eq(1)
+            yield
+            yield dut.csr._csr_we.storage.eq(0)
+            for _ in range(6):
+                yield
+
+        def csr_read_dw(dw_index):
+            yield dut.csr._csr_adr.storage.eq(dw_index)
+            for _ in range(6):
+                yield
+            return (yield dut.csr._csr_rdata.status)
+
+        def stimulus():
+            yield port.sink.valid.eq(0)
+            yield
+            # Seed neighbour slot with a sentinel.
+            for i in range(4):
+                yield from csr_write_dw(slot0_dw + i, sentinel[i])
+            # Zero the target slot.
+            for i in range(4):
+                yield from csr_write_dw(write_dw + i, 0)
+
+            # SSD MemWr of a 16-byte CQE: data is LEFT-aligned (dword 0), no byte-enables.
+            yield port.sink.adr.eq(base + 0x1000 + off_bytes)
+            yield port.sink.we.eq(1)
+            yield port.sink.len.eq(4)
+            yield port.sink.dat.eq(_pack_dwords_to_int(payload))
+            yield port.sink.first.eq(1)
+            yield port.sink.last.eq(1)
+            yield port.sink.valid.eq(1)
+            while (yield port.sink.ready) == 0:
+                yield
+            yield
+            yield port.sink.valid.eq(0)
+            yield port.sink.first.eq(0)
+            yield port.sink.last.eq(0)
+            for _ in range(40):
+                yield
+
+            tgt = []
+            for i in range(4):
+                tgt.append((yield from csr_read_dw(write_dw + i)))
+            nbr = []
+            for i in range(4):
+                nbr.append((yield from csr_read_dw(slot0_dw + i)))
+            result["target"]    = tgt
+            result["neighbour"] = nbr
+
+        run_simulation(dut, [stimulus()], vcd_name=None)
+        self.assertEqual(result["target"], payload,
+                         msg=f"dw={data_width} off={off_bytes}: target slot wrong: {[hex(x) for x in result['target']]}")
+        if write_dw != slot0_dw:
+            self.assertEqual(result["neighbour"], sentinel,
+                             msg=f"dw={data_width} off={off_bytes}: neighbour clobbered: {[hex(x) for x in result['neighbour']]}")
+
+    def test_subbeat_write_256b_offset16(self):
+        # The exact admin-CQE-to-ACQ+16 case that broke NVMe init at 256b.
+        self._run(data_width=256, off_bytes=16)
+
+    def test_subbeat_write_256b_offset0(self):
+        self._run(data_width=256, off_bytes=0)
+
+    def test_subbeat_write_128b_offset16(self):
+        # At 128b a 16B write is beat-aligned; verify the no-be path still works.
+        self._run(data_width=128, off_bytes=16)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -539,6 +539,32 @@ class LiteNVMeHostMemDMA(LiteXModule):
         else:
             self.comb += wr_strb.eq((2**beat_bytes) - 1)
 
+        # Sub-beat write alignment (first/only beat). The completer port delivers MemWr data
+        # left-aligned (dword 0) with no byte-enables. A MemWr whose address is not beat-aligned
+        # -- e.g. a 16-byte admin CQE to ACQ+16, which is mid-beat at data_width=256 -- must be
+        # placed at its byte offset within the beat and must NOT clobber neighbouring data in the
+        # same beat (the adjacent CQ slot). Shift the data to the address's dword offset and strobe
+        # only the `len` written dwords. At data_width=128 a 16-byte write is beat-aligned (off=0)
+        # and this reduces to the previous behaviour.
+        self.off_dw = off_dw = Signal(max=(beat_dwords if beat_dwords > 1 else 2))
+        self.comb += off_dw.eq(((req.adr - base) >> 2) & (beat_dwords - 1))
+        self.wr_data_first = wr_data_first = Signal(data_width)
+        self.wr_strb_first = wr_strb_first = Signal(beat_bytes)
+        if has_be:
+            # BE present: trust the supplied byte-enables and data as-is.
+            self.comb += [wr_data_first.eq(req_dat), wr_strb_first.eq(req.be)]
+        else:
+            wlen = req.len if has_len else 1
+            # Data shift: a CONSTANT-shift Case (not `req_dat << (off_dw*32)` -- a variable shift by
+            # a signal expression mis-synthesised to "no shift" on hardware while simulating fine).
+            self.comb += Case(off_dw, {
+                off: wr_data_first.eq(req_dat << (off * 32)) for off in range(beat_dwords)
+            })
+            for d in range(beat_dwords):
+                in_span = Signal()
+                self.comb += in_span.eq((d >= off_dw) & (d < (off_dw + wlen)))
+                self.comb += wr_strb_first[4*d:4*d+4].eq(Replicate(in_span, 4))
+
         def latch_req_header():
             stmts = [NextValue(cur_word, (req.adr - base) >> beat_bytes_shift)]
             if has_tag:
@@ -572,11 +598,11 @@ class LiteNVMeHostMemDMA(LiteXModule):
                 ).Else(
                     *latch_req_header(),
                     If(req.we,
-                        # MemWr: first beat is also data beat.
+                        # MemWr: first beat is also data beat (sub-beat aligned: see wr_*_first).
                         wr_fifo.sink.valid.eq(1),
                         wr_fifo.sink.addr.eq(first_word << beat_bytes_shift),
-                        wr_fifo.sink.data.eq(req_dat),
-                        wr_fifo.sink.strb.eq(wr_strb),
+                        wr_fifo.sink.data.eq(wr_data_first),
+                        wr_fifo.sink.strb.eq(wr_strb_first),
                         NextValue(self.wr_count, self.wr_count + 1),
 
                         If(total_beats_now > 1,
