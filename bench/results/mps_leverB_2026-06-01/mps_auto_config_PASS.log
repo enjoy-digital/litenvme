@@ -1,0 +1,63 @@
+[14:00:22] load OK
+[14:00:39] boot: ok
+[14:00:44] CMD rd4k_a: nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+CAP bytes=700 valid=1 at_fw=1 at_bios=0 -> /tmp/mpsauto_rd4k_a.txt
+----- rd4k_a -----
+nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+MPS auto-set: enc=2 (512B)  [root_sup=3 ssd_sup=2]
+Engine bench read: count=1000 nlb=8 start_lba=1000000 step=8
+completed: 1000
+submitted: 1000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 397680
+max_inflight: 32
+latency_avg: 3.181 us
+throughput: 1287.467 MB/s
+iops: 314323.073 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260061
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3061
+hostmem_rd_tlps: 9000
+hostmem_rd_gap_max: 2976565094
+hostmem_rd_duty_pct: 65.394 %
+litenvme>----- end rd4k_a -----
+[14:00:46] CMD rd4k_b: nvme_engine_bench read 0xe0000000 1 2000000 8 1000 8
+CAP bytes=523 valid=1 at_fw=1 at_bios=0 -> /tmp/mpsauto_rd4k_b.txt
+----- rd4k_b -----
+nvme_engine_bench read 0xe0000000 1 2000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=2000000 step=8
+completed: 1000
+submitted: 2000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 359878
+max_inflight: 32
+latency_avg: 2.879 us
+throughput: 1422.704 MB/s
+iops: 347339.931 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260220
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3220
+hostmem_rd_tlps: 9000
+hostmem_rd_gap_max: 2976565094
+hostmem_rd_duty_pct: 72.307 %
+litenvme>----- end rd4k_b -----
+[14:00:49] CMD rootmps: rootmps
+CAP bytes=200 valid=1 at_fw=1 at_bios=0 -> /tmp/mpsauto_rootmps.txt
+----- rootmps -----
+rootmps
+RootPort VID/DID = 0x902410ee
+RootPort Express Cap @ 0x70
+Root: mps_supported=3 (1024B)  devctl_mps=2 (512B)  mrrs=2 (512B)
+RC op (hard IP): op_mps=512B  op_mrrs=512B
+litenvme>----- end rootmps -----
+[14:00:49] stopping
+[14:00:49] DONE
+MPSAUTO_DONE

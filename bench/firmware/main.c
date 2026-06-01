@@ -753,6 +753,8 @@ static int cfg_rd32_retry(uint8_t reg, uint32_t *val, int tries)
 	return 1;
 }
 
+static void nvme_configure_mps_once(void);  /* Defined after the cfg/rootcfg helpers below. */
+
 static int nvme_bar0_assign(uint64_t base_addr)
 {
 	uint32_t bar0 = 0, bar1 = 0;
@@ -836,6 +838,10 @@ static int nvme_bar0_assign(uint64_t base_addr)
 	nvme_admin_ready = 0;
 	nvme_io_ready = 0;
 	nvme_cap_cached = 0;
+
+	/* We are in the clean CFG window (this is the first, cache-miss assign): raise MaxPayloadSize
+	 * on both ends to the link's supported max before any admin/engine traffic touches it. */
+	nvme_configure_mps_once();
 	return 0;
 }
 
@@ -1570,6 +1576,43 @@ static void rootmps_cmd(char *str)
 #endif
 }
 #endif /* CSR_PCIE_ROOTCFG_CTRL_ADDR */
+
+/* Auto-raise MaxPayloadSize on both ends to the link maximum = min(root DevCap, SSD DevCap).
+ * Runs once, called from nvme_bar0_assign inside the clean CFG window (before admin/engine
+ * traffic). MPS field [7:5] only; MRRS left at default. No-op without the root cfg_mgmt bridge. */
+static void nvme_configure_mps_once(void)
+{
+#ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
+	static int done = 0;
+	if (done) return;
+
+	/* Our root port (Express Cap reached via cfg_mgmt). */
+	uint16_t rcap = rootcfg_express_cap();
+	uint32_t rdevcap = 0, rdc = 0;
+	if (!rcap || rootcfg_rd32(rcap + 0x04, &rdevcap) || rootcfg_rd32(rcap + 0x08, &rdc))
+		return;
+	uint32_t root_sup = rdevcap & 0x7;
+
+	/* The downstream SSD (still in the clean CFG window). */
+	uint8_t scap = pcie_express_cap_offset();
+	uint32_t sdevcap = 0, sdc = 0;
+	if (!scap || cfg_rd32_stable((scap + 0x04) / 4, &sdevcap) || cfg_rd32_stable((scap + 0x08) / 4, &sdc))
+		return;
+	uint32_t ssd_sup = sdevcap & 0x7;
+
+	uint32_t target = (root_sup < ssd_sup) ? root_sup : ssd_sup;
+
+	/* Program root first (so it can receive the larger MemWr), then the SSD. MPS field [7:5]. */
+	uint32_t rnew = (rdc & ~(0x7u << 5)) | ((target & 0x7u) << 5);
+	rootcfg_wr32(rcap + 0x08, (rdc & 0xffff0000u) | (rnew & 0xffffu), 0x3);
+	uint32_t snew = (sdc & ~(0x7u << 5)) | ((target & 0x7u) << 5);
+	cfg_wr32((scap + 0x08) / 4, (sdc & 0xffff0000u) | (snew & 0xffffu));
+
+	done = 1;
+	printf("MPS auto-set: enc=%u (%sB)  [root_sup=%u ssd_sup=%u]\n",
+	       (unsigned)target, mps_str(target), (unsigned)root_sup, (unsigned)ssd_sup);
+#endif
+}
 
 static int nvme_io_setup(uint64_t cap)
 {
