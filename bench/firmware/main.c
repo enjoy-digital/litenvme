@@ -573,10 +573,12 @@ static void cfg_wr_cmd(char *str)
 		printf("WARN: cfg_wr err=1 (write may still be accepted)\n");
 }
 
+static int cfg_rd32_retry(uint8_t reg, uint32_t *val, int tries);  /* defined below */
+
 static void cmd_set_bits(int mem, int bme, int intdis)
 {
 	uint32_t v = 0;
-	if (cfg_rd32(1, &v)) {
+	if (cfg_rd32_retry(1, &v, 5)) {  /* discard-first/lag-safe read (raw cfg_rd32 returns stale at Gen3) */
 		printf("ERR\n");
 		return;
 	}
@@ -746,6 +748,10 @@ static uint64_t bar_size_from_mask(uint64_t mask)
 
 static int cfg_rd32_retry(uint8_t reg, uint32_t *val, int tries)
 {
+	/* The CFG accessor can return the PREVIOUS transaction's data (1-transaction read-lag; it
+	 * accepts any pending completion). This is benign at Gen2 timing but surfaces at Gen3. Issue
+	 * one discarded read of `reg` first so the following read returns `reg`'s own data. */
+	cfg_rd32(reg, val);
 	for (int i = 0; i < tries; i++) {
 		if (cfg_rd32(reg, val) == 0 && !cfg_last_err)
 			return 0;
@@ -1612,6 +1618,33 @@ static void nvme_configure_mps_once(void)
 	printf("MPS auto-set: enc=%u (%sB)  [root_sup=%u ssd_sup=%u]\n",
 	       (unsigned)target, mps_str(target), (unsigned)root_sup, (unsigned)ssd_sup);
 #endif
+}
+
+/* Isolate MMIO read vs write at the current datapath width (debug): assign BAR0 (cfg), read
+ * CAP/CSTS/CC, then write AQA and read it back. No admin init, no CC enable. */
+static void nvme_mmiotest_cmd(void)
+{
+	if (nvme_bar0_assign(0xe0000000ull)) { puts("ERR: bar0 assign failed."); return; }
+	cmd_enable_cmd();  /* enable memory space + bus master (else BAR0 ignores MMIO) */
+	{ uint32_t cmdsts = 0; cfg_rd32_retry(1, &cmdsts, 5);
+	  printf("bar0_base=0x%llx  CMD/STS=0x%08x (MEM=%d BME=%d)\n",
+	         (unsigned long long)bar0_base, (unsigned)cmdsts, (int)((cmdsts>>1)&1), (int)((cmdsts>>2)&1)); }
+	uint64_t cap = 0; uint32_t csts = 0, cc = 0, rb = 0;
+	int e1 = mmio_rd64(bar0_base + NVME_CAP,  &cap);
+	int e2 = mmio_rd32(bar0_base + NVME_CSTS, &csts);
+	int e3 = mmio_rd32(bar0_base + NVME_CC,   &cc);
+	printf("MMIO RD: cap=0x%016llx(e%d) csts=0x%08x(e%d) cc=0x%08x(e%d)\n",
+	       (unsigned long long)cap, e1, (unsigned)csts, e2, (unsigned)cc, e3);
+	uint32_t tv = 0x003f003f;
+	int e4 = mmio_wr32(bar0_base + NVME_AQA, tv);
+	int e5 = mmio_rd32(bar0_base + NVME_AQA, &rb);
+	printf("MMIO WR32: AQA<=0x%08x(e%d) readback=0x%08x(e%d) %s\n",
+	       (unsigned)tv, e4, (unsigned)rb, e5, (rb == tv) ? "MATCH" : "MISMATCH");
+	int e6 = mmio_wr64(bar0_base + NVME_ASQ, 0x12340000ull);
+	uint32_t lo = 1, hi = 1; int e7 = mmio_rd32(bar0_base + NVME_ASQ, &lo); int e8 = mmio_rd32(bar0_base + NVME_ASQ + 4, &hi);
+	printf("MMIO WR64: ASQ<=0x12340000 (e%d) readback=0x%08x%08x (e%d/%d)\n", e6, (unsigned)hi, (unsigned)lo, e7, e8);
+	uint32_t csts2 = 0; int e9 = mmio_rd32(bar0_base + NVME_CSTS, &csts2);
+	printf("MMIO post-write CSTS: 0x%08x (e%d) %s\n", (unsigned)csts2, e9, e9 ? "TIMEOUT(wedged)" : "ok");
 }
 
 static int nvme_io_setup(uint64_t cap)
@@ -2604,6 +2637,8 @@ static void console_service(void)
 		nvme_debug_cmd(str);
 	else if (strcmp(token, "nvme_fill") == 0)
 		nvme_fill_cmd(str);
+	else if (strcmp(token, "nvme_mmiotest") == 0)
+		nvme_mmiotest_cmd();
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
 #ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
