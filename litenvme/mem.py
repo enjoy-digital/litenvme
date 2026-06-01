@@ -75,6 +75,13 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
             NextValue(timer, 0),
+            # Drain any stale completion left pending from a prior transaction. The crossbar holds
+            # a leftover completion beat valid until consumed, and `cmp_source.ready` is only
+            # asserted in WAIT -- so a completion that lands while we are idle would otherwise sit
+            # there and be matched immediately by the NEXT read's WAIT (cpl_match = valid), latching
+            # the previous transaction's data (an off-by-one "stale read", seen at data_width=256).
+            # Flushing before each request guarantees the first beat we see in WAIT is genuinely ours.
+            cmp_source.ready.eq(1),
             If(start_pulse,
                 If(self.we & (self.wsel != 0xf),
                     NextState("BAD-WSEL"),
@@ -90,6 +97,9 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
             NextState("IDLE"),
         )
         fsm.act("SEND",
+            # Keep draining stale completions until our request is actually accepted (our own
+            # completion cannot arrive before then), so none can slip into WAIT ahead of ours.
+            cmp_source.ready.eq(1),
             req_sink.valid.eq(1),
             req_sink.first.eq(1),
             req_sink.last.eq(1),
@@ -123,17 +133,29 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
             NextValue(timer, timer + 1),
 
             If(cpl_match,
-                NextValue(self.rdata, cmp_source.dat[:32]),
-                NextState("LATCH"),
+                # Read data lives in the FIRST beat (our reads are single-DWORD, len=1).
+                If(cmp_source.first,
+                    NextValue(self.rdata, cmp_source.dat[:32]),
+                ),
+                If(cmp_source.err,
+                    NextValue(err_r, 1),
+                ),
+                # IMPORTANT: only retire once the completion's END beat is consumed. The shared
+                # LitePCIeTLPController delivers completions strictly in request order and advances
+                # its req_queue solely on (valid & last & end & ready). At data_width=128 a 1-DWORD
+                # completion is a single beat (first==end) so returning on the first beat happened to
+                # work; at data_width=256 it spans >1 beat, and returning early left a trailing END
+                # beat unconsumed -> req_queue never advanced -> the NEXT read mis-consumed it
+                # (off-by-one "stale read"). Draining through END keeps the controller in sync.
+                If(cmp_source.end,
+                    NextState("LATCH"),
+                ),
             ).Elif(timer == (timeout - 1),
                 NextState("TIMEOUT"),
             )
         )
         fsm.act("LATCH",
             NextValue(done_r, 1),
-            If(cmp_source.err,
-                NextValue(err_r, 1),
-            ),
             NextState("IDLE"),
         )
         fsm.act("TIMEOUT",

@@ -35,9 +35,13 @@ def _req_layout(data_width):
 
 
 def _cmp_layout(data_width):
+    # Mirrors the relevant fields of LitePCIe's completion_layout: the read data, the error flag,
+    # and "end" (set on the final completion beat of a request -- the accessor must consume through
+    # it to keep the shared TLP controller's in-order req_queue in sync).
     return [
         ("dat", data_width),
         ("err", 1),
+        ("end", 1),
     ]
 
 
@@ -89,7 +93,11 @@ class TestMemAccessor(unittest.TestCase):
                     captured["adr"] = (yield port.source.adr)
                     for _ in range(2):
                         yield
+                    # Single-beat completion: first == end (the data_width=128 case).
                     yield port.sink.valid.eq(1)
+                    yield port.sink.first.eq(1)
+                    yield port.sink.last.eq(1)
+                    yield port.sink.end.eq(1)
                     yield port.sink.dat.eq(rdata)
                     while (yield port.sink.ready) == 0:
                         yield
@@ -108,6 +116,69 @@ class TestMemAccessor(unittest.TestCase):
         self.assertEqual(last["done"], 1)
         self.assertEqual(last["err"], 0)
         self.assertEqual(last["rdata"], rdata)
+
+    def _run_read_multibeat(self, rdata=0x0BADF00D, timeout=64):
+        # A completion that spans >1 beat (the data_width=256 reality for a single-DWORD read):
+        # the read data is in the FIRST beat; a trailing beat carries "end". The accessor must
+        # latch the first beat's data and only retire once the END beat is consumed -- otherwise the
+        # controller's req_queue never advances and the NEXT read mis-consumes the trailing beat.
+        port = _Port(data_width=128)
+        dut  = LiteNVMePCIeMmioAccessor(port, tag=0x77, timeout=timeout)
+
+        last = {"done": 0, "err": 0, "rdata": 0}
+
+        def stimulus():
+            yield dut.adr.eq(0x4000_0000)
+            yield dut.len.eq(1)
+            yield dut.wsel.eq(0xF)
+            yield dut.we.eq(0)
+            yield dut.start.eq(1)
+            yield
+            yield dut.start.eq(0)
+            for _ in range(timeout + 20):
+                last["done"] = (yield dut.done)
+                last["err"] = (yield dut.err)
+                last["rdata"] = (yield dut.rdata)
+                if (yield dut.done):
+                    break
+                yield
+
+        @passive
+        def driver():
+            yield port.source.ready.eq(1)
+            yield port.sink.valid.eq(0)
+            while True:
+                if (yield port.source.valid) and (yield port.source.ready):
+                    for _ in range(2):
+                        yield
+                    # Beat 1: data, NOT end.
+                    yield port.sink.valid.eq(1)
+                    yield port.sink.first.eq(1)
+                    yield port.sink.last.eq(0)
+                    yield port.sink.end.eq(0)
+                    yield port.sink.dat.eq(rdata)
+                    while (yield port.sink.ready) == 0:
+                        yield
+                    yield
+                    # Beat 2: trailing END beat with different data (must NOT be latched).
+                    yield port.sink.first.eq(0)
+                    yield port.sink.last.eq(1)
+                    yield port.sink.end.eq(1)
+                    yield port.sink.dat.eq(0xDEADBEEF)
+                    while (yield port.sink.ready) == 0:
+                        yield
+                    yield
+                    yield port.sink.valid.eq(0)
+                    return
+                yield
+
+        run_simulation(dut, [stimulus(), driver()], vcd_name=None)
+        self.assertEqual(last["done"], 1)
+        self.assertEqual(last["err"], 0)
+        self.assertEqual(last["rdata"], rdata)  # first beat's data, not the trailing END beat.
+
+    def test_mem_read_multibeat(self):
+        self._run_read_multibeat()
 
     def _run_write(self, wdata=0xAABBCCDD, timeout=64):
         port = _Port(data_width=128)
