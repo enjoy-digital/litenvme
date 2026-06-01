@@ -83,7 +83,7 @@ class BaseSoC(SoCCore):
             if cpu_boot == "bios":
                 soc_kwargs.update(dict(
                     integrated_rom_size      = 0x10000,  # BIOS
-                    integrated_main_ram_size = 0x8000,   # App load
+                    integrated_main_ram_size = 0x10000,  # App load (room for diag/MPS commands)
                 ))
             else:
                 soc_kwargs.update(dict(

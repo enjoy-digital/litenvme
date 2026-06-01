@@ -1311,6 +1311,86 @@ static void nvme_identify_cmd(char *str)
 	nvme_identify_run(cid);
 }
 
+/*
+ * nvme_mps: inspect / raise the SSD endpoint's PCIe MaxPayloadSize (MPS) and
+ * MaxReadRequestSize (MRRS). PCIe operational MPS resets to 128 B and must be raised by
+ * software (the PCI Express Capability's Device Control register, DevCtl[7:5]=MPS,
+ * DevCtl[14:12]=MRRS). Nothing else does this, so a 4 KiB read fragments into 128 B completion
+ * TLPs (33 TLPs/read) -- the duty-cycle counters showed this caps read throughput at ~50% link
+ * occupancy. Encoding 0..5 = 128/256/512/1024/2048/4096 B. Done in firmware because the
+ * host-side cfg accessor is unreliable and destabilizes the live controller.
+ *   nvme_mps            - walk the Express Cap, print DevCap MPS-supported + DevCtl MPS/MRRS.
+ *   nvme_mps set <enc>  - set DevCtl MPS+MRRS to <enc> (clamped to DevCap), then re-read.
+ */
+static const char *mps_str(uint32_t enc)
+{
+	switch (enc) {
+	case 0: return "128"; case 1: return "256"; case 2: return "512";
+	case 3: return "1024"; case 4: return "2048"; case 5: return "4096";
+	default: return "?";
+	}
+}
+
+/* Byte offset of the PCI Express Capability (ID 0x10) in the SSD config space, or 0. */
+static uint8_t pcie_express_cap_offset(void)
+{
+	uint32_t v = 0;
+	if (cfg_rd32(1, &v) || ((v >> 20) & 0x1u) == 0) return 0;  /* Capabilities-list bit. */
+	if (cfg_rd32(0x34 / 4, &v)) return 0;                      /* Cap pointer at byte 0x34. */
+	uint8_t off = v & 0xfc;
+	for (int g = 0; g < 48 && off >= 0x40; g++) {
+		if (cfg_rd32(off / 4, &v)) return 0;
+		if ((v & 0xff) == 0x10) return off;
+		off = (v >> 8) & 0xfc;
+	}
+	return 0;
+}
+
+static void nvme_mps_cmd(char *str)
+{
+	int do_set = 0;
+	uint32_t target = 0;
+	char *a = (str && strlen(str)) ? get_token(&str) : NULL;
+	if (a && strlen(a) && strcmp(a, "set") == 0) {
+		do_set = 1;
+		char *t = get_token(&str);
+		if (t && strlen(t)) target = (uint32_t)strtoul(t, NULL, 0);
+		if (target > 5) { puts("ERR: mps encoding must be 0..5 (128..4096B)."); return; }
+	}
+
+	if (nvme_bar0_assign(0xe0000000ull)) return;
+	cmd_set_bits(1, 1, 1);
+
+	uint8_t cap = pcie_express_cap_offset();
+	if (!cap) { puts("ERR: PCIe Express Capability not found."); return; }
+
+	uint32_t devcap = 0, dc = 0;
+	if (cfg_rd32((cap + 0x04) / 4, &devcap) || cfg_rd32((cap + 0x08) / 4, &dc)) {
+		puts("ERR: DevCap/DevCtl read failed."); return;
+	}
+	uint32_t mps_sup = devcap & 0x7;
+	printf("mps_supported=%u (%sB)  devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
+	       (unsigned)mps_sup, mps_str(mps_sup),
+	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
+	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
+
+	if (!do_set) return;
+
+	if (target > mps_sup) {
+		printf("WARN: target %u > supported %u, clamping.\n", (unsigned)target, (unsigned)mps_sup);
+		target = mps_sup;
+	}
+	/* Preserve DevCtl bits other than MPS[7:5] and MRRS[14:12]; keep DevSts (upper half). */
+	uint32_t newctl = (dc & ~((0x7u << 5) | (0x7u << 12)))
+	                | ((target & 0x7u) << 5) | ((target & 0x7u) << 12);
+	if (cfg_wr32((cap + 0x08) / 4, (dc & 0xffff0000u) | (newctl & 0xffffu)))
+		puts("WARN: DevCtl write err=1.");
+	if (cfg_rd32((cap + 0x08) / 4, &dc)) { puts("ERR: DevCtl re-read failed."); return; }
+	printf("after: devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
+	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
+	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
+}
+
 static int nvme_io_setup(uint64_t cap)
 {
 	if (nvme_io_ready)
@@ -2303,6 +2383,8 @@ static void console_service(void)
 		nvme_fill_cmd(str);
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
+	else if (strcmp(token, "nvme_mps") == 0)
+		nvme_mps_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)
 		nvme_read_cmd(str);
 	else if (strcmp(token, "nvme_read_dump") == 0)
