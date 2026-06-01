@@ -51,13 +51,19 @@ def _send(b, s):
         b.regs.uart_xover_rxtx.write(ord(ch))
 
 
-def _collect(b, settle, quiet=1.5):
+def _collect(b, settle, quiet=3.0, done="litenvme>"):
+    # Capture until the firmware reprints its prompt (deterministic "command done" signal) so a
+    # slow firmware (e.g. cfg reads that hit cfg_wait_done's long spin) can't truncate us during
+    # an inter-line gap. The quiet/settle timers are only fallbacks if the prompt never returns.
     buf = bytearray()
     t0 = time.time(); last = time.time()
     while time.time() - t0 < settle:
         if not b.regs.uart_xover_rxempty.read():
             buf.append(b.regs.uart_xover_rxtx.read() & 0xff)
             last = time.time()
+            # Cheap tail check: only scan once a prompt char just arrived.
+            if buf[-1] == ord('>') and done in _strip(bytes(buf[-64:]).decode("utf-8", "replace")):
+                break
         else:
             if buf and (time.time() - last) > quiet:
                 break

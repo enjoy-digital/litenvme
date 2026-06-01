@@ -1,5 +1,39 @@
 # LiteNVMe — Development Progress Log
 
+## READ CEILING ROOT CAUSE = 128B MaxPayloadSize (Lever B, 2026-06-01)
+
+The "device/PCIe-bound" ceiling below is now pinned to a concrete, fixable cause: the link's
+**MaxPayloadSize (MPS) is 128 bytes**, so each 4 KiB NVMe read fragments into 33 MemWr TLPs
+(`hostmem_rd_tlps=33000` for 1000 reads), which is exactly why read-data is present at our port
+only ~half the time (duty ~46-63%). All numbers below are board-printed.
+
+Firmware-side investigation (new `nvme_mps` command, firmware cfg-space walk):
+- The firmware cfg accessor only completes config transactions inside the *clean window* of the
+  first cache-miss `nvme_bar0_assign` (the shared crossbar completion path is taken over by
+  admin/engine traffic afterwards). So `nvme_mps` runs that walk as the FIRST command.
+- SSD = **Crucial CT500P310SSD8** (FR VACR001), Express Cap @0x80:
+  `mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)` — the drive supports 512B but
+  operates at 128B (evidence: results/mps_leverB_2026-06-01/cfg_dump_clean.log).
+- Sweep of the SSD's DevCtl.MPS (fresh boot per level, set as first cmd, then read bench;
+  evidence: results/mps_leverB_2026-06-01/mps_sweep_128_256_512.log):
+    - 128B: reads OK, errors=0, 4KiB ~1111-1242 MB/s, duty ~56-63%.
+    - 256B: `set` OK, but reads **time out** (`completed=1/1000`).
+    - 512B: `set` OK, but reads **time out** (`completed=3/1000`).
+
+ROOT CAUSE: our **PCIe root complex operates at MPS=128B** — read directly from the hard IP:
+`pcie_phy(RootComplex) MPS=128B MRRS=512B`, `pcie_endpoint(core) MPS=128B MRRS=512B`
+(results/mps_leverB_2026-06-01/rc_mps_csr.txt). Raising only the SSD's MPS creates a mismatch:
+the SSD emits >128B MemWr read-data the root complex cannot receive, so completions stop and
+the engine times out. **Firmware cannot raise the root-port MPS** — LitePCIe ties off the hard
+IP's `cfg_mgmt_*` local-management interface (litepcie/phy/usppciephy.py), and our cfg accessor
+only reaches the downstream endpoint, not the local Root Port's own DevCtl.
+
+CONCLUSION: Lever B (firmware MPS raise) cannot win on the current bitstream. The 128B ceiling
+is a **gateware** property. The read win requires rebuilding with the pcie4_uscale_plus core
+configured for a larger Maximum Payload Size (≥256B DevCap) so the link negotiates higher, AND
+the endpoint set to match — a synth-level change that naturally folds into the Gen3/datapath
+rebuild (Lever A). Until then, 4 KiB reads at ~1.0-1.2 GB/s are at the 128B-MPS ceiling.
+
 ## READ CEILING DIAGNOSED: device/PCIe-bound, not us (option B, 2026-06-01)
 
 Added observe-only read-path duty/gap counters to the hostmem DMA (commit 20c6264), synthesized

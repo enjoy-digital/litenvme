@@ -1,0 +1,134 @@
+[12:52:34] ==================== MPS enc=0 ====================
+[12:53:11] CMD 0_set: nvme_mps set 0
+CAP bytes=264 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_0_set.txt
+----- 0_set -----
+nvme_mps set 0
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+after: devctl_mps=0 (128B)  mrrs=0 (128B)
+litenvme>----- end 0_set -----
+[12:53:12] CMD 0_rd4k_a: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=511 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_0_rd4k_a.txt
+----- 0_rd4k_a -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 1000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 460593
+max_inflight: 32
+latency_avg: 3.684 us
+throughput: 1111.610 MB/s
+iops: 271389.274 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 257326
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 326
+hostmem_rd_tlps: 33000
+hostmem_rd_gap_max: 3034340290
+hostmem_rd_duty_pct: 55.868 %
+litenvme>----- end 0_rd4k_a -----
+[12:53:14] CMD 0_rd4k_b: nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+CAP bytes=524 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_0_rd4k_b.txt
+----- 0_rd4k_b -----
+nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=1000000 step=8
+completed: 1000
+submitted: 2000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 412123
+max_inflight: 32
+latency_avg: 3.296 us
+throughput: 1242.347 MB/s
+iops: 303307.507 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260321
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3321
+hostmem_rd_tlps: 33000
+hostmem_rd_gap_max: 3034340290
+hostmem_rd_duty_pct: 63.165 %
+litenvme>----- end 0_rd4k_b -----
+[12:53:17] CMD 0_rd8k: nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+CAP bytes=514 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_0_rd8k.txt
+----- 0_rd8k -----
+nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+Engine bench read: count=1000 nlb=16 start_lba=0 step=16
+completed: 1000
+submitted: 3000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 860199
+max_inflight: 32
+latency_avg: 6.881 us
+throughput: 1190.422 MB/s
+iops: 145315.211 IOPS
+payload_bytes: 8192000
+hostmem_rd_present_cycles: 513014
+hostmem_rd_accept_cycles: 513000
+hostmem_rd_stall_cycles: 14
+hostmem_rd_tlps: 65000
+hostmem_rd_gap_max: 3034340290
+hostmem_rd_duty_pct: 59.638 %
+litenvme>----- end 0_rd8k -----
+[12:53:20] ==================== MPS enc=1 ====================
+[12:53:58] CMD 1_set: nvme_mps set 1
+CAP bytes=264 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_1_set.txt
+----- 1_set -----
+nvme_mps set 1
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+after: devctl_mps=1 (256B)  mrrs=1 (256B)
+litenvme>----- end 1_set -----
+[12:53:59] CMD 1_rd4k_a: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=48 valid=0 at_fw=0 at_bios=0 -> /tmp/mpssweep_1_rd4k_a.txt  [INVALID: not at firmware prompt -- do NOT record]
+----- 1_rd4k_a -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+----- end 1_rd4k_a -----
+[12:54:04] CMD 1_rd4k_b: nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+CAP bytes=68 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_1_rd4k_b.txt
+----- 1_rd4k_b -----
+ERR: engine bench timed out (completed=1/1000)
+litenvme>----- end 1_rd4k_b -----
+[12:54:11] CMD 1_rd8k: nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+CAP bytes=68 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_1_rd8k.txt
+----- 1_rd8k -----
+ERR: engine bench timed out (completed=1/1000)
+litenvme>----- end 1_rd8k -----
+[12:54:22] ==================== MPS enc=2 ====================
+[12:55:00] CMD 2_set: nvme_mps set 2
+CAP bytes=264 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_2_set.txt
+----- 2_set -----
+nvme_mps set 2
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+after: devctl_mps=2 (512B)  mrrs=2 (512B)
+litenvme>----- end 2_set -----
+[12:55:01] CMD 2_rd4k_a: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=48 valid=0 at_fw=0 at_bios=0 -> /tmp/mpssweep_2_rd4k_a.txt  [INVALID: not at firmware prompt -- do NOT record]
+----- 2_rd4k_a -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+----- end 2_rd4k_a -----
+[12:55:06] CMD 2_rd4k_b: nvme_engine_bench read 0xe0000000 1 1000000 8 1000 8
+CAP bytes=68 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_2_rd4k_b.txt
+----- 2_rd4k_b -----
+ERR: engine bench timed out (completed=3/1000)
+litenvme>----- end 2_rd4k_b -----
+[12:55:13] CMD 2_rd8k: nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+CAP bytes=68 valid=1 at_fw=1 at_bios=0 -> /tmp/mpssweep_2_rd8k.txt
+----- 2_rd8k -----
+ERR: engine bench timed out (completed=3/1000)
+litenvme>----- end 2_rd8k -----
+[12:55:24] DONE
+MPSSWEEP_DONE

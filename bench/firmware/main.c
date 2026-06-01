@@ -1331,15 +1331,32 @@ static const char *mps_str(uint32_t enc)
 	}
 }
 
-/* Byte offset of the PCI Express Capability (ID 0x10) in the SSD config space, or 0. */
+/* Stable CFG dword read. The CFG accessor returns the data of the PREVIOUSLY-addressed
+ * register (one-transaction lag across differing addresses), so reading reg R once returns
+ * stale data. Read R three times for the SAME reg: by the 2nd-3rd the request for R has been
+ * issued, so the returned data is R's. Returns the last successful read; 1 only on hard error. */
+static int cfg_rd32_stable(uint8_t reg, uint32_t *val)
+{
+	uint32_t v = 0;
+	int ok = 0;
+	for (int i = 0; i < 3; i++) {
+		if (cfg_rd32(reg, &v) == 0) ok = 1;
+	}
+	if (ok) *val = v;
+	return ok ? 0 : 1;
+}
+
+/* Byte offset of the PCI Express Capability (ID 0x10) in the SSD config space, or 0.
+ * Does NOT re-assign BAR0 or rewrite the command register: nvme_mps runs against a controller
+ * that is already up from a prior bench, and re-sizing BAR0 mid-operation wedges it. */
 static uint8_t pcie_express_cap_offset(void)
 {
 	uint32_t v = 0;
-	if (cfg_rd32(1, &v) || ((v >> 20) & 0x1u) == 0) return 0;  /* Capabilities-list bit. */
-	if (cfg_rd32(0x34 / 4, &v)) return 0;                      /* Cap pointer at byte 0x34. */
+	if (cfg_rd32_stable(1, &v) || ((v >> 20) & 0x1u) == 0) return 0;  /* Status bit 4 = caps list. */
+	if (cfg_rd32_stable(0x34 / 4, &v)) return 0;                      /* Cap pointer at byte 0x34. */
 	uint8_t off = v & 0xfc;
 	for (int g = 0; g < 48 && off >= 0x40; g++) {
-		if (cfg_rd32(off / 4, &v)) return 0;
+		if (cfg_rd32_stable(off / 4, &v)) return 0;
 		if ((v & 0xff) == 0x10) return off;
 		off = (v >> 8) & 0xfc;
 	}
@@ -1348,7 +1365,7 @@ static uint8_t pcie_express_cap_offset(void)
 
 static void nvme_mps_cmd(char *str)
 {
-	int do_set = 0;
+	int do_set = 0, do_dump = 0;
 	uint32_t target = 0;
 	char *a = (str && strlen(str)) ? get_token(&str) : NULL;
 	if (a && strlen(a) && strcmp(a, "set") == 0) {
@@ -1356,16 +1373,43 @@ static void nvme_mps_cmd(char *str)
 		char *t = get_token(&str);
 		if (t && strlen(t)) target = (uint32_t)strtoul(t, NULL, 0);
 		if (target > 5) { puts("ERR: mps encoding must be 0..5 (128..4096B)."); return; }
+	} else if (a && strlen(a) && strcmp(a, "dump") == 0) {
+		do_dump = 1;
 	}
 
-	if (nvme_bar0_assign(0xe0000000ull)) return;
-	cmd_set_bits(1, 1, 1);
+	/* Prime the CFG accessor exactly like every other nvme command: nvme_bar0_assign drives the
+	 * initial cfg reads that put the PCIe cfg-management interface into the completing state.
+	 * Skipping it leaves cfg_rd32 timing out (err=1) and returning stale rdata. It is cached
+	 * (returns early once BAR0 is assigned), so this does not re-size or disturb the live BAR. */
+	if (nvme_bar0_assign(0xe0000000ull)) { puts("ERR: BAR0 assign failed (no device?)."); return; }
+
+	if (do_dump) {
+		for (int dw = 0; dw < 0x10; dw++) {
+			uint32_t v = 0; cfg_rd32_stable(dw, &v);
+			printf("cfg[0x%02x]=%08x\n", dw * 4, (unsigned)v);
+		}
+		/* Trace the capability walk so we can see exactly where it stops. */
+		uint32_t v = 0;
+		cfg_rd32_stable(1, &v);
+		printf("status=%08x capslist=%u\n", (unsigned)v, (unsigned)((v >> 20) & 1));
+		cfg_rd32_stable(0x34 / 4, &v);
+		uint8_t off = v & 0xfc;
+		printf("capptr=0x%02x\n", off);
+		for (int g = 0; g < 48 && off >= 0x40; g++) {
+			if (cfg_rd32_stable(off / 4, &v)) { printf("  walk @0x%02x READ-ERR\n", off); break; }
+			printf("  cap @0x%02x id=0x%02x next=0x%02x\n",
+			       off, (unsigned)(v & 0xff), (unsigned)((v >> 8) & 0xfc));
+			if ((v & 0xff) == 0x10) { printf("  -> Express Cap @0x%02x\n", off); break; }
+			off = (v >> 8) & 0xfc;
+		}
+		return;
+	}
 
 	uint8_t cap = pcie_express_cap_offset();
 	if (!cap) { puts("ERR: PCIe Express Capability not found."); return; }
 
 	uint32_t devcap = 0, dc = 0;
-	if (cfg_rd32((cap + 0x04) / 4, &devcap) || cfg_rd32((cap + 0x08) / 4, &dc)) {
+	if (cfg_rd32_stable((cap + 0x04) / 4, &devcap) || cfg_rd32_stable((cap + 0x08) / 4, &dc)) {
 		puts("ERR: DevCap/DevCtl read failed."); return;
 	}
 	uint32_t mps_sup = devcap & 0x7;
@@ -1385,7 +1429,7 @@ static void nvme_mps_cmd(char *str)
 	                | ((target & 0x7u) << 5) | ((target & 0x7u) << 12);
 	if (cfg_wr32((cap + 0x08) / 4, (dc & 0xffff0000u) | (newctl & 0xffffu)))
 		puts("WARN: DevCtl write err=1.");
-	if (cfg_rd32((cap + 0x08) / 4, &dc)) { puts("ERR: DevCtl re-read failed."); return; }
+	if (cfg_rd32_stable((cap + 0x08) / 4, &dc)) { puts("ERR: DevCtl re-read failed."); return; }
 	printf("after: devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
 	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
 	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
