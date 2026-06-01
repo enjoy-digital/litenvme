@@ -1,5 +1,46 @@
 # LiteNVMe — Development Progress Log
 
+## READ CEILING DIAGNOSED: device/PCIe-bound, not us (option B, 2026-06-01)
+
+Added observe-only read-path duty/gap counters to the hostmem DMA (commit 20c6264), synthesized
+(timing met), and measured on HW with the new bitstream. An NVMe read delivers data into host
+memory as MemWr TLPs, so these counters show how the SSD/PCIe feeds us read data vs whether we
+backpressure it. Two reproduced passes, errors=0, max_inflight=32, INTEG=PASS (evidence:
+bench/results/engine_hw_2026-06-01_readgap_pass1.log + pass2.log):
+
+  4KiB read: throughput 845-1155 MB/s, hostmem_rd_stall_cycles ~300-3200 (out of ~250-600k),
+             hostmem_rd_duty_pct ~38-58%, accept_cycles=257000 (=1000 cmds x 32 beats, exact).
+  8KiB read: ~1100-1145 MB/s, stall=22-74, duty ~55-57%, accept=513000.
+
+DECISIVE: stall_cycles ~= 0 everywhere -> we essentially NEVER backpressure inbound read data.
+Yet duty is only ~40-58% -> read-data beats are present at our port only ~half the time. So for
+~half of every read run the SSD/PCIe is simply not delivering read data to us (between
+completion TLPs). The engine keeps 32 commands outstanding and our datapath keeps up; the limit
+is the rate at which read completions arrive over the Gen2 x4 link.
+
+SSD spec cross-check: the drive Identify reports MN="CT500P310SSD8" (Crucial P310 500GB, Phison
+E27T, QLC/HMB, native Gen4 x4), FR="VACR001". Rated 6,600 MB/s sequential read / 520K random-4K
+IOPS (~2.1 GB/s) -- ~4x our Gen2 x4 usable ceiling (~1.5 GB/s). So the media is categorically
+NOT the limit; this confirms the duty-cycle evidence that the ceiling is the link/protocol
+(Gen2 x4 raw 2.0 GB/s, ~1.5 GB/s after TLP overhead) and read round-trip latency, not the SSD
+and not our RTL.
+
+CONCLUSION: 4KiB reads at ~1.0-1.15 GB/s are link/protocol-bound. Writes are posted
+(fire-and-forget) and already saturate the link (~1.5 GB/s); reads are round-trip
+latency-exposed and additionally pay per-TLP completion-header overhead at 4KiB. The only
+remaining levers are protocol-level, not datapath: larger MaxReadRequest/MaxPayload to amortize
+completion headers, and more outstanding read bytes (deeper queue / larger transfers) to hide
+the Gen2 round-trip -- diminishing returns against a hard ~1.5 GB/s wall. We are not leaving
+throughput on the table in our RTL.
+
+CAVEAT (counter bug, does not affect the conclusion): hostmem_rd_gap_max printed 2978602112 --
+a garbage value. The gap_run counter free-runs before the first read beat of the run (and the
+firmware reads gap_max as an absolute, not a delta), so the reported max is dominated by pre-run
+idle, not intra-run gaps. The duty% and stall numbers (the basis of the conclusion) are sound;
+gap_max is not trustworthy as printed. Left as-is since it is observe-only and the duty metric
+already answers the question; a fix would gate gap counting on read-active and snapshot gap_max
+as a delta.
+
 ## READ BOTTLENECK FIXED: pipelined hostmem write path ~2x reads on HW (2026-05-31)
 
 Applied + synthesized + measured the pipelined device->host (NVMe-read) write path (the

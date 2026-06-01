@@ -1,0 +1,152 @@
+[10:59:25] bit: -rw-rw-r-- 1 florent florent 8665115 Jun  1 10:56 build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit
+[10:59:27] loading bitstream...
+[10:59:42] load OK
+[10:59:48] PING ok
+[10:59:48] litex_server pid=3624968
+LINK=0x209d INTEG=PASS
+[10:59:52] serialboot firmware...
+[10:59:59] boot banner seen
+[11:00:05] firmware at prompt; running identify + read battery
+[11:00:05] CMD identify: nvme_identify
+CAP bytes=523 valid=1 at_fw=1 at_bios=0 -> /tmp/readgap_identify.txt
+----- identify -----
+nvme_identify
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+CMD/STS = 0x00100406
+Identify Controller (decoded):
+  VID      : 0xc0a9
+  SSVID    : 0xc0a9
+  SN       : 254253C4C137        
+  MN       : CT500P310SSD8                           
+  FR       : VACR001 
+  VER      : 2.0.0 (0x00020000)
+  CNTLID   : 0x0000
+  IEEE OUI : 75-a0-00
+  RAB      : 6
+  CMIC     : 0x00
+  MDTS     : 6
+  OAES     : 0x004c4b40
+litenvme> ----- end identify -----
+[11:00:07] CMD r8_a: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=512 valid=1 at_fw=1 at_bios=0 -> /tmp/readgap_r8_a.txt
+----- r8_a -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 1000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 443715
+max_inflight: 32
+latency_avg: 3.549 us
+throughput: 1153.893 MB/s
+iops: 281712.360 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 257471
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 471
+hostmem_rd_tlps: 33000
+hostmem_rd_gap_max: 2981446084
+hostmem_rd_duty_pct: 58.026 %
+litenvme> ----- end r8_a -----
+[11:00:11] CMD r8_b: nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+CAP bytes=511 valid=1 at_fw=1 at_bios=0 -> /tmp/readgap_r8_b.txt
+----- r8_b -----
+nvme_engine_bench read 0xe0000000 1 0 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 2000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 672230
+max_inflight: 32
+latency_avg: 5.377 us
+throughput: 761.644 MB/s
+iops: 185948.261 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 257327
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 327
+hostmem_rd_tlps: 33000
+hostmem_rd_gap_max: 2981446084
+hostmem_rd_duty_pct: 38.279 %
+litenvme> ----- end r8_b -----
+[11:00:15] CMD r8_lba9m: nvme_engine_bench read 0xe0000000 1 9000000 8 1000 8
+CAP bytes=524 valid=1 at_fw=1 at_bios=0 -> /tmp/readgap_r8_lba9m.txt
+----- r8_lba9m -----
+nvme_engine_bench read 0xe0000000 1 9000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=9000000 step=8
+completed: 1000
+submitted: 3000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 523306
+max_inflight: 32
+latency_avg: 4.186 us
+throughput: 978.395 MB/s
+iops: 238865.978 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260230
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3230
+hostmem_rd_tlps: 33000
+hostmem_rd_gap_max: 2981446084
+hostmem_rd_duty_pct: 49.728 %
+litenvme> ----- end r8_lba9m -----
+[11:00:19] CMD r16_a: nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+CAP bytes=515 valid=1 at_fw=1 at_bios=0 -> /tmp/readgap_r16_a.txt
+----- r16_a -----
+nvme_engine_bench read 0xe0000000 1 0 16 1000 16
+Engine bench read: count=1000 nlb=16 start_lba=0 step=16
+completed: 1000
+submitted: 4000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 894621
+max_inflight: 32
+latency_avg: 7.156 us
+throughput: 1144.618 MB/s
+iops: 139723.972 IOPS
+payload_bytes: 8192000
+hostmem_rd_present_cycles: 513074
+hostmem_rd_accept_cycles: 513000
+hostmem_rd_stall_cycles: 74
+hostmem_rd_tlps: 65000
+hostmem_rd_gap_max: 2981446084
+hostmem_rd_duty_pct: 57.350 %
+litenvme> ----- end r16_a -----
+[11:00:22] CMD w8_a: nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+CAP bytes=512 valid=1 at_fw=1 at_bios=0 -> /tmp/readgap_w8_a.txt
+----- w8_a -----
+nvme_engine_bench write 0xe0000000 1 0 8 1000 8
+Engine bench write: count=1000 nlb=8 start_lba=0 step=8
+completed: 1000
+submitted: 5000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 338156
+max_inflight: 32
+latency_avg: 2.705 us
+throughput: 1514.094 MB/s
+iops: 369651.876 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 36820
+hostmem_rd_accept_cycles: 1000
+hostmem_rd_stall_cycles: 35820
+hostmem_rd_tlps: 1000
+hostmem_rd_gap_max: 2981446084
+hostmem_rd_duty_pct: 10.888 %
+litenvme> ----- end w8_a -----
+=== READGAP SUMMARY ===
+[r8_a] errors: 0 cycles: 443715 max_inflight: 32 throughput: 1153.893 MB/s hostmem_rd_present_cycles: 257471 cycles: 257000 hostmem_rd_stall_cycles: 471 hostmem_rd_tlps: 33000 hostmem_rd_gap_max: 2981446084 hostmem_rd_duty_pct: 58.026 % 
+[r8_b] errors: 0 cycles: 672230 max_inflight: 32 throughput: 761.644 MB/s hostmem_rd_present_cycles: 257327 cycles: 257000 hostmem_rd_stall_cycles: 327 hostmem_rd_tlps: 33000 hostmem_rd_gap_max: 2981446084 hostmem_rd_duty_pct: 38.279 % 
+[r8_lba9m] errors: 0 cycles: 523306 max_inflight: 32 throughput: 978.395 MB/s hostmem_rd_present_cycles: 260230 cycles: 257000 hostmem_rd_stall_cycles: 3230 hostmem_rd_tlps: 33000 hostmem_rd_gap_max: 2981446084 hostmem_rd_duty_pct: 49.728 % 
+[r16_a] errors: 0 cycles: 894621 max_inflight: 32 throughput: 1144.618 MB/s hostmem_rd_present_cycles: 513074 cycles: 513000 hostmem_rd_stall_cycles: 74 hostmem_rd_tlps: 65000 hostmem_rd_gap_max: 2981446084 hostmem_rd_duty_pct: 57.350 % 
+[w8_a] errors: 0 cycles: 338156 max_inflight: 32 throughput: 1514.094 MB/s hostmem_rd_present_cycles: 36820 cycles: 1000 hostmem_rd_stall_cycles: 35820 hostmem_rd_tlps: 1000 hostmem_rd_gap_max: 2981446084 hostmem_rd_duty_pct: 10.888 % 
+[identify] 
+[11:00:26] stopping litex_server
+[11:00:26] DONE_READGAP
+READGAP_DONE

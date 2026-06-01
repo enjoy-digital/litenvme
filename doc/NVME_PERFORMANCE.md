@@ -168,6 +168,33 @@ Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
 ```
 
+## Read ceiling: link/protocol-bound, not the engine or the SSD (measured 2026-06-01)
+
+After the pipelined-write fix took 4 KiB reads to ~1.0-1.15 GB/s, on-chip read-path duty-cycle
+counters were added to the hostmem DMA (`wr_present/accept/stall_cycles`, `rd_tlp_count`) to
+settle where the remaining gap to the ~1.5 GB/s Gen2 x4 ceiling lives. NVMe read data arrives
+as MemWr TLPs, so these measure how the device/PCIe feeds us vs whether we backpressure it.
+Two reproduced passes, errors=0, max_inflight=32 (evidence:
+`bench/results/engine_hw_2026-06-01_readgap_pass{1,2}.log`):
+
+- **We never backpressure reads:** `hostmem_rd_stall_cycles` ≈ 0 (tens-to-low-thousands out of
+  250k-600k cycle windows). Our datapath keeps up; the earlier write-path pipelining holds.
+- **The port is idle ~half the time:** `hostmem_rd_duty_pct` ≈ 40-58% for 4 KiB, ≈ 55-57% for
+  8 KiB. Read-data beats are present only about half the run — the SSD/PCIe delivers completions
+  with gaps, not back-to-back.
+- **The SSD is not the limit:** Identify reports `CT500P310SSD8` (Crucial P310 500 GB, native
+  Gen4 x4), rated **6,600 MB/s** sequential read / 520K random-4K IOPS (~2.1 GB/s) — ~4× our
+  Gen2 x4 usable ceiling. The media can far exceed 1.5 GB/s.
+
+**Conclusion:** the ~1.0-1.15 GB/s 4 KiB read figure is **link/protocol-bound** — PCIe Gen2 x4
+(2.0 GB/s raw, ~1.5 GB/s after TLP overhead) plus read round-trip latency and per-TLP
+completion-header overhead at 4 KiB. Writes are posted and already saturate the link; reads are
+latency-exposed. The remaining levers are protocol-level (larger MaxReadRequest/MaxPayload,
+more outstanding read bytes), with diminishing returns against the hard ~1.5 GB/s wall — there
+is no throughput left to recover in our RTL datapath. (Caveat: the `hostmem_rd_gap_max` counter
+printed a garbage value — it free-runs before the first beat; the duty/stall metrics the
+conclusion rests on are sound.)
+
 ## RTL I/O engine on hardware (measured 2026-05-31)
 
 The `LiteNVMeIOEngine` now runs on the Alibaba KU3P board (PCIe Gen2 x4) with a real NVMe
