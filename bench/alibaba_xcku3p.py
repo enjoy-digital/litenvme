@@ -107,16 +107,15 @@ class BaseSoC(SoCCore):
         pcie_pads = platform.request("pcie_x4")
         pcie_pads_rst_n = pcie_pads.rst_n
         pcie_pads.rst_n = Signal()
-        # Gen3 x4 @ 128-bit core datapath (litepcie-standard config). Core 128b @ sys 125MHz =
-        # 2.0 GB/s; hard IP AXI-S 128b @ 250MHz (pcie domain). Same-width CDC (no StrideConverter),
-        # the proven cfg/mmio path -- avoids the 256-bit RQ/MMIO datapath issues. Sys datapath caps
-        # throughput at ~2.0 GB/s (a real gain over Gen2's ~1.5). The full 256-bit path (RQ-adapter
-        # fix landed; MMIO-completion still open) is deferred to a wire-level effort.
+        # Gen3 x4 @ 256-bit core datapath (256b @ sys 125MHz = 4.0 GB/s, the throughput target).
+        # pcie_data_width == data_width (256) so the hard IP AXI-S is 256b @ 125MHz (axisten_freq
+        # override) -- same-width, same-rate CDC, no StrideConverter. RQ-adapter 256b fix landed
+        # (config works); MMIO-completion under LiteScope investigation.
         self.pcie_phy = USPPCIEPHY(
             platform,
             pcie_pads,
             speed           = "gen3",
-            data_width      = 128,
+            data_width      = 256,
             ip_name         = "pcie4_uscale_plus",
             mode            = "RootPort",
             with_cfg_mgmt   = True,  # Expose local cfg_mgmt to program the root-port DevCtl.MPS.
@@ -128,8 +127,10 @@ class BaseSoC(SoCCore):
             "pcie_blk_locn"    : "X0Y0",
             "gen_x0y0"         : "true",
             "gen_x1y0"         : "false",
-            "plltype"          : "QPLL0",  # Gen3 (8 GT/s) high-band PLL; was QPLL1 for Gen2.
-            # 128-bit Gen3 x4 uses litepcie's default axisten_freq=250 / coreclk_freq=500.
+            "plltype"          : "QPLL0",  # Gen3 (8 GT/s) high-band PLL.
+            # 256-bit Gen3 x4: user clock 125MHz (256b@125=4GB/s), core clock 250MHz.
+            "axisten_freq"     : 125,
+            "coreclk_freq"     : 250,
         })
         self.pcie_endpoint = LitePCIeRootPort(
             phy        = self.pcie_phy,
@@ -253,20 +254,17 @@ class BaseSoC(SoCCore):
         add(self.pcie_phy._link_status.fields.status)
 
         # MMIO request out (handshake + low address + tag).
-        for n in ("valid", "ready", "first", "last", "we"): add_opt(mem_req, n)
-        add_slice(mem_req.adr[0:32], 32, "memreq_adr_lo"); add_opt(mem_req, "tag"); add_opt(mem_req, "len")
+        for n in ("valid", "ready", "we"): add_opt(mem_req, n)
+        add_slice(mem_req.adr[0:32], 32, "memreq_adr_lo"); add_opt(mem_req, "tag")
 
-        # Raw completion in from the hard IP (does anything come back? header/data low 64b).
+        # Raw completion in from the hard IP (litepcie raw): DW0=hdr, DW1=status/bytecnt,
+        # DW2=loweraddr/tag/reqid, DW3=DATA. Capture DW0-3 to see tag routing AND the data dword.
         for n in ("valid", "ready", "first", "last"): add_opt(cs, n)
-        add_slice(cs.dat[0:64], 64, "cmpsrc_dat_lo")
+        add_slice(cs.dat[0:128], 128, "cmpsrc_dat")
 
-        # MMIO completion routed to the accessor (THE data the accessor latches).
+        # MMIO completion routed to the accessor (THE data the accessor latches + its tag).
         for n in ("valid", "ready", "first", "last", "err"): add_opt(mem_cmp, n)
-        add_slice(mem_cmp.dat[0:32], 32, "memcmp_dat_lo"); add_opt(mem_cmp, "tag"); add_opt(mem_cmp, "len")
-
-        # CFG completion (reference: this path works).
-        for n in ("valid", "ready", "err"): add_opt(cfg_cmp, n)
-        add_slice(cfg_cmp.dat[0:32], 32, "cfgcmp_dat_lo"); add_opt(cfg_cmp, "tag")
+        add_slice(mem_cmp.dat[0:32], 32, "memcmp_dat_lo"); add_opt(mem_cmp, "tag")
 
         self.analyzer = LiteScopeAnalyzer(sigs, depth=1024, clock_domain="sys",
             register=True, csr_csv="analyzer.csv")
