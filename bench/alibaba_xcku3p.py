@@ -107,15 +107,16 @@ class BaseSoC(SoCCore):
         pcie_pads = platform.request("pcie_x4")
         pcie_pads_rst_n = pcie_pads.rst_n
         pcie_pads.rst_n = Signal()
-        # Gen3 x4: core datapath 256b @ sys (125MHz = 4.0 GB/s). Keep pcie_data_width == data_width
-        # (256) so the hard IP's AXI-S is also 256b (@250MHz pcie domain) -- a same-width CDC only,
-        # NOT a 256<->128 StrideConverter (the converter path corrupted downstream TLPs at Gen3).
-        # (Gen2 x4 was 128b@125 both sides = 2.0 GB/s, same-width CDC, which worked.)
+        # Gen3 x4 @ 128-bit core datapath (litepcie-standard config). Core 128b @ sys 125MHz =
+        # 2.0 GB/s; hard IP AXI-S 128b @ 250MHz (pcie domain). Same-width CDC (no StrideConverter),
+        # the proven cfg/mmio path -- avoids the 256-bit RQ/MMIO datapath issues. Sys datapath caps
+        # throughput at ~2.0 GB/s (a real gain over Gen2's ~1.5). The full 256-bit path (RQ-adapter
+        # fix landed; MMIO-completion still open) is deferred to a wire-level effort.
         self.pcie_phy = USPPCIEPHY(
             platform,
             pcie_pads,
             speed           = "gen3",
-            data_width      = 256,
+            data_width      = 128,
             ip_name         = "pcie4_uscale_plus",
             mode            = "RootPort",
             with_cfg_mgmt   = True,  # Expose local cfg_mgmt to program the root-port DevCtl.MPS.
@@ -128,12 +129,7 @@ class BaseSoC(SoCCore):
             "gen_x0y0"         : "true",
             "gen_x1y0"         : "false",
             "plltype"          : "QPLL0",  # Gen3 (8 GT/s) high-band PLL; was QPLL1 for Gen2.
-            # Gen3 x4 with a 256-bit AXI-S interface runs the user clock at 125MHz (256b@125=4GB/s),
-            # not litepcie's default 250MHz (which is for the 128-bit interface). Core clock halves
-            # to match. This keeps the pcie domain at 125MHz = sys, so the datapath is a same-width
-            # same-rate CDC (no StrideConverter).
-            "axisten_freq"     : 125,
-            "coreclk_freq"     : 250,
+            # 128-bit Gen3 x4 uses litepcie's default axisten_freq=250 / coreclk_freq=500.
         })
         self.pcie_endpoint = LitePCIeRootPort(
             phy        = self.pcie_phy,
