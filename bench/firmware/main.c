@@ -1365,11 +1365,12 @@ static uint8_t pcie_express_cap_offset(void)
 
 static void nvme_mps_cmd(char *str)
 {
-	int do_set = 0, do_dump = 0;
+	int do_set = 0, do_dump = 0, mps_only = 0;
 	uint32_t target = 0;
 	char *a = (str && strlen(str)) ? get_token(&str) : NULL;
-	if (a && strlen(a) && strcmp(a, "set") == 0) {
+	if (a && strlen(a) && (strcmp(a, "set") == 0 || strcmp(a, "setmps") == 0)) {
 		do_set = 1;
+		mps_only = (strcmp(a, "setmps") == 0);  /* setmps: change MPS only, leave MRRS intact. */
 		char *t = get_token(&str);
 		if (t && strlen(t)) target = (uint32_t)strtoul(t, NULL, 0);
 		if (target > 5) { puts("ERR: mps encoding must be 0..5 (128..4096B)."); return; }
@@ -1413,10 +1414,16 @@ static void nvme_mps_cmd(char *str)
 		puts("ERR: DevCap/DevCtl read failed."); return;
 	}
 	uint32_t mps_sup = devcap & 0x7;
-	printf("mps_supported=%u (%sB)  devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
+	printf("SSD : mps_supported=%u (%sB)  devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
 	       (unsigned)mps_sup, mps_str(mps_sup),
 	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
 	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
+	/* Our root complex's operational MPS/MRRS, straight from the hard IP (already in bytes). */
+#ifdef CSR_PCIE_PHY_PHY_MAX_PAYLOAD_SIZE_ADDR
+	printf("RC  : op_mps=%uB  op_mrrs=%uB  (root complex; firmware cannot raise this)\n",
+	       (unsigned)pcie_phy_phy_max_payload_size_read(),
+	       (unsigned)pcie_phy_phy_max_request_size_read());
+#endif
 
 	if (!do_set) return;
 
@@ -1424,9 +1431,12 @@ static void nvme_mps_cmd(char *str)
 		printf("WARN: target %u > supported %u, clamping.\n", (unsigned)target, (unsigned)mps_sup);
 		target = mps_sup;
 	}
-	/* Preserve DevCtl bits other than MPS[7:5] and MRRS[14:12]; keep DevSts (upper half). */
-	uint32_t newctl = (dc & ~((0x7u << 5) | (0x7u << 12)))
-	                | ((target & 0x7u) << 5) | ((target & 0x7u) << 12);
+	/* Preserve DevCtl bits other than the fields we change; keep DevSts (upper half).
+	 * Default sets both MPS[7:5] and MRRS[14:12]; 'setmps' changes MPS only (MRRS untouched). */
+	uint32_t clr  = mps_only ? (0x7u << 5) : ((0x7u << 5) | (0x7u << 12));
+	uint32_t setb = mps_only ? ((target & 0x7u) << 5)
+	                         : (((target & 0x7u) << 5) | ((target & 0x7u) << 12));
+	uint32_t newctl = (dc & ~clr) | setb;
 	if (cfg_wr32((cap + 0x08) / 4, (dc & 0xffff0000u) | (newctl & 0xffffu)))
 		puts("WARN: DevCtl write err=1.");
 	if (cfg_rd32_stable((cap + 0x08) / 4, &dc)) { puts("ERR: DevCtl re-read failed."); return; }

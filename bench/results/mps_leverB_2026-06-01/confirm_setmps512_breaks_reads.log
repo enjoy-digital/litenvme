@@ -1,0 +1,36 @@
+[13:17:41] load OK
+[13:17:47] PING ok
+[13:17:47] server pid=3795761
+[13:17:58] boot: ok
+[13:18:02] CSR snapshot (after boot, pre-set):
+  RC  MPS=128B MRRS=512B
+  EP  MPS=128B MRRS=512B
+  link_status=0x209d
+[13:18:02] CMD setmps512: nvme_mps setmps 2
+CAP bytes=350 valid=1 at_fw=1 at_bios=0 -> /tmp/mpsconfirm_setmps512.txt
+----- setmps512 -----
+nvme_mps setmps 2
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+SSD : mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+RC  : op_mps=128B  op_mrrs=512B  (root complex; firmware cannot raise this)
+after: devctl_mps=2 (512B)  mrrs=2 (512B)
+litenvme>----- end setmps512 -----
+[13:18:03] CSR snapshot (after setmps 512 (SSD)):
+  RC  MPS=128B MRRS=512B
+  EP  MPS=128B MRRS=512B
+  link_status=0x209d
+[13:18:03] CMD rd_short: nvme_engine_bench read 0xe0000000 1 0 8 64 8
+CAP bytes=46 valid=0 at_fw=0 at_bios=0 -> /tmp/mpsconfirm_rd_short.txt  [INVALID: not at firmware prompt -- do NOT record]
+----- rd_short -----
+nvme_engine_bench read 0xe0000000 1 0 8 64 8
+----- end rd_short -----
+[13:18:08] CSR snapshot (after read attempt):
+  RC  MPS=128B MRRS=512B
+  EP  MPS=128B MRRS=512B
+  link_status=0x209d
+[13:18:08] stopping
+[13:18:08] DONE
+MPSCONFIRM_DONE
