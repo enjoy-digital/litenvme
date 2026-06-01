@@ -234,6 +234,41 @@ class BaseSoC(SoCCore):
         )
 
 
+    # LiteScope Probe (pcie-domain wire: hard-IP boundary) -----------------------------------------
+
+    def add_mmio_wire_probe(self):
+        # Capture, in the pcie clock domain, the MemRd descriptor AT the hard-IP boundary
+        # (s_axis_rq_adapt.m_axis: is the request correct?) and the RAW Xilinx completion
+        # (m_axis_rc_adapt.s_axis: is byte_count where the RC adapter reads it?). Trigger on the
+        # MemRd to the high address (addr[31]=1 distinguishes MMIO 0xe000.. from cfg register).
+        rqa = self.pcie_phy.s_axis_rq_adapt   # RQ adapter output -> hard IP (descriptor).
+        rca = self.pcie_phy.m_axis_rc_adapt   # raw RC from hard IP -> RC adapter input.
+
+        sigs = []
+        def add(s): sigs.append(s)
+        def add_slice(sig, width, name):
+            s = Signal(width, name=name); self.comb += s.eq(sig); add(s)
+
+        add(self.pcie_phy._link_status.fields.status)
+
+        # MemRd-to-high-address trigger qualifier.
+        rq_memhi = Signal(name="rq_memhi")
+        self.comb += rq_memhi.eq(rqa.m_axis_tvalid & rqa.m_axis_tdata[31])
+        add(rq_memhi)
+
+        # RQ descriptor to the hard IP: DW0=addr_lo, DW1=addr_hi, DW2=dwlen/reqtype, DW3=tag/reqid.
+        add(rqa.m_axis_tvalid); add(rqa.m_axis_tlast)
+        add_slice(rqa.m_axis_tdata[0:128], 128, "rq_desc")
+        add_slice(rqa.m_axis_tkeep, len(rqa.m_axis_tkeep), "rq_keep")
+
+        # Raw Xilinx completion from the hard IP: DW0-2 = descriptor (byte_count/dwlen/status/
+        # loweraddr, requester_id/tag, ...). This is the RC adapter's INPUT.
+        add(rca.s_axis_tvalid); add(rca.s_axis_tlast)
+        add_slice(rca.s_axis_tdata[0:96], 96, "rc_desc")
+
+        self.analyzer = LiteScopeAnalyzer(sigs, depth=1024, clock_domain="pcie",
+            register=True, csr_csv="analyzer.csv")
+
     # LiteScope Probe (focused MMIO debug) ---------------------------------------------------------
 
     def add_mmio_probe(self):
@@ -391,7 +426,7 @@ def main():
     parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
     parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
-    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie", "mmio"], help="Select LiteScope probe set.")
+    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie", "mmio", "mmiowire"], help="Select LiteScope probe set.")
     parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     args = parser.parse_args()
@@ -411,6 +446,8 @@ def main():
             soc.add_pcie_probe()
         elif args.litescope_probe == "mmio":
             soc.add_mmio_probe()
+        elif args.litescope_probe == "mmiowire":
+            soc.add_mmio_wire_probe()
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
