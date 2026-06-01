@@ -18,8 +18,10 @@ evidence results/mps_leverB_2026-06-01/mps512_both_ends_PASS.log):
 `rootmps set 2` -> root `op_mps=512B` (confirmed from the hard-IP CSR); `nvme_mps setmps 2` ->
 SSD 512B. TLPs/4KiB drop 33->9 (4096/512=8 data + headers), duty 63->72%, link stable 0x209d.
 8KiB reads are unchanged (~1.19 GB/s, duty ~60%) — that case is limited by something other than
-MPS. Programming is currently manual (two firmware commands at boot); wiring it into init so
-plain reads get 512B automatically is the obvious next step.
+MPS. Auto-configured: nvme_configure_mps_once() in nvme_bar0_assign raises both ends to the link
+max (min of DevCaps) in the clean CFG window, so a plain `nvme_engine_bench read` uses 512B with
+no manual steps ("MPS auto-set: enc=2 (512B) [root_sup=3 ssd_sup=2]";
+results/mps_leverB_2026-06-01/mps_auto_config_PASS.log).
 
 ## READ CEILING ROOT CAUSE = 128B MaxPayloadSize (Lever B, 2026-06-01)
 
