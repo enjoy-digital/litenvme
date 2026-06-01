@@ -1664,6 +1664,17 @@ static void nvme_engine_bench_cmd(char *str)
 	nvme_gen_buf_stride_write(0x1000);
 	nvme_gen_qmod_write(IO_Q_ENTRIES);
 
+	/* Snapshot the read-path duty-cycle / gap counters before the run. An NVMe read delivers
+	 * data into host memory as MemWr TLPs, so these characterize how the device/PCIe feeds us
+	 * read data vs whether we backpressure it. Guarded so firmware still builds on old gateware. */
+	uint32_t hm_present_before = 0, hm_accept_before = 0, hm_stall_before = 0, hm_tlps_before = 0;
+#ifdef CSR_HOSTMEM_CSR_WR_PRESENT_CYCLES_ADDR
+	hm_present_before = hostmem_csr_wr_present_cycles_read();
+	hm_accept_before  = hostmem_csr_wr_accept_cycles_read();
+	hm_stall_before   = hostmem_csr_wr_stall_cycles_read();
+	hm_tlps_before    = hostmem_csr_rd_tlp_count_read();
+#endif
+
 	/* Kick and wait for completion (hardware measures cycles). */
 	nvme_gen_ctrl_write(1);
 
@@ -1719,6 +1730,25 @@ static void nvme_engine_bench_cmd(char *str)
 	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, (uint64_t)cycles * 1000000ull, "MB/s");
 	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, (uint64_t)cycles, "IOPS");
 	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
+
+	/* Read-path duty cycle over this run (MemWr = inbound read data). `cycles` is the
+	 * engine's measured window, so duty% = present_beats_cycles * 100 / cycles tells us what
+	 * fraction of the run the device actually had read data ready for us. Low duty with ~0
+	 * stall => the SSD/PCIe is delivering with gaps (device/link-bound), not us. */
+#ifdef CSR_HOSTMEM_CSR_WR_PRESENT_CYCLES_ADDR
+	{
+		uint32_t hm_present = hostmem_csr_wr_present_cycles_read() - hm_present_before;
+		uint32_t hm_accept  = hostmem_csr_wr_accept_cycles_read()  - hm_accept_before;
+		uint32_t hm_stall   = hostmem_csr_wr_stall_cycles_read()   - hm_stall_before;
+		uint32_t hm_tlps    = hostmem_csr_rd_tlp_count_read()      - hm_tlps_before;
+		printf("hostmem_rd_present_cycles: %" PRIu32 "\n", hm_present);
+		printf("hostmem_rd_accept_cycles: %" PRIu32 "\n", hm_accept);
+		printf("hostmem_rd_stall_cycles: %" PRIu32 "\n", hm_stall);
+		printf("hostmem_rd_tlps: %" PRIu32 "\n", hm_tlps);
+		printf("hostmem_rd_gap_max: %" PRIu32 "\n", hostmem_csr_rd_gap_max_read());
+		print_fixed3_u64("hostmem_rd_duty_pct", (uint64_t)hm_present * 100000ull, (uint64_t)cycles * 1000ull, "%");
+	}
+#endif
 }
 
 /*

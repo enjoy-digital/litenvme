@@ -204,6 +204,12 @@ class LiteNVMeHostMemCSR(LiteXModule):
         if with_counters:
             self._dma_wr_count = CSRStatus(32, description="Count of DMA beats stored.")
             self._dma_rd_count = CSRStatus(32, description="Count of DMA beats served.")
+            # Read-path duty-cycle / gap instrumentation (MemWr = inbound NVMe-read data).
+            self._wr_present_cycles = CSRStatus(32, description="Cycles a MemWr beat is offered at the port.")
+            self._wr_accept_cycles  = CSRStatus(32, description="Cycles a MemWr beat is accepted.")
+            self._wr_stall_cycles   = CSRStatus(32, description="Cycles a MemWr beat is offered but backpressured.")
+            self._rd_tlp_count      = CSRStatus(32, description="Number of read-completion (MemWr) TLPs accepted.")
+            self._rd_gap_max        = CSRStatus(32, description="Longest idle run (cycles) between offered MemWr beats.")
 
         # AXI-MMAP master.
         self.axi = axi.AXIInterface(
@@ -373,6 +379,16 @@ class LiteNVMeHostMemDMA(LiteXModule):
         # Counters.
         self.wr_count = Signal(32)
         self.rd_count = Signal(32)
+
+        # Read-path instrumentation. An NVMe READ delivers data into host memory as MemWr
+        # TLPs on `port.sink`, so these free-running counters characterize how the device/PCIe
+        # feeds us read data (vs whether we backpressure it). Used to tell "we are at the
+        # device/link ceiling" from "we have a stall to fix" on the read path.
+        self.wr_present_cycles = Signal(32)  # Cycles a MemWr beat is offered (valid & we).
+        self.wr_accept_cycles  = Signal(32)  # Cycles a MemWr beat is accepted (valid & ready & we).
+        self.wr_stall_cycles   = Signal(32)  # Cycles offered but not accepted (we backpressure).
+        self.rd_tlp_count      = Signal(32)  # Number of read-completion (MemWr) TLPs accepted.
+        self.rd_gap_max        = Signal(32)  # Longest idle run (cycles) between offered beats.
 
         # # #
 
@@ -664,6 +680,33 @@ class LiteNVMeHostMemDMA(LiteXModule):
             ),
         ]
 
+        # Read-path duty-cycle / gap instrumentation (observe-only). MemWr = inbound read data.
+        memwr_offered  = Signal()  # The device is offering us a read-data beat this cycle.
+        memwr_accepted = Signal()  # We took a read-data beat this cycle.
+        gap_run        = Signal(32)  # Current run length of cycles with no beat offered.
+        self.comb += [
+            memwr_offered.eq(req.valid & req.we & in_window),
+            memwr_accepted.eq(req.valid & req.ready & req.we & in_window),
+        ]
+        self.sync += [
+            If(memwr_offered,  self.wr_present_cycles.eq(self.wr_present_cycles + 1)),
+            If(memwr_accepted, self.wr_accept_cycles.eq(self.wr_accept_cycles + 1)),
+            If(memwr_offered & ~req.ready, self.wr_stall_cycles.eq(self.wr_stall_cycles + 1)),
+            # A TLP boundary on the accepted MemWr stream (`last` defaults to 1 if absent).
+            If(memwr_accepted & getattr(req, "last", 1),
+                self.rd_tlp_count.eq(self.rd_tlp_count + 1),
+            ),
+            # Track the longest contiguous idle run between offered beats.
+            If(memwr_offered,
+                gap_run.eq(0),
+            ).Else(
+                gap_run.eq(gap_run + 1),
+                If((gap_run + 1) > self.rd_gap_max,
+                    self.rd_gap_max.eq(gap_run + 1),
+                ),
+            ),
+        ]
+
 # Top-Level Responder ------------------------------------------------------------------------------
 
 class LiteNVMeHostMemResponder(LiteXModule):
@@ -723,6 +766,11 @@ class LiteNVMeHostMemResponder(LiteXModule):
             self.comb += [
                 csr._dma_wr_count.status.eq(dma.wr_count),
                 csr._dma_rd_count.status.eq(dma.rd_count),
+                csr._wr_present_cycles.status.eq(dma.wr_present_cycles),
+                csr._wr_accept_cycles.status.eq(dma.wr_accept_cycles),
+                csr._wr_stall_cycles.status.eq(dma.wr_stall_cycles),
+                csr._rd_tlp_count.status.eq(dma.rd_tlp_count),
+                csr._rd_gap_max.status.eq(dma.rd_gap_max),
             ]
 
         # CSR debug read port hookup (only when the backend provides a BRAM-style debug
