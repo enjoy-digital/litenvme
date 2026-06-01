@@ -1629,6 +1629,13 @@ static void nvme_mmiotest_cmd(void)
 	{ uint32_t cmdsts = 0; cfg_rd32_retry(1, &cmdsts, 5);
 	  printf("bar0_base=0x%llx  CMD/STS=0x%08x (MEM=%d BME=%d)\n",
 	         (unsigned long long)bar0_base, (unsigned)cmdsts, (int)((cmdsts>>1)&1), (int)((cmdsts>>2)&1)); }
+#ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
+	/* Root-port bridge memory window (byte 0x20 = MemLimit[31:16]|MemBase[15:0], each [15:4]=
+	 * addr[31:20]). Set to cover 0xe000_0000..0xe00f_ffff so the root forwards our MemRd downstream
+	 * to the SSD BAR0 (a UR/no-data completion otherwise -> reads return 0). */
+	rootcfg_wr32(0x20, 0xe000e000u, 0xf);
+	{ uint32_t mw = 0; rootcfg_rd32(0x20, &mw); printf("root MemBase/Limit(0x20)=0x%08x\n", (unsigned)mw); }
+#endif
 	uint64_t cap = 0; uint32_t csts = 0, cc = 0, rb = 0;
 	int e1 = mmio_rd64(bar0_base + NVME_CAP,  &cap);
 	int e2 = mmio_rd32(bar0_base + NVME_CSTS, &csts);

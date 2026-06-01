@@ -1,0 +1,20 @@
+boot: ok
+armed (trigger=mem_port_source_valid)
+attempt 0 done=1
+FW_OUTPUT_BEGIN
+nvme_mmiotest
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+MPS auto-set: enc=2 (512B)  [root_sup=3 ssd_sup=2]
+bar0_base=0xe0000000  CMD/STS=0x00100006 (MEM=1 BME=1)
+MMIO RD: cap=0x0000000000000000(e0) csts=0x00000000(e0) cc=0x00000000(e0)
+MMIO WR32: AQA<=0x003f003f(e0) readback=0x00000000(e0) MISMATCH
+MMIO WR64: ASQ<=0x12340000 (e0) readback=0x914eb2ed00000000 (e0/0)
+MMIO post-write CSTS: 0x914eb2ed (e0) ok
+[92;1mlitenvme[0m> 
+FW_OUTPUT_END
+trigger done=1
+LS_CAPTURE_DONE
+MMIOLS_DONE
