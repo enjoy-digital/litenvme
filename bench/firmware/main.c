@@ -1445,6 +1445,104 @@ static void nvme_mps_cmd(char *str)
 	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
 }
 
+/* ---- Root Port local config space (via the hard-IP cfg_mgmt bridge) ----------------------------
+ * Unlike cfg_rd32/cfg_wr32 (which issue CFG TLPs to the downstream SSD), these reach OUR root
+ * port's own config space, so we can raise the root port's DevCtl.MPS (the read bottleneck). */
+#ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
+static int rootcfg_op(uint16_t dwaddr, int is_write, uint32_t wdata, uint32_t be, uint32_t *rdata)
+{
+	pcie_rootcfg_addr_write(dwaddr & 0x3ff);
+	pcie_rootcfg_func_write(0);
+	if (is_write) {
+		pcie_rootcfg_wdata_write(wdata);
+		pcie_rootcfg_be_write(be & 0xf);
+	}
+	/* ctrl: bit0=start (pulse), bit1=write. Writing start clears 'done'; poll until it re-sets. */
+	pcie_rootcfg_ctrl_write((is_write ? 0x2u : 0x0u) | 0x1u);
+	int to = 1000000;
+	while (to--) {
+		if (pcie_rootcfg_stat_read() & 0x1u)  /* done */
+			break;
+	}
+	if (to <= 0) return 1;
+	if (rdata) *rdata = pcie_rootcfg_rdata_read();
+	return 0;
+}
+static int rootcfg_rd32(uint16_t byte_off, uint32_t *val) { return rootcfg_op(byte_off / 4, 0, 0, 0xf, val); }
+
+/* Find the PCIe Express Capability (id 0x10) in the root port's own config space. */
+static uint16_t rootcfg_express_cap(void)
+{
+	uint32_t v = 0;
+	if (rootcfg_rd32(0x34, &v)) return 0;
+	uint16_t off = v & 0xfc;
+	for (int g = 0; g < 48 && off >= 0x40; g++) {
+		if (rootcfg_rd32(off, &v)) return 0;
+		if ((v & 0xff) == 0x10) return off;
+		off = (v >> 8) & 0xfc;
+	}
+	return 0;
+}
+
+static void rootmps_cmd(char *str)
+{
+	int do_set = 0, mps_only = 0;
+	uint32_t target = 0;
+	char *a = (str && strlen(str)) ? get_token(&str) : NULL;
+	if (a && strlen(a) && (strcmp(a, "set") == 0 || strcmp(a, "setmps") == 0)) {
+		do_set = 1;
+		mps_only = (strcmp(a, "setmps") == 0);
+		char *t = get_token(&str);
+		if (t && strlen(t)) target = (uint32_t)strtoul(t, NULL, 0);
+		if (target > 5) { puts("ERR: mps encoding must be 0..5 (128..4096B)."); return; }
+	}
+
+	uint32_t id = 0;
+	if (rootcfg_rd32(0x00, &id)) { puts("ERR: rootcfg read timeout (cfg_mgmt)."); return; }
+	printf("RootPort VID/DID = 0x%08" PRIx32 "\n", id);
+
+	uint16_t cap = rootcfg_express_cap();
+	if (!cap) { puts("ERR: root PCIe Express Capability not found."); return; }
+	printf("RootPort Express Cap @ 0x%02x\n", (unsigned)cap);
+
+	uint32_t devcap = 0, dc = 0;
+	if (rootcfg_rd32(cap + 0x04, &devcap) || rootcfg_rd32(cap + 0x08, &dc)) {
+		puts("ERR: root DevCap/DevCtl read failed."); return;
+	}
+	printf("Root: mps_supported=%u (%sB)  devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
+	       (unsigned)(devcap & 0x7), mps_str(devcap & 0x7),
+	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
+	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
+#ifdef CSR_PCIE_PHY_PHY_MAX_PAYLOAD_SIZE_ADDR
+	printf("RC op (hard IP): op_mps=%uB  op_mrrs=%uB\n",
+	       (unsigned)pcie_phy_phy_max_payload_size_read(),
+	       (unsigned)pcie_phy_phy_max_request_size_read());
+#endif
+
+	if (!do_set) return;
+
+	uint32_t mps_sup = devcap & 0x7;
+	if (target > mps_sup) {
+		printf("WARN: target %u > supported %u, clamping.\n", (unsigned)target, (unsigned)mps_sup);
+		target = mps_sup;
+	}
+	uint32_t clr  = mps_only ? (0x7u << 5) : ((0x7u << 5) | (0x7u << 12));
+	uint32_t setb = mps_only ? ((target & 0x7u) << 5)
+	                         : (((target & 0x7u) << 5) | ((target & 0x7u) << 12));
+	uint32_t newctl = (dc & ~clr) | setb;
+	/* Write only the low 16b (DevCtl); byte-enable the lower two bytes, keep DevSts. */
+	if (rootcfg_op(cap + 0x08, 1, (dc & 0xffff0000u) | (newctl & 0xffffu), 0x3, NULL))
+		puts("WARN: root DevCtl write timeout.");
+	if (rootcfg_rd32(cap + 0x08, &dc)) { puts("ERR: root DevCtl re-read failed."); return; }
+	printf("after: root devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
+	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
+	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
+#ifdef CSR_PCIE_PHY_PHY_MAX_PAYLOAD_SIZE_ADDR
+	printf("RC op (hard IP) now: op_mps=%uB\n", (unsigned)pcie_phy_phy_max_payload_size_read());
+#endif
+}
+#endif /* CSR_PCIE_ROOTCFG_CTRL_ADDR */
+
 static int nvme_io_setup(uint64_t cap)
 {
 	if (nvme_io_ready)
@@ -2437,6 +2535,10 @@ static void console_service(void)
 		nvme_fill_cmd(str);
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
+#ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
+	else if (strcmp(token, "rootmps") == 0)
+		rootmps_cmd(str);
+#endif
 	else if (strcmp(token, "nvme_mps") == 0)
 		nvme_mps_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)

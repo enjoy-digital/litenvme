@@ -31,7 +31,7 @@ from litepcie.core.rootport  import LitePCIeRootPort
 
 from litescope import LiteScopeAnalyzer
 
-from litenvme.cfg       import LiteNVMePCIeCfgAccessor
+from litenvme.cfg       import LiteNVMePCIeCfgAccessor, LiteNVMeRootCfgMgmt
 from litenvme.mem       import LiteNVMePCIeMmioAccessor
 from litenvme.hostmem   import LiteNVMeHostMemResponder
 from litenvme.req       import LiteNVMeRequestCSR
@@ -110,10 +110,11 @@ class BaseSoC(SoCCore):
         self.pcie_phy = USPPCIEPHY(
             platform,
             pcie_pads,
-            speed      = "gen2",
-            data_width = 128,
-            ip_name    = "pcie4_uscale_plus",
-            mode       = "RootPort",
+            speed         = "gen2",
+            data_width    = 128,
+            ip_name       = "pcie4_uscale_plus",
+            mode          = "RootPort",
+            with_cfg_mgmt = True,  # Expose local cfg_mgmt to program the root-port DevCtl.MPS.
         )
         self.pcie_phy.update_config({
             "mode_selection"   : "Advanced",
@@ -164,6 +165,10 @@ class BaseSoC(SoCCore):
             with_csr     = True,
         )
         self.add_module(name="pcie_cfg", module=self.cfg)
+
+        # Root-port cfg management: lets firmware raise our own DevCtl.MPS (read path bottleneck).
+        # (Auto-registers as "pcie_rootcfg" -> firmware CSRs pcie_rootcfg_*.)
+        self.pcie_rootcfg = LiteNVMeRootCfgMgmt(self.pcie_phy)
 
         self.mmio = LiteNVMePCIeMmioAccessor(
             port     = mem_port,

@@ -6,6 +6,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 
 from migen import *
+from migen.genlib.cdc import MultiReg, PulseSynchronizer
 
 from litex.gen import *
 
@@ -199,3 +200,90 @@ class LiteNVMePCIeCfgAccessor(LiteXModule):
            self._cfg_stat.fields.err.eq(self.err),
            self._cfg_rdata.status.eq(self.rdata),
         ]
+
+# LiteNVMe Root-Port CFG Management ----------------------------------------------------------------
+
+class LiteNVMeRootCfgMgmt(LiteXModule):
+    """Drive the USPPCIEPHY Configuration Management interface from sys-domain CSRs.
+
+    Unlike the CFG accessor above (which issues CFG TLPs to the *downstream* endpoint), this
+    reaches the Root Port's OWN config space via the hard IP's local cfg_mgmt port. It exists to
+    let firmware program the root port's DevCtl.MPS (raise MaxPayloadSize), which no enumeration
+    software does in this embedded design. The cfg_mgmt port lives in the "pcie" clock domain;
+    this bridges it to sys-domain CSRs with a start/done handshake.
+
+    Requires the phy built with `with_cfg_mgmt=True` (exposes phy.cfg_mgmt_*). Sys->pcie buses
+    (addr/wdata/be/func/write) are quasi-static during a transaction and are covered by the
+    existing sys<->pcie false-path constraint.
+    """
+    def __init__(self, phy):
+        self._ctrl = CSRStorage(fields=[
+            CSRField("start", size=1, offset=0, pulse=True, description="Start a cfg_mgmt transaction."),
+            CSRField("write", size=1, offset=1, description="0=Read, 1=Write."),
+        ])
+        self._addr  = CSRStorage(10, description="DWORD address into Root Port config space.")
+        self._func  = CSRStorage(8,  description="Function number (0 for PF0).")
+        self._wdata = CSRStorage(32, description="Write data (DWORD).")
+        self._be    = CSRStorage(4,  reset=0b1111, description="Byte enables.")
+        self._stat  = CSRStatus(fields=[
+            CSRField("done", size=1, offset=0, description="Last transaction complete."),
+            CSRField("busy", size=1, offset=1, description="Transaction in progress."),
+        ])
+        self._rdata = CSRStatus(32, description="Read data (valid when done=1).")
+
+        # # #
+
+        # Handshake CDC.
+        self.start_ps = start_ps = PulseSynchronizer("sys", "pcie")
+        self.done_ps  = done_ps  = PulseSynchronizer("pcie", "sys")
+
+        # Busy / done status (sys).
+        busy = Signal()
+        done = Signal()
+        self.sync += [
+            If(self._ctrl.fields.start, busy.eq(1), done.eq(0)),
+            If(done_ps.o,               busy.eq(0), done.eq(1)),
+        ]
+        self.comb += [
+            start_ps.i.eq(self._ctrl.fields.start),
+            self._stat.fields.busy.eq(busy),
+            self._stat.fields.done.eq(done),
+        ]
+
+        # Read data (stable after done) -> sys.
+        rdata_pcie = Signal(32)
+        self.specials += MultiReg(rdata_pcie, self._rdata.status)
+
+        # Drive the cfg_mgmt buses directly from sys-domain storage (quasi-static, false-pathed).
+        cfg_read  = Signal()
+        cfg_write = Signal()
+        self.comb += [
+            phy.cfg_mgmt_addr.eq(self._addr.storage),
+            phy.cfg_mgmt_function_number.eq(self._func.storage),
+            phy.cfg_mgmt_write_data.eq(self._wdata.storage),
+            phy.cfg_mgmt_byte_enable.eq(self._be.storage),
+            phy.cfg_mgmt_read.eq(cfg_read),
+            phy.cfg_mgmt_write.eq(cfg_write),
+        ]
+
+        # Transaction FSM (pcie domain): assert read/write, hold until done, latch read data.
+        write_lat = Signal()
+        self.fsm = fsm = ClockDomainsRenamer("pcie")(FSM(reset_state="IDLE"))
+        fsm.act("IDLE",
+            If(start_ps.o,
+                NextValue(write_lat, self._ctrl.fields.write),
+                NextState("ISSUE"),
+            )
+        )
+        fsm.act("ISSUE",
+            cfg_read.eq(~write_lat),
+            cfg_write.eq(write_lat),
+            If(phy.cfg_mgmt_read_write_done,
+                NextValue(rdata_pcie, phy.cfg_mgmt_read_data),
+                NextState("DONE"),
+            )
+        )
+        fsm.act("DONE",
+            done_ps.i.eq(1),
+            NextState("IDLE"),
+        )
