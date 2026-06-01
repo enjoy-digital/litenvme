@@ -1836,3 +1836,42 @@ or data last) around the wrap — add such a case to test_io_engine_integration.
 
 This is the remaining correctness item before recordable read numbers. Write-path integrity
 (the ~1509 MB/s question) is independent and still pending.
+
+## 2026-06 — Gen3 x4 + 256-bit datapath: working, ~2.7 GB/s 8 KiB reads
+
+Moved from the banked Gen2/128-bit config to **Gen3 x4 + 256-bit datapath** and got NVMe fully
+working there, data-correct, with reads ~2.4-2.7x the old path. See `doc/ARCHITECTURE.md` (as-built
+design) and `doc/NVME_PERFORMANCE.md` (current numbers). Evidence: `bench/results/gen3_256b_2026-06-01/`.
+
+**Result (board-printed, reproduced, errors=0, integrity VERIFY OK 0xDEADBEEF):**
+- Link Gen3 x4, 256-bit @ 125 MHz (4.0 GB/s datapath), MPS 512 B (SSD-capped), QD 32.
+- 8 KiB reads ~2.69 GB/s (very consistent), 4 KiB ~2.2 (SSD/LBA-variant), 8 KiB writes ~1.6-2.6.
+- Default engine-bench transfer set to 8 KiB (nlb=16): faster AND more consistent than 4 KiB.
+
+**Three independent root-port-at-256-bit bugs found+fixed (each via a LiteScope capture):**
+1. litepcie `SAxisRQAdapter`: `force_64b` makes memory requests 4-DW at 256b while config stays
+   3-DW; adapter handled only 3-DW -> MemRd to address 0 -> UR. Fixed (litepcie `a0f6216`,
+   branch litenvme-cfg-mgmt). Pushed to enjoy-digital/litepcie.
+2. MMIO read-lag: the shared `LitePCIeTLPController` made the MMIO/CFG accessors match any pending
+   completion -> off-by-one stale reads at Gen3. Fixed by consuming through the completion `end`
+   beat (`litenvme/mem.py`) + firmware lag-safe reads (read-until-stable), mirroring cfg_rd32_retry.
+3. Completer sub-beat write: SSD's 16-byte admin CQE to a mid-beat offset (ACQ+16) landed in the
+   wrong CQ slot and the stale half clobbered the neighbour -> Create IO CQ hung. Fixed in
+   `litenvme/hostmem.py` (shift write data to the address byte offset + strobe only the written
+   dwords). KEY TRAP: a variable shift `req_dat << (off_dw*32)` simulated fine but synthesised to
+   NO-shift on HW; rewrote as a constant-shift `Case` (cost ~3 synths, found via a firmware
+   ACQ-region dump). Added `test/test_hostmem.py::TestHostMemSubBeatWrite` (no-be port) to lock it.
+
+**Sim gate:** 35 passed (added a multi-beat MMIO-completion test + 3 hostmem sub-beat-write tests).
+
+**Throughput investigation (what helps / what doesn't), all HW-verified:**
+- MPS 512->1024 B is **impossible**: SSD DevCap caps MPS at 512 B; `nvme_mps set 3` clamps. No gain.
+- 512-bit datapath gives **~0 gain** on Gen3 x4 (width x user-clock pinned by the link; 256b@125 =
+  512b@62.5 = 4.0 GB/s; link ceiling ~3.4 GB/s). Only matters with Gen4 x4 / Gen3 x8.
+- **Transfer size is the live lever**: 4 KiB 2.20 (56% duty) -> 8 KiB 2.69 (68%). Shipped 8 KiB.
+- >8 KiB (PRP-list path, works in `test_io_engine_prp.py` sim) does NOT fit the 512 KiB BRAM hostmem
+  window at QD32 (32x16 KiB buffers + 64-slot 256 KiB PRP-list region). BRAM is 90% full; growing
+  the window needs the hostmem moved to URAM (0/48 used) -> a backend refactor. Estimated 16 KiB ~3.0
+  GB/s (+12%). **Deferred by decision**; 8 KiB is the shipped default.
+
+Pushed: litenvme `throughput` branch; litepcie `litenvme-cfg-mgmt` branch (both enjoy-digital).

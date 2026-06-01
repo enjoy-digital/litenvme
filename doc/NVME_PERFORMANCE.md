@@ -1,7 +1,66 @@
 # LiteNVMe Performance Notes
 
-This document tracks the current measured performance of the bring-up design and
-the most likely bottlenecks.
+This document tracks the measured performance and the bottlenecks. The
+**current** results are at the top; the older firmware-driven bring-up notes
+below are kept for history.
+
+---
+
+## Current status — Gen3 x4 + 256-bit, RTL engine (2026-06)
+
+Board Alibaba KU3P + Crucial CT500P310SSD8. Link **Gen3 x4**, datapath
+**256-bit @ 125 MHz (4.0 GB/s)**, MPS **512 B** (SSD-capped), QD **32**,
+hardware I/O engine. All numbers below are **board-printed, reproduced,
+errors=0, integrity VERIFY OK** (distinctive 0xDEADBEEF pattern). See
+`ARCHITECTURE.md` for the design and `bench/results/gen3_256b_2026-06-01/`.
+
+| Transfer | Read | Write | read duty |
+|---|---|---|---|
+| 4 KiB | ~2.2 GB/s (1.2–2.2, SSD/LBA-variant) | ~1.2–2.5 GB/s | ~56% |
+| **8 KiB (default)** | **~2.69 GB/s** (very consistent) | **~1.6–2.6 GB/s** | **~68%** |
+
+This is **~2.4–2.7× the prior 128-bit Gen2 path** (reads ~1.0, writes ~1.5 GB/s).
+8 KiB is the default transfer because it is both faster *and* far more consistent
+than 4 KiB. Writes vary run-to-run (SSD-side cache/GC), reads at 8 KiB are stable.
+
+### Where the read ceiling is (and what does NOT help)
+
+- The 256-bit datapath is **4.0 GB/s** and is **not** the limit: the read-path
+  duty cycle is ~56–68% with **<2% of cycles stalled by us** — we keep up with
+  the data; the gaps are the SSD/PCIe completion cadence.
+- **MPS cannot be raised:** the SSD's DevCap caps MaxPayloadSize at **512 B**, so
+  read-data arrives in 512-byte MemWr TLPs. `nvme_mps set 3` (1024 B) is clamped
+  to 512 B by the device; throughput is unchanged. MRRS is the same story.
+- **512-bit datapath would give ~0 gain** on this link: width × user-clock is
+  pinned by the link, so 512-bit @ 62.5 MHz = 256-bit @ 125 MHz = 4.0 GB/s, and
+  the Gen3 x4 link itself caps at **~3.4 GB/s** usable. 512-bit only pays off with
+  a faster link (Gen4 x4 / Gen3 x8).
+- The one live lever on this link is **transfer size** (amortizes per-TLP /
+  per-command overhead). Measured + modeled (per-cmd ≈ 83 cyc, per-512B-TLP ≈
+  18.8 cyc):
+
+  | Transfer | Throughput | duty | note |
+  |---|---|---|---|
+  | 4 KiB | 2.20 GB/s (meas) | 56% | |
+  | 8 KiB | 2.69 GB/s (meas) | 68% | **default** |
+  | 16 KiB | ~3.0 GB/s (est) | ~75% | needs URAM hostmem (see below) |
+  | 32 KiB | ~3.2 GB/s (est) | ~80% | needs URAM hostmem, ~100% URAM |
+  | ∞ | ~3.4 GB/s | ~85% | link ceiling |
+
+### Getting >8 KiB transfers (deferred)
+
+The PRP-list path for >2-page transfers **works in simulation**
+(`test/test_io_engine_prp.py`, nlb=24/64). It does **not** run on HW today purely
+because the **512 KiB BRAM hostmem window** cannot hold QD=32 large buffers
+(16 KiB × 32 = 512 KiB) **plus** the engine's 64-slot PRP-list region (256 KiB).
+BRAM is 90% full (325/360) so the window cannot grow there. The fix is to move
+the hostmem backing store to **URAM** (0/48 used) and enlarge it — a hostmem
+backend refactor (3-port → 2-port for URAM + URAM primitive + layout), worth
+~+12% (16 KiB ≈ 3.0 GB/s). Deferred by decision; 8 KiB is the shipped default.
+
+---
+
+## Historical bring-up notes (firmware-driven, superseded)
 
 ## Current configuration
 
