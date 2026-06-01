@@ -20,3 +20,6 @@ bench/firmware/firmware.elf.map
 
 # Agent / editor.
 .claude/
+
+# LiteScope generated analyzer description.
+bench/analyzer.csv

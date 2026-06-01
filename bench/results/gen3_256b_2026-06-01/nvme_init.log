@@ -1,0 +1,42 @@
+[22:59:27] load OK
+[22:59:45] boot: ok
+[22:59:50] CMD dbg: nvme_debug 1
+CAP bytes=50 valid=1 at_fw=1 at_bios=0 -> /tmp/diag256_dbg.txt
+----- dbg -----
+nvme_debug 1
+nvme_debug = 1
+litenvme>----- end dbg -----
+[22:59:50] CMD mmiot: nvme_mmiotest
+CAP bytes=552 valid=1 at_fw=1 at_bios=0 -> /tmp/diag256_mmiot.txt
+----- mmiot -----
+nvme_mmiotest
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+MPS auto-set: enc=2 (512B)  [root_sup=3 ssd_sup=2]
+bar0_base=0xe0000000  CMD/STS=0x00100006 (MEM=1 BME=1)
+root MemBase/Limit(0x20)=0xe000e000
+MMIO RD: cap=0x0000000000000000(e0) csts=0x00000000(e0) cc=0x00000000(e0)
+MMIO WR32: AQA<=0x003f003f(e0) readback=0x003f003f(e0) MATCH
+MMIO WR64: ASQ<=0x12340000 (e0) readback=0x0000000012340000 (e0/0)
+MMIO post-write CSTS: 0x00000000 (e0) ok
+litenvme>----- end mmiot -----
+[22:59:51] CMD fwread: nvme_read 0xe0000000 1 0 1
+CAP bytes=362 valid=1 at_fw=1 at_bios=0 -> /tmp/diag256_fwread.txt
+----- fwread -----
+nvme_read 0xe0000000 1 0 1
+IO CQE:
+CQE:
+  SQ Head : 0
+  SQ ID   : 0
+  CID     : 48
+  Status  : P=1 SCT=0 SC=0 M=0 DNR=0
+  DW0/DW1 : 0x00000000 0x00000000
+Read data (first 16 dwords):
+  a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5
+  a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5 a5a5a5a5
+litenvme>----- end fwread -----
+[22:59:52] stopping
+[22:59:52] DONE
+DIAG_DONE

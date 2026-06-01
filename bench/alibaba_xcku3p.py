@@ -304,6 +304,40 @@ class BaseSoC(SoCCore):
         self.analyzer = LiteScopeAnalyzer(sigs, depth=1024, clock_domain="sys",
             register=True, csr_csv="analyzer.csv")
 
+    # LiteScope Probe (hostmem completer WRITE path) -----------------------------------------------
+
+    def add_hostmem_write_probe(self):
+        # Debug "admin CQE write to ACQ+16 lands wrong at 256b". Capture the completer MemWr from the
+        # SSD as it reaches the hostmem responder: address, byte-enables and the low data dwords --
+        # so we can see whether a 16B write to a non-32B-aligned offset is shifted/dropped.
+        hm = self.hostmem_port.sink
+
+        sigs = []
+        def add(s): sigs.append(s)
+        def add_opt(o, n):
+            if hasattr(o, n): add(getattr(o, n))
+        def add_slice(sig, width, name):
+            s = Signal(width, name=name); self.comb += s.eq(sig); add(s)
+
+        add(self.pcie_phy._link_status.fields.status)
+        for n in ("valid", "ready", "we", "first", "last"): add_opt(hm, n)
+        add_slice(hm.adr[0:32], 32, "hm_adr")
+        hm_dat = hm.dat if hasattr(hm, "dat") else hm.data
+        add_slice(hm_dat[0:256], 256, "hm_dat")
+
+        # DMA write-path internals: the address offset and the shifted data/strobe actually pushed
+        # to the backend (proves whether the sub-beat alignment fix executes on hardware).
+        dma = self.hostmem.dma
+        add_slice(dma.off_dw, len(dma.off_dw), "off_dw")
+        wf = dma.wr_fifo.sink
+        for n in ("valid", "ready"): add_opt(wf, n)
+        add_slice(wf.addr[0:32], 32, "wf_addr")
+        add_slice(wf.data[0:256], 256, "wf_data")
+        add_slice(wf.strb, len(wf.strb), "wf_strb")
+
+        self.analyzer = LiteScopeAnalyzer(sigs, depth=512, clock_domain="sys",
+            register=True, csr_csv="analyzer.csv")
+
     # LiteScope Probe (Overview) -------------------------------------------------------------------
 
     def add_pcie_probe(self):
@@ -426,7 +460,7 @@ def main():
     parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
     parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
-    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie", "mmio", "mmiowire"], help="Select LiteScope probe set.")
+    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie", "mmio", "mmiowire", "hmwrite"], help="Select LiteScope probe set.")
     parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     args = parser.parse_args()
@@ -448,6 +482,8 @@ def main():
             soc.add_mmio_probe()
         elif args.litescope_probe == "mmiowire":
             soc.add_mmio_wire_probe()
+        elif args.litescope_probe == "hmwrite":
+            soc.add_hostmem_write_probe()
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
