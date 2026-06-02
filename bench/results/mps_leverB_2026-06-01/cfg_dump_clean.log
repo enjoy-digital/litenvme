@@ -1,0 +1,42 @@
+[12:50:33] load OK
+[12:50:39] PING ok
+[12:50:39] server pid=3780642
+[12:50:50] boot: ok
+[12:50:54] CMD dump: nvme_mps dump
+CAP bytes=576 valid=1 at_fw=1 at_bios=0 -> /tmp/mpsfirst_dump.txt
+----- dump -----
+nvme_mps dump
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+cfg[0x00]=5427c0a9
+cfg[0x04]=00100000
+cfg[0x08]=01080201
+cfg[0x0c]=00000000
+cfg[0x10]=e0000004
+cfg[0x14]=00000000
+cfg[0x18]=00000000
+cfg[0x1c]=00000000
+cfg[0x20]=00000000
+cfg[0x24]=00000000
+cfg[0x28]=00000000
+cfg[0x2c]=1100c0a9
+cfg[0x30]=00000000
+cfg[0x34]=00000080
+cfg[0x38]=00000000
+cfg[0x3c]=00000100
+status=00100000 capslist=1
+capptr=0x80
+  cap @0x80 id=0x10 next=0xd0
+  -> Express Cap @0x80
+litenvme>----- end dump -----
+[12:50:55] CMD show: nvme_mps
+CAP bytes=90 valid=1 at_fw=1 at_bios=0 -> /tmp/mpsfirst_show.txt
+----- show -----
+nvme_mps
+mps_supported=2 (512B)  devctl_mps=0 (128B)  mrrs=2 (512B)
+litenvme>----- end show -----
+[12:50:56] stopping
+[12:50:56] DONE
+MPSFIRST_DONE

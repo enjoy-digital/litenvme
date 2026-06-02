@@ -1,0 +1,133 @@
+[17:40:16] load OK
+[17:40:23] PING ok
+[17:40:27] link decode:
+  link_status=0x20ad  up=1  rate=Gen3  width=x4  ltssm=0x10
+  RC MPS=128B MRRS=512B
+[17:40:35] boot: ok
+[17:40:40] CMD rd4k_a: nvme_engine_bench read  0xe0000000 1 1000000 8 1000 8
+CAP bytes=701 valid=1 at_fw=1 at_bios=0 -> /tmp/gen3_rd4k_a.txt
+----- rd4k_a -----
+nvme_engine_bench read  0xe0000000 1 1000000 8 1000 8
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+MPS auto-set: enc=2 (512B)  [root_sup=3 ssd_sup=2]
+Engine bench read: count=1000 nlb=8 start_lba=1000000 step=8
+completed: 1000
+submitted: 1000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 361537
+max_inflight: 32
+latency_avg: 2.892 us
+throughput: 1416.175 MB/s
+iops: 345746.078 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260062
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3062
+hostmem_rd_tlps: 9000
+hostmem_rd_gap_max: 3247608133
+hostmem_rd_duty_pct: 71.932 %
+litenvme>----- end rd4k_a -----
+[17:40:42] CMD rd4k_b: nvme_engine_bench read  0xe0000000 1 2000000 8 1000 8
+CAP bytes=524 valid=1 at_fw=1 at_bios=0 -> /tmp/gen3_rd4k_b.txt
+----- rd4k_b -----
+nvme_engine_bench read  0xe0000000 1 2000000 8 1000 8
+Engine bench read: count=1000 nlb=8 start_lba=2000000 step=8
+completed: 1000
+submitted: 2000
+errors: 0
+last_cqe_status: 0x0000
+cycles: 361538
+max_inflight: 32
+latency_avg: 2.892 us
+throughput: 1416.172 MB/s
+iops: 345745.122 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 260076
+hostmem_rd_accept_cycles: 257000
+hostmem_rd_stall_cycles: 3076
+hostmem_rd_tlps: 9000
+hostmem_rd_gap_max: 3247608133
+hostmem_rd_duty_pct: 71.936 %
+litenvme>----- end rd4k_b -----
+[17:40:45] CMD rd8k: nvme_engine_bench read  0xe0000000 1 0 16 1000 16
+CAP bytes=515 valid=1 at_fw=1 at_bios=0 -> /tmp/gen3_rd8k.txt
+----- rd8k -----
+nvme_engine_bench read  0xe0000000 1 0 16 1000 16
+Engine bench read: count=1000 nlb=16 start_lba=0 step=16
+completed: 1000
+submitted: 3000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 891648
+max_inflight: 32
+latency_avg: 7.133 us
+throughput: 1148.435 MB/s
+iops: 140189.850 IOPS
+payload_bytes: 8192000
+hostmem_rd_present_cycles: 513031
+hostmem_rd_accept_cycles: 513000
+hostmem_rd_stall_cycles: 31
+hostmem_rd_tlps: 17000
+hostmem_rd_gap_max: 3247608133
+hostmem_rd_duty_pct: 57.537 %
+litenvme>----- end rd8k -----
+[17:40:47] CMD wr4k_a: nvme_engine_bench write 0xe0000000 1 3000000 8 1000 8
+CAP bytes=521 valid=1 at_fw=1 at_bios=0 -> /tmp/gen3_wr4k_a.txt
+----- wr4k_a -----
+nvme_engine_bench write 0xe0000000 1 3000000 8 1000 8
+Engine bench write: count=1000 nlb=8 start_lba=3000000 step=8
+completed: 1000
+submitted: 4000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 783838
+max_inflight: 32
+latency_avg: 6.270 us
+throughput: 653.196 MB/s
+iops: 159471.727 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 68259
+hostmem_rd_accept_cycles: 1000
+hostmem_rd_stall_cycles: 67259
+hostmem_rd_tlps: 1000
+hostmem_rd_gap_max: 3247608133
+hostmem_rd_duty_pct: 8.708 %
+litenvme>----- end wr4k_a -----
+[17:40:50] CMD wr4k_b: nvme_engine_bench write 0xe0000000 1 4000000 8 1000 8
+CAP bytes=522 valid=1 at_fw=1 at_bios=0 -> /tmp/gen3_wr4k_b.txt
+----- wr4k_b -----
+nvme_engine_bench write 0xe0000000 1 4000000 8 1000 8
+Engine bench write: count=1000 nlb=8 start_lba=4000000 step=8
+completed: 1000
+submitted: 5000
+errors: 0
+last_cqe_status: 0x0001
+cycles: 693354
+max_inflight: 32
+latency_avg: 5.546 us
+throughput: 738.439 MB/s
+iops: 180283.087 IOPS
+payload_bytes: 4096000
+hostmem_rd_present_cycles: 71150
+hostmem_rd_accept_cycles: 1000
+hostmem_rd_stall_cycles: 70150
+hostmem_rd_tlps: 1000
+hostmem_rd_gap_max: 3247608133
+hostmem_rd_duty_pct: 10.261 %
+litenvme>----- end wr4k_b -----
+[17:40:52] CMD rootmps: rootmps
+CAP bytes=200 valid=1 at_fw=1 at_bios=0 -> /tmp/gen3_rootmps.txt
+----- rootmps -----
+rootmps
+RootPort VID/DID = 0x903410ee
+RootPort Express Cap @ 0x70
+Root: mps_supported=3 (1024B)  devctl_mps=2 (512B)  mrrs=2 (512B)
+RC op (hard IP): op_mps=512B  op_mrrs=512B
+litenvme>----- end rootmps -----
+[17:40:53] stopping
+[17:40:53] DONE
+GEN3_DONE

@@ -1,0 +1,57 @@
+[01:42:20] litex_server pid=2672048
+[01:42:25] firmware at prompt
+[01:42:25] STEP1 pre-seed host buffer with 0xC0DE0000+i
+FILL addr=0x10010000 base=0xc0de0000
+[01:42:26] STEP2 engine WRITE LBA0 (count=1 nlb=8): buffer -> SSD
+[01:42:26] UART: nvme_engine_bench write 0xe0000000 1 0 8 1 1
+CAP bytes=296 valid=1 at_fw=1 at_bios=0 -> /tmp/integ2_wr.txt
+nvme_engine_bench write 0xe0000000 1 0 8 1 1
+Engine bench write: count=1 nlb=8 start_lba=0 step=1
+completed: 1
+submitted: 16023
+errors: 0
+last_cqe_status: 0x0001
+cycles: 15966
+latency_avg: 127.728 us
+throughput: 32.068 MB/s
+iops: 7829.136 IOPS
+payload_bytes: 4096
+litenvme> [01:42:29] STEP3 capture buffer = bytes actually sent to SSD
+DUMP addr=0x10010000 w0=0xa5a5a5a5 w1=0xa5a5a5a5 w31=0xa5a5a5a5 w1023=0xa5a5a5a5
+[01:42:31] STEP4 clobber host buffer with 0xDEAD0000+i
+FILL addr=0x10010000 base=0xdead0000
+DUMP addr=0x10010000 w0=0xdead0000 w1=0xdead0001 w31=0xdead001f w1023=0xdead03ff
+[01:42:32] STEP5 engine READ LBA0 (count=1 nlb=8): SSD -> buffer
+[01:42:32] UART: nvme_engine_bench read 0xe0000000 1 0 8 1 1
+CAP bytes=294 valid=1 at_fw=1 at_bios=0 -> /tmp/integ2_rd.txt
+nvme_engine_bench read 0xe0000000 1 0 8 1 1
+Engine bench read: count=1 nlb=8 start_lba=0 step=1
+completed: 1
+submitted: 16024
+errors: 0
+last_cqe_status: 0x0001
+cycles: 139205
+latency_avg: 1113.640 us
+throughput: 3.678 MB/s
+iops: 897.956 IOPS
+payload_bytes: 4096
+litenvme> [01:42:36] STEP6 capture buffer = bytes read back from SSD
+DUMP addr=0x10010000 w0=0xa5a5a5a5 w1=0xa5a5a5a5 w31=0xa5a5a5a5 w1023=0xa5a5a5a5
+[01:42:37] STEP7 verdicts
+--- read-back vs written (expect EQUAL) ---
+COMPARE_EQUAL mismatches=0/38 distinctA=1
+  w0 A=0xa5a5a5a5 B=0xa5a5a5a5 OK
+  w1 A=0xa5a5a5a5 B=0xa5a5a5a5 OK
+  w2 A=0xa5a5a5a5 B=0xa5a5a5a5 OK
+  w3 A=0xa5a5a5a5 B=0xa5a5a5a5 OK
+VERDICT_EQUAL=PASS
+--- read-back vs clobber (expect DIFFER) ---
+COMPARE_DIFFER differ=38/38
+VERDICT_DIFFER=PASS
+=== SUMMARY ===
+wr_completed=completed: 1 wr_errors=errors: 0
+rd_completed=completed: 1 rd_errors=errors: 0
+VERDICT_EQUAL=PASS  VERDICT_DIFFER=PASS
+[01:42:37] stopping litex_server
+[01:42:37] DONE_INTEG2
+INTEG2_COMPLETE

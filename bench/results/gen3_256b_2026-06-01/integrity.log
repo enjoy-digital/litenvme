@@ -1,0 +1,31 @@
+[23:05:39] load OK
+[23:05:57] boot: ok
+[23:06:01] CMD fill: nvme_fill 0xDEADBEEF
+CAP bytes=66 valid=1 at_fw=1 at_bios=0 -> /tmp/verify256_fill.txt
+----- fill -----
+nvme_fill 0xDEADBEEF
+nvme_fill = 0xdeadbeef
+litenvme>----- end fill -----
+[23:06:02] CMD wrb: nvme_write_readback 0xe0000000 1 5600000 8 16
+CAP bytes=452 valid=1 at_fw=1 at_bios=0 -> /tmp/verify256_wrb.txt
+----- wrb -----
+nvme_write_readback 0xe0000000 1 5600000 8 16
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+MPS auto-set: enc=2 (512B)  [root_sup=3 ssd_sup=2]
+Write completed. Readback:
+Read data (first 16 dwords):
+  deadbeef deadbeef deadbeef deadbeef deadbeef deadbeef deadbeef deadbeef
+  deadbeef deadbeef deadbeef deadbeef deadbeef deadbeef deadbeef deadbeef
+litenvme>----- end wrb -----
+[23:06:04] CMD vrfy: nvme_verify 0xe0000000 1 5600000 8 128
+CAP bytes=116 valid=1 at_fw=1 at_bios=0 -> /tmp/verify256_vrfy.txt
+----- vrfy -----
+nvme_verify 0xe0000000 1 5600000 8 128
+VERIFY OK: LBA 5600000 .. 5600007 (pattern 0xdeadbeef)
+litenvme>----- end vrfy -----
+[23:06:05] stopping
+[23:06:05] DONE
+VERIFY_DONE

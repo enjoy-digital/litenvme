@@ -1,0 +1,53 @@
+[13:50:30] load OK
+[13:50:47] boot: ok
+[13:50:51] CMD rd_before: rootcfg rd 0x1e
+CAP bytes=69 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_rd_before.txt
+----- rd_before -----
+rootcfg rd 0x1e
+rootcfg[dw 0x01e] = 0x00002910
+litenvme>----- end rd_before -----
+[13:50:52] CMD wr_mrrs1: rootcfg wr 0x1e 0x00001040 0xf
+CAP bytes=141 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_wr_mrrs1.txt
+----- wr_mrrs1 -----
+rootcfg wr 0x1e 0x00001040 0xf
+rootcfg[dw 0x01e]: before=0x00002910 wrote=0x00001040 be=0xf after=0x00001040 (changed)
+litenvme>----- end wr_mrrs1 -----
+[13:50:53] CMD wr_be1: rootcfg wr 0x1e 0x00002040 0x1
+CAP bytes=143 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_wr_be1.txt
+----- wr_be1 -----
+rootcfg wr 0x1e 0x00002040 0x1
+rootcfg[dw 0x01e]: before=0x00001040 wrote=0x00002040 be=0x1 after=0x00001040 (UNCHANGED)
+litenvme>----- end wr_be1 -----
+[13:50:55] CMD wr_mps_be3: rootcfg wr 0x1e 0x00002000 0x3
+CAP bytes=141 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_wr_mps_be3.txt
+----- wr_mps_be3 -----
+rootcfg wr 0x1e 0x00002000 0x3
+rootcfg[dw 0x01e]: before=0x00001040 wrote=0x00002000 be=0x3 after=0x00002000 (changed)
+litenvme>----- end wr_mps_be3 -----
+[13:50:56] CMD rd_after: rootcfg rd 0x1e
+CAP bytes=69 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_rd_after.txt
+----- rd_after -----
+rootcfg rd 0x1e
+rootcfg[dw 0x01e] = 0x00002000
+litenvme>----- end rd_after -----
+[13:50:57] CMD lnkctl_rd: rootcfg rd 0x20
+CAP bytes=69 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_lnkctl_rd.txt
+----- lnkctl_rd -----
+rootcfg rd 0x20
+rootcfg[dw 0x020] = 0x70420000
+litenvme>----- end lnkctl_rd -----
+[13:50:58] CMD lnkctl_wr: rootcfg wr 0x20 0x00000040 0x1
+CAP bytes=141 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_lnkctl_wr.txt
+----- lnkctl_wr -----
+rootcfg wr 0x20 0x00000040 0x1
+rootcfg[dw 0x020]: before=0x70420000 wrote=0x00000040 be=0x1 after=0x70420040 (changed)
+litenvme>----- end lnkctl_wr -----
+[13:50:59] CMD lnkctl_rd2: rootcfg rd 0x20
+CAP bytes=69 valid=1 at_fw=1 at_bios=0 -> /tmp/rootcfgdbg_lnkctl_rd2.txt
+----- lnkctl_rd2 -----
+rootcfg rd 0x20
+rootcfg[dw 0x020] = 0x70420040
+litenvme>----- end lnkctl_rd2 -----
+[13:51:00] stopping
+[13:51:00] DONE
+ROOTCFGDBG_DONE

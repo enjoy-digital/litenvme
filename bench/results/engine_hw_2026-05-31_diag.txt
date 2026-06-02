@@ -1,0 +1,11 @@
+nvme_engine_diag read 0xe0000000 1 0 8 4
+VID/DID      = 0x5427c0a9
+BAR0 orig    = 0x00000004 (64b=1)
+BAR0 size    = 0x4000
+BAR0/BAR1    = 0xe0000004 / 0x00000000
+cfg sqb=10004000 cqb=10003000 sqdb=e0001008 cqdb=e000100c
+gen op=0 nlb=8 count=4 buf=10010000 stride=1000 qmod=64
+seqread selftest: OK
+sentinel: wrote 0x5E471A10 read 0x5e471a10 (CSR path OK)
+final sub=4 cmp=4 err=0 cyc=37375 st=0001
+litenvme> 
