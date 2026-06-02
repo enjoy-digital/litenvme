@@ -15,14 +15,6 @@ from litex.soc.interconnect import axi
 
 # Helpers ------------------------------------------------------------------------------------------
 
-def _shift_for_pow2(x):
-    s = 0
-    v = x
-    while v > 1:
-        v >>= 1
-        s += 1
-    return s
-
 def _get_dat(ep):
     if hasattr(ep, "dat"):
         return ep.dat
@@ -50,7 +42,7 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
         beat_bytes  = data_width // 8
         assert (size % beat_bytes) == 0
         depth_words = size // beat_bytes
-        beat_bytes_shift = _shift_for_pow2(beat_bytes)
+        beat_bytes_shift = log2_int(beat_bytes)
 
         mem = Memory(data_width, depth_words)
         rp  = mem.get_port(has_re=True, mode=READ_FIRST)
@@ -227,7 +219,7 @@ class LiteNVMeHostMemCSR(LiteXModule):
         # # #
 
         beat_bytes       = data_width // 8
-        beat_bytes_shift = _shift_for_pow2(beat_bytes)
+        beat_bytes_shift = log2_int(beat_bytes)
 
         csr_dw_adr   = self._csr_adr.storage
         csr_word_adr = Signal(32)
@@ -546,10 +538,10 @@ class LiteNVMeHostMemDMA(LiteXModule):
         # same beat (the adjacent CQ slot). Shift the data to the address's dword offset and strobe
         # only the `len` written dwords. At data_width=128 a 16-byte write is beat-aligned (off=0)
         # and this reduces to the previous behaviour.
-        self.off_dw = off_dw = Signal(max=(beat_dwords if beat_dwords > 1 else 2))
+        off_dw = Signal(max=(beat_dwords if beat_dwords > 1 else 2))
         self.comb += off_dw.eq(((req.adr - base) >> 2) & (beat_dwords - 1))
-        self.wr_data_first = wr_data_first = Signal(data_width)
-        self.wr_strb_first = wr_strb_first = Signal(beat_bytes)
+        wr_data_first = Signal(data_width)
+        wr_strb_first = Signal(beat_bytes)
         if has_be:
             # BE present: trust the supplied byte-enables and data as-is.
             self.comb += [wr_data_first.eq(req_dat), wr_strb_first.eq(req.be)]
@@ -753,8 +745,8 @@ class LiteNVMeHostMemResponder(LiteXModule):
         beat_bytes  = data_width // 8
         beat_dwords = data_width // 32
 
-        beat_bytes_shift  = _shift_for_pow2(beat_bytes)
-        beat_dwords_shift = _shift_for_pow2(beat_dwords)
+        beat_bytes_shift  = log2_int(beat_bytes)
+        beat_dwords_shift = log2_int(beat_dwords)
 
         # # #
 

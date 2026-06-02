@@ -11,30 +11,31 @@ from litex.gen import *
 
 from litex.soc.interconnect.csr import *
 
-# LiteNVMe PCIe MMIO Accessor ----------------------------------------------------------------------
+# LiteNVMe PCIe Accessor (base) --------------------------------------------------------------------
 
-class LiteNVMePCIeMmioAccessor(LiteXModule):
-    """PCIe MEM Read/Write accessor (MMIO-over-REQUEST).
+class _LiteNVMePCIeAccessor(LiteXModule):
+    """Shared single-outstanding accessor over a LitePCIe crossbar master port.
 
-    Small helper to issue Memory reads/writes through the LitePCIe crossbar master port,
-    reusing the shared REQUEST layout.
+    Issues one request (Config or Memory) and, for reads, waits for the completion. Subclasses
+    provide the request-specific fields via ``send_request()`` and their own CSR map via
+    ``add_csr()``; everything else -- timer, start-pulse, completion handling, sticky status -- is
+    shared here so the (subtle) completion logic lives in a single place.
 
-    Notes:
-    - Only a single outstanding transaction is supported.
-    - Reads wait for a completion; writes are posted and complete once accepted.
-    - For now, only full DWORD writes are supported (wsel=0xf).
+    Hooks:
+    - ``send_request(req_sink)``: return the request-field assignments specific to the accessor.
+    - ``posted_writes``: ``True`` if writes complete on acceptance (no completion, e.g. MemWr),
+      ``False`` if writes also wait for a completion (e.g. CfgWr).
+    - ``bad_wsel_cond()``: optional condition that routes a start to an error state (MMIO wsel check).
     """
-    def __init__(self, port, tag=0x44, timeout=2**20, with_csr=False):
+    posted_writes = False
+
+    def __init__(self, port, tag, timeout=2**20, with_csr=False):
         self.port = port
 
-        # User Interface.
+        # User Interface (request-specific signals are added by the subclass before super().__init__).
         self.start = Signal()
         self.we    = Signal()     # 0: Read / 1: Write.
-        self.adr   = Signal(64)   # Byte address.
         self.wdata = Signal(32)   # Write data (DWORD).
-        self.wsel  = Signal(4)    # Byte enable (only 0xf supported).
-        self.len   = Signal(10)   # DWORD count (start with 1).
-
         self.done  = Signal()
         self.err   = Signal()
         self.rdata = Signal(32)
@@ -46,18 +47,12 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
 
         # Timer (simple timeout watchdog).
         timer = Signal(max=timeout)
-        self.timer_dbg = Signal(16)
-        self.comb += self.timer_dbg.eq(timer[:16])
 
         # Start Pulse.
         start_d     = Signal()
         start_pulse = Signal()
         self.sync += start_d.eq(self.start)
         self.comb += start_pulse.eq(self.start & ~start_d)
-
-        # Completion match (single outstanding transaction).
-        cpl_match = Signal()
-        self.comb += cpl_match.eq(cmp_source.valid)
 
         # Sticky Status (cleared on new start).
         done_r = Signal()
@@ -71,34 +66,28 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
             err_r.eq(0),
         )
 
+        # Optional error / posted-write routing (subclass-defined).
+        bad_wsel  = self.bad_wsel_cond()
+        idle_send = NextState("SEND") if bad_wsel is None else \
+                    If(bad_wsel, NextState("BAD-WSEL")).Else(NextState("SEND"))
+        send_done = If(self.we, NextState("WRITE-LATCH")).Else(NextState("WAIT")) \
+                    if self.posted_writes else NextState("WAIT")
+
         # FSM.
         self.fsm = fsm = FSM(reset_state="IDLE")
         fsm.act("IDLE",
             NextValue(timer, 0),
-            # Drain any stale completion left pending from a prior transaction. The crossbar holds
-            # a leftover completion beat valid until consumed, and `cmp_source.ready` is only
-            # asserted in WAIT -- so a completion that lands while we are idle would otherwise sit
-            # there and be matched immediately by the NEXT read's WAIT (cpl_match = valid), latching
-            # the previous transaction's data (an off-by-one "stale read", seen at data_width=256).
-            # Flushing before each request guarantees the first beat we see in WAIT is genuinely ours.
+            # Drain any stale completion left pending from a prior transaction: the crossbar holds a
+            # leftover completion beat valid until consumed, and `cmp_source.ready` is only asserted
+            # from WAIT -- so a completion that lands while idle would otherwise be matched by the
+            # NEXT read's WAIT, latching the previous transaction's data (off-by-one "stale read",
+            # seen at data_width=256). Flushing first makes the first beat seen in WAIT genuinely ours.
             cmp_source.ready.eq(1),
-            If(start_pulse,
-                If(self.we & (self.wsel != 0xf),
-                    NextState("BAD-WSEL"),
-                ).Else(
-                    NextState("SEND"),
-                )
-            )
-        )
-        fsm.act("BAD-WSEL",
-            # Unsupported partial write for now.
-            NextValue(done_r, 1),
-            NextValue(err_r,  1),
-            NextState("IDLE"),
+            If(start_pulse, idle_send),
         )
         fsm.act("SEND",
-            # Keep draining stale completions until our request is actually accepted (our own
-            # completion cannot arrive before then), so none can slip into WAIT ahead of ours.
+            # Keep draining stale completions until our request is accepted (our own completion
+            # cannot arrive before then), so none can slip into WAIT ahead of ours.
             cmp_source.ready.eq(1),
             req_sink.valid.eq(1),
             req_sink.first.eq(1),
@@ -106,33 +95,20 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
 
             # Shared REQUEST fields.
             req_sink.we.eq(self.we),
-            req_sink.adr.eq(self.adr),
-            req_sink.len.eq(self.len),
             req_sink.tag.eq(tag),
-
-            # Data (writes); reads ignore it.
-            req_sink.dat.eq(Replicate(self.wdata, len(req_sink.dat)//32)),
-
-            # Route.
+            req_sink.dat.eq(Replicate(self.wdata, len(req_sink.dat)//32)),  # writes; reads ignore it.
             req_sink.channel.eq(port.channel),
 
-            If(req_sink.ready,
-                If(self.we,
-                    NextState("WRITE-LATCH"),
-                ).Else(
-                    NextState("WAIT"),
-                )
-            )
-        )
-        fsm.act("WRITE-LATCH",
-            NextValue(done_r, 1),
-            NextState("IDLE"),
+            # Request-specific fields (address/length, CFG BDF, ...).
+            *self.send_request(req_sink),
+
+            If(req_sink.ready, send_done),
         )
         fsm.act("WAIT",
             cmp_source.ready.eq(1),
             NextValue(timer, timer + 1),
 
-            If(cpl_match,
+            If(cmp_source.valid,
                 # Read data lives in the FIRST beat (our reads are single-DWORD, len=1).
                 If(cmp_source.first,
                     NextValue(self.rdata, cmp_source.dat[:32]),
@@ -140,13 +116,12 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
                 If(cmp_source.err,
                     NextValue(err_r, 1),
                 ),
-                # IMPORTANT: only retire once the completion's END beat is consumed. The shared
+                # Only retire once the completion's END beat is consumed. The shared
                 # LitePCIeTLPController delivers completions strictly in request order and advances
                 # its req_queue solely on (valid & last & end & ready). At data_width=128 a 1-DWORD
-                # completion is a single beat (first==end) so returning on the first beat happened to
-                # work; at data_width=256 it spans >1 beat, and returning early left a trailing END
-                # beat unconsumed -> req_queue never advanced -> the NEXT read mis-consumed it
-                # (off-by-one "stale read"). Draining through END keeps the controller in sync.
+                # completion is a single beat (first==end); at 256 it spans >1 beat, and returning on
+                # the first beat left a trailing END beat unconsumed -> req_queue never advanced ->
+                # the NEXT read mis-consumed it (off-by-one "stale read"). Drain through END.
                 If(cmp_source.end,
                     NextState("LATCH"),
                 ),
@@ -163,17 +138,61 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
             NextValue(err_r,  1),
             NextState("IDLE"),
         )
+        if self.posted_writes:
+            fsm.act("WRITE-LATCH",
+                NextValue(done_r, 1),
+                NextState("IDLE"),
+            )
+        if bad_wsel is not None:
+            fsm.act("BAD-WSEL",
+                NextValue(done_r, 1),
+                NextValue(err_r,  1),
+                NextState("IDLE"),
+            )
 
         # CSRs.
         if with_csr:
             self.add_csr()
 
+    # Hooks (overridden by subclasses) -------------------------------------------------------------
+
+    def send_request(self, req_sink):
+        return []
+
+    def bad_wsel_cond(self):
+        return None
+
     def add_csr(self):
-        # mem_ctrl:
-        # - start: Pulse to launch a new MEM transaction.
-        # - we:    0=Read, 1=Write.
-        # - wsel:  Byte enable (only 0xf supported for now).
-        # - len:   DWORD count (use 1 for single access).
+        pass
+
+# LiteNVMe PCIe MMIO Accessor ----------------------------------------------------------------------
+
+class LiteNVMePCIeMmioAccessor(_LiteNVMePCIeAccessor):
+    """PCIe MEM Read/Write accessor (MMIO-over-REQUEST).
+
+    Issues BAR0 memory reads/writes through a LitePCIe crossbar master port.
+    - Single outstanding transaction; reads wait for a completion, writes are posted.
+    - Only full DWORD writes are supported (wsel=0xf).
+    """
+    posted_writes = True
+
+    def __init__(self, port, tag=0x44, timeout=2**20, with_csr=False):
+        self.adr  = Signal(64)   # Byte address.
+        self.wsel = Signal(4)    # Byte enable (only 0xf supported).
+        self.len  = Signal(10)   # DWORD count (start with 1).
+        super().__init__(port, tag=tag, timeout=timeout, with_csr=with_csr)
+
+    def send_request(self, req_sink):
+        return [
+            req_sink.adr.eq(self.adr),
+            req_sink.len.eq(self.len),
+        ]
+
+    def bad_wsel_cond(self):
+        return self.we & (self.wsel != 0xf)
+
+    def add_csr(self):
+        # mem_ctrl: start (pulse), we (0=Read/1=Write), wsel (only 0xf), len (DWORD count).
         self._mem_ctrl = CSRStorage(fields=[
             CSRField("start", size=1,  offset=0, pulse=True, values=[
                 ("``1``", "Start a new MEM transaction."),
@@ -188,28 +207,22 @@ class LiteNVMePCIeMmioAccessor(LiteXModule):
             CSRField("len",   size=10, offset=8, description="DWORD count (start with 1)."),
         ])
 
-        # mem_adr_l/h:
-        # - 64-bit byte address split into low/high DWORDs.
+        # mem_adr_l/h: 64-bit byte address split into low/high DWORDs.
         self._mem_adr_l = CSRStorage(32, description="MEM address low (bytes).")
         self._mem_adr_h = CSRStorage(32, description="MEM address high (bytes).")
 
-        # mem_wdata:
-        # - DWORD write payload for MEM writes.
+        # mem_wdata: DWORD write payload.
         self._mem_wdata = CSRStorage(32, description="MEM write data (DWORD).")
 
-        # mem_stat:
-        # - done: Set when the transaction completed (or timed out).
-        # - err:  Completion error or timeout / invalid wsel.
+        # mem_stat: done (completed or timed out), err (completion error/timeout/invalid wsel).
         self._mem_stat = CSRStatus(fields=[
             CSRField("done", size=1, offset=0, description="Transaction done."),
             CSRField("err",  size=1, offset=1, description="Transaction error (completion error/timeout/invalid wsel)."),
         ])
 
-        # mem_rdata:
-        # - DWORD read payload for MEM reads (valid when done=1 and err=0).
+        # mem_rdata: DWORD read payload (valid when done=1 and err=0).
         self._mem_rdata = CSRStatus(32, description="MEM read data (DWORD).")
 
-        # Connections.
         self.comb += [
             # Control.
             self.start.eq(self._mem_ctrl.fields.start),

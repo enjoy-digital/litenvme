@@ -12,91 +12,32 @@ from litex.gen import *
 
 from litex.soc.interconnect.csr import *
 
+from litenvme.mem import _LiteNVMePCIeAccessor
+
 # LiteNVMe PCIe CFG Accessor -----------------------------------------------------------------------
 
-class LiteNVMePCIeCfgAccessor(LiteXModule):
+class LiteNVMePCIeCfgAccessor(_LiteNVMePCIeAccessor):
     """PCIe CFG0 Read/Write accessor (CFG-over-REQUEST).
 
-    This is a tiny helper to issue Config Space accesses through the LitePCIe
-    crossbar master port, reusing the shared REQUEST layout.
-
-    Expects the Crossbar Master port REQUEST layout to include CONFIGURATION extensions:
-      - is_cfg, bus_number, device_no, func, ext_reg, register_no.
+    Issues Config Space accesses through a LitePCIe crossbar master port. Expects the master port
+    REQUEST layout to include the CONFIGURATION extensions (is_cfg, bus_number, device_no, func,
+    ext_reg, register_no). Single outstanding transaction; reads and writes both wait for the
+    completion (CFG writes are non-posted).
     """
     def __init__(self, port, requester_id=0x0000, tag=0x42, timeout=2**20, with_csr=False):
-        self.port = port
-
-        # User Interface.
-        self.start    = Signal()
-        self.we       = Signal()    # 0: Read / 1: Write.
-        self.wdata    = Signal(32)  # Write data (DWORD).
+        self.requester_id = requester_id
         self.bus      = Signal(8)
         self.device   = Signal(5)
         self.function = Signal(3)
         self.reg      = Signal(6)   # DWORD index (offset/4).
         self.ext_reg  = Signal(3)   # Extended register.
+        super().__init__(port, tag=tag, timeout=timeout, with_csr=with_csr)
 
-        self.done     = Signal()
-        self.err      = Signal()
-        self.rdata    = Signal(32)
-
-        # # #
-
-        req_sink   = port.source
-        cmp_source = port.sink
-
-        # Timer (simple timeout watchdog).
-        timer = Signal(max=timeout)
-        self.timer_dbg = Signal(16)
-        self.comb += self.timer_dbg.eq(timer[:16])
-
-        # Start Pulse.
-        start_d     = Signal()
-        start_pulse = Signal()
-        self.sync += start_d.eq(self.start)
-        self.comb += start_pulse.eq(self.start & ~start_d)
-
-        # Completion match (single outstanding transaction).
-        cpl_match = Signal()
-        self.comb += cpl_match.eq(cmp_source.valid)
-
-        # Sticky Status (cleared on new start).
-        done_r = Signal()
-        err_r  = Signal()
-        self.comb += [
-            self.done.eq(done_r),
-            self.err.eq(err_r),
-        ]
-        self.sync += If(start_pulse,
-            done_r.eq(0),
-            err_r.eq(0),
-        )
-
-        # FSM.
-        self.fsm = fsm = FSM(reset_state="IDLE")
-        fsm.act("IDLE",
-            NextValue(timer, 0),
-            If(start_pulse,
-                NextState("SEND"),
-            )
-        )
-        fsm.act("SEND",
-            req_sink.valid.eq(1),
-            req_sink.first.eq(1),
-            req_sink.last.eq(1),
-
-            # Shared REQUEST fields.
-            req_sink.req_id.eq(requester_id),
-            req_sink.we.eq(self.we),
+    def send_request(self, req_sink):
+        return [
+            req_sink.req_id.eq(self.requester_id),
             req_sink.adr.eq(0),  # Unused for CFG but must be driven.
             req_sink.len.eq(1),  # CFG is 1DW.
-            req_sink.tag.eq(tag),
-
-            # Data (writes); reads ignore it.
-            req_sink.dat.eq(Replicate(self.wdata, len(req_sink.dat)//32)),
-
-            # Route.
-            req_sink.channel.eq(port.channel),
 
             # CFG-over-REQUEST fields.
             req_sink.is_cfg.eq(1),
@@ -105,38 +46,7 @@ class LiteNVMePCIeCfgAccessor(LiteXModule):
             req_sink.func.eq(self.function),
             req_sink.ext_reg.eq(self.ext_reg),
             req_sink.register_no.eq(self.reg),
-
-            If(req_sink.ready,
-                NextState("WAIT"),
-            )
-        )
-        fsm.act("WAIT",
-            cmp_source.ready.eq(1),
-            NextValue(timer, timer + 1),
-
-            If(cpl_match,
-                NextValue(self.rdata, cmp_source.dat[:32]),
-                NextState("LATCH"),
-            ).Elif(timer == (timeout - 1),
-                NextState("TIMEOUT"),
-            )
-        )
-        fsm.act("LATCH",
-            NextValue(done_r, 1),
-            If(cmp_source.err,
-                NextValue(err_r, 1),
-            ),
-            NextState("IDLE"),
-        )
-        fsm.act("TIMEOUT",
-            NextValue(done_r, 1),
-            NextValue(err_r,  1),
-            NextState("IDLE"),
-        )
-
-        # CSRs.
-        if with_csr:
-            self.add_csr()
+        ]
 
     def add_csr(self):
         # cfg_ctrl:

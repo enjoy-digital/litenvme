@@ -616,8 +616,8 @@ class LiteNVMeMemPortToAXI(LiteXModule):
 
         beat_bytes        = data_width // 8
         beat_dwords       = data_width // 32
-        beat_bytes_shift  = _bit_width(beat_bytes - 1)
-        beat_dwords_shift = _bit_width(beat_dwords - 1)
+        beat_bytes_shift  = log2_int(beat_bytes)
+        beat_dwords_shift = log2_int(beat_dwords)
         base_dw           = base >> 2  # base as a dword index (base is beat-aligned).
 
         # # #
@@ -717,14 +717,6 @@ class LiteNVMeMemPortToAXI(LiteXModule):
             )
         )
 
-
-def _bit_width(x):
-    """Number of bits needed to hold x (>=0). _bit_width(0)=0, _bit_width(3)=2."""
-    w = 0
-    while x > 0:
-        x >>= 1
-        w += 1
-    return w
 
 
 # Engine + AXI bridge wrapper ----------------------------------------------------------------------

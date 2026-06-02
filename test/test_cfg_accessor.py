@@ -41,9 +41,12 @@ def _req_layout(data_width):
 
 
 def _cmp_layout(data_width):
+    # Mirrors LitePCIe's completion_layout fields the accessor uses: read data, error, and "end"
+    # (the accessor consumes through the final completion beat to keep the TLP controller in sync).
     return [
         ("dat", data_width),
         ("err", 1),
+        ("end", 1),
     ]
 
 
@@ -105,6 +108,9 @@ class TestCfgAccessor(unittest.TestCase):
                     for _ in range(2):
                         yield
                     yield port.sink.valid.eq(1)
+                    yield port.sink.first.eq(1)
+                    yield port.sink.last.eq(1)
+                    yield port.sink.end.eq(1)
                     yield port.sink.dat.eq(rdata)
                     while (yield port.sink.ready) == 0:
                         yield
@@ -169,6 +175,9 @@ class TestCfgAccessor(unittest.TestCase):
                     for _ in range(2):
                         yield
                     yield port.sink.valid.eq(1)
+                    yield port.sink.first.eq(1)
+                    yield port.sink.last.eq(1)
+                    yield port.sink.end.eq(1)
                     while (yield port.sink.ready) == 0:
                         yield
                     yield
