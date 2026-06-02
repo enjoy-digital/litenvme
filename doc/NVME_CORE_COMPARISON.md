@@ -92,16 +92,30 @@ with Design Gateway's 66. Investigating *why* found two fixable causes, now addr
 
 Result: **325 → 133 BRAM tiles (90 % → 37 %)**, leaving ~63 % of the device's BRAM free.
 
-### Where LiteNVMe still differs
+### Where LiteNVMe still differs — and a real architectural gap
 
-The remaining gap to Design Gateway's 66 is almost entirely the **embedded bring-up CPU**
-(≈ 34 BRAM of ROM/RAM) — LiteNVMe does NVMe init in firmware on a soft-CPU, where Design Gateway
-is pure-RTL and CPU-less. The `cpu: None` variant removes the CPU (and its ROM/RAM), bringing the
-core to ≈ window (64) + PCIe wrapper (22) ≈ **the same ~66–90 BRAM class**, at the cost of doing
-bring-up from an external host over the control bus. The data buffer itself (≈ 64 BRAM for
-256 KiB) is already in Design Gateway's class, and `hostmem_size` / a DDR-backed `hostmem_backend`
-tune it further. Soft logic is modest (~7 k LUT for the datapath, ~11.5 k incl. PCIe + CPU), with
-**0 URAM / 0 DSP** — it ports cleanly across Ultrascale+.
+The remaining BRAM gap to Design Gateway's 66 is almost entirely the **embedded bring-up CPU**
+(≈ 34 BRAM of ROM/RAM + ~1.7 k LUT). But that CPU is not just overhead — it is *how LiteNVMe does
+NVMe initialization*, and this is the one genuine architectural difference:
+
+- **Design Gateway is truly CPU-less**: it performs the full init sequence (PCIe link, controller
+  enable, Identify, creating the I/O queues) **autonomously in RTL** — no CPU, OS, or software
+  anywhere. The user only issues storage commands.
+- **LiteNVMe does init in software.** The bring-up sequence lives in C firmware on the embedded
+  VexRiscv. The `cpu: None` variant does **not** add an RTL init sequencer — it removes the CPU
+  and instead expects an **external host** to run the init over the control bus. So LiteNVMe today
+  always needs software for bring-up (embedded *or* external); it has **no pure-RTL init**.
+
+So `cpu: None` lowers BRAM to ≈ window (64) + PCIe wrapper (22), but it does **not** make LiteNVMe
+a drop-in autonomous controller the way Design Gateway is — bring-up still has to come from a host.
+**Matching DG's fully-standalone operation is real future work: a pure-RTL init sequencer** that
+replays the firmware bring-up as a state machine (the firmware in `bench/firmware/main.c` is the
+exact spec for it). The trade today is deliberate: doing init in C makes it easy to read, extend
+(new admin commands, vendor quirks) and debug, at the cost of the CPU's area.
+
+Everything else is already competitive: the 256 KiB data buffer (≈ 64 BRAM) is in Design Gateway's
+class, `hostmem_size` / a DDR-backed `hostmem_backend` tune it further, and the soft logic is
+modest (~7 k LUT for the datapath, ~11.5 k incl. PCIe + CPU) with **0 URAM / 0 DSP**.
 
 ## Takeaways
 
