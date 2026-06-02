@@ -267,8 +267,23 @@ Notes (post-synthesis estimate; post-place is slightly lower):
     core still needs the firmware↔core CSR names aligned (the wrapper nests cfg/mmio as
     `nvme_cfg`/`nvme_mmio` while the firmware uses `cfg_cfg_*`/`mmio_mem_*`) — a tracked follow-up.
   - `cpu: None` removes the CPU and its ROM/RAM entirely; bring-up then comes from an external
-    host over the control bus (a pure-RTL init sequencer would make it fully autonomous — see
-    `doc/NVME_CORE_COMPARISON.md`).
+    host over the control bus.
+  - **RTL init** (`litenvme/init.py`, `--with-rtl-init`, `rtl-init` branch) does the whole
+    bring-up *in hardware* — no CPU at all. Measured on the bench SoC, swapping VexRiscv+firmware
+    for the sequencer saves **−2,560 LUT / −3,116 FF / −25 BRAM** (the CPU's ROM/RAM); the
+    sequencer FSM itself is small and uses 0 BRAM. So the RTL-init core is strictly smaller and
+    drops the CPU's ~25 BRAM (a CPU-based 133-tile standalone core → ~108 tiles; the exact figure
+    needs wiring RTL init into the generator + an OOC synth).
+
+**SSD flexibility — firmware vs RTL init.** The firmware bring-up is the flexible one: it *reads*
+the device's actual values (doorbell stride from `CAP.DSTRD`, the BAR0 64/32-bit type, namespace
+via Identify) and retries, so it copes with arbitrary NVMe SSDs and quirks. The RTL sequencer
+trades that for area: it currently **assumes** the common case — SSD at BDF 0:1:0, a 64-bit BAR0,
+`DSTRD=0` (4-byte doorbell stride), `NSID=1`, fixed queue sizes — which holds for the large
+majority of NVMe SSDs but is not universal. (It already does the `CAP` read, so deriving `DSTRD`
+and the BAR type from it to widen SSD coverage is a small extension.) This is exactly why the two
+paths coexist: **use firmware for development and broad SSD support; use RTL init for a known,
+controlled, CPU-less deployment** where minimum area matters.
 - **Two earlier BRAM wastes were removed** to get here (from 325 → 133 tiles): the CSR memory-
   debug frontend was replicating the whole window (a third BRAM port) and is now off by default
   for the pin-driven core; and the window was right-sized to 256 KiB (the 512 KiB default carried
