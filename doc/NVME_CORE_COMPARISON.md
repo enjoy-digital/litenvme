@@ -58,28 +58,36 @@ layer supports in principle — it is future work here, not an architectural lim
 
 ## Resource footprint context
 
-Per-LUT/FF resource numbers are essentially **never published** by the commercial cores, so a
-direct logic comparison isn't possible. The one comparable published axis is memory:
+LUT/FF are **never published** by the commercial cores, so a full logic comparison isn't
+possible — but LiteNVMe's own core-only numbers are exact. The standalone `litenvme_core` was
+synthesized on its own (out-of-context, XCKU3P, Gen3 x4 / 256-bit, default 512 KB window +
+embedded bring-up CPU); the Vivado hierarchy gives:
 
-| Core | LUT | FF | BRAM tiles | URAM | DSP | Data buffer |
-|------|----:|---:|-----------:|-----:|----:|-------------|
-| **LiteNVMe** (256 KB window) | n/p\* | n/p\* | ~66 | 0 | ~0 | 256 KB host-mem window |
-| **LiteNVMe** (512 KB window) | n/p\* | n/p\* | ~114 | 0 | ~0 | 512 KB host-mem window |
-| Design Gateway NVMe-IP (std) | n/p | n/p | 66 | 0 | n/p | 256 KB internal RAM |
-| Design Gateway NVMe-IP (URAM)| n/p | n/p | 2 | 8 | n/p | 256 KB internal RAM |
-| IntelliProp / iWave          | n/p | n/p | n/p | n/p | n/p | user-defined (BRAM/DDR) |
+| Core | LUT | FF | BRAM tiles | URAM | DSP | Data buffer / CPU |
+|------|----:|---:|-----------:|-----:|----:|-------------------|
+| **LiteNVMe** standalone core | **13,303** | **15,397** | **325** | 0 | 0 | 512 KB window + soft-CPU |
+|  ├ PCIe hard-IP wrapper (+GTY)| 2,960 | 6,303 | 22 | 0 | 0 | — |
+|  ├ VexRiscv bring-up CPU      | 2,182 |   749 |  0 (+2 RAMB18) | 0 | 0 | — |
+|  └ NVMe datapath + streamer + hostmem + glue | ~8,161 | ~8,345 | ~298 | 0 | 0 | incl. the 512 KB window |
+| Design Gateway NVMe-IP (std)  | n/p | n/p | 66 | 0 | n/p | 256 KB RAM, **CPU-less** |
+| Design Gateway NVMe-IP (URAM) | n/p | n/p | 2  | 8 | n/p | 256 KB RAM, **CPU-less** |
+| IntelliProp / iWave           | n/p | n/p | n/p| n/p | n/p | user-defined (BRAM/DDR) |
 
-\* Core-only soft logic was **not** independently synthesized out-of-context. The measured
-**reference test SoC** (Gen3 x4, XCKU3P, post-place) — which additionally includes the
-Ethernet/Etherbone bridge, the request-generator/BIST harness and the bring-up VexRiscv — totals
-**14,699 LUT / 18,765 FF / 325 BRAM tiles / 0 URAM / 2 DSP**, of which the PCIe hard-IP wrapper is
-1,326 LUT / 4,912 FF / 22 BRAM and the VexRiscv is ~2,295 LUT. The standalone core (no harness) is
-smaller. Full breakdown: `doc/STANDALONE_CORE.md` §5.
+(Post-synthesis estimate; post-place would be slightly lower. Numbers are for the
+block-streamer product config — `examples/alibaba_xcku3p.yml`.)
 
-So on the one axis everyone reports — memory — LiteNVMe is in the **same class** as a commercial
-CPU-less host IP (~66 BRAM for an equivalent 256 KB buffer), while being open source and giving
-exact, reproducible numbers. Its BRAM is the tunable cost (`hostmem_size`, or a DDR-backed
-backend); the competitors with a URAM option trade BRAM for URAM the same way.
+Honest read of this: **LiteNVMe currently uses more BRAM than the leanest CPU-less commercial
+cores** (325 tiles vs Design Gateway's 66). Two reasons, both configurable:
+1. The **default host-memory window is 512 KB** (~half the BRAM) vs Design Gateway's 256 KB —
+   shrink `hostmem_size`, or point `hostmem_backend` at DDR/LiteDRAM, to cut it.
+2. LiteNVMe **embeds a soft-CPU** (ROM/RAM) for one-time bring-up, where Design Gateway is
+   pure-RTL CPU-less — the `cpu: None` variant removes the CPU (and its ROM/RAM) in favour of an
+   external control bus, at the cost of doing NVMe init from the host.
+
+On **soft logic** LiteNVMe is modest (~8 k LUT for the NVMe datapath itself, ~13 k including the
+PCIe wrapper and CPU) and uses **0 URAM / 0 DSP**, so it ports cleanly across Ultrascale+. The
+honest summary: LiteNVMe trades some BRAM (bigger default buffer + embedded CPU) for open-source
+flexibility and self-contained bring-up; the area is reasonable and tunable, not best-in-class.
 
 ## Takeaways
 
