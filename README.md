@@ -8,7 +8,8 @@
                            Copyright (c) 2025-2026 Enjoy-Digital.
 ```
 
-![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg)
+[![](https://github.com/enjoy-digital/litenvme/workflows/ci/badge.svg)](https://github.com/enjoy-digital/litenvme/actions)
+![License](https://img.shields.io/badge/License-BSD%202--Clause-orange.svg) [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/enjoy-digital/litenvme)
 
 LiteNVMe is an **open-source NVMe host core** for FPGAs. It is the PCIe *RootPort* side: it
 brings up an off-the-shelf NVMe SSD (controller enable, Identify, create the I/O queues) and lets
