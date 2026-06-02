@@ -122,8 +122,10 @@ So the difference is **not** a heavier NVMe engine — it is three separate thin
    (depth-64 at 256-bit ≈ 1 BRAM each). Lowering `ep_max_pending_requests` 8→2 cuts the glue to
    ~6 BRAM (standalone core 133→118 tiles) — but it is **not free**: HW-measured warm read
    throughput drops from ~2687 to ~2138 MB/s (~20%), because the SSD's SQE-fetch completions need
-   those outstanding-request slots. So it's a knob (area ↔ throughput), kept at 8 by default for
-   full performance; a hand-optimized commercial core uses tighter buffering to get both.
+   those outstanding-request slots. It is also a **cliff, not a gradient** — `pending=4` measured
+   the *same* 2138 MB/s as `pending=2` (so 4 is strictly dominated: same throughput, more BRAM).
+   So there are two sensible points: **8** (full 2687 MB/s, 133 tiles) or **2** (118 tiles, −20%);
+   kept at 8 by default. A hand-optimized commercial core uses tighter buffering to get both.
 
 Net: with **RTL init** (drops the ~23-BRAM CPU) the core is ~108 tiles; excluding the PCIe IP
 (apples-to-apples with DG) that is ~86 = 64 (buffer) + ~22 (glue), vs DG's 66 = 64 + 2. The
