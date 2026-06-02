@@ -60,8 +60,9 @@ class TestInitSequencer(unittest.TestCase):
                         yield
             return model
 
-        # CFG: writes only (BAR0/BAR1/Command); just ack.
-        cfg_model = make_acc(s.cfg_start, s.cfg_we, s.cfg_done)
+        # CFG: probe read returns a valid VID/DID; writes just ack.
+        cfg_model = make_acc(s.cfg_start, s.cfg_we, s.cfg_done,
+                             rdata=s.cfg_rdata, read_fn=lambda: 0x5427c0a9)
 
         # MMIO: reads return CAP (non-zero) / CSTS (RDY=1); record admin doorbell writes.
         @passive

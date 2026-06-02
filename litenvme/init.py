@@ -59,6 +59,11 @@ class LiteNVMeInitSequencer(LiteXModule):
         self.init_done  = Signal()
         self.init_error = Signal()
         self.busy       = Signal()
+        # Diagnostics: which step failed (0=ok, 1=cfg err, 2=CAP not responding, 3=CSTS.RDY
+        # timeout, 4=admin CQE timeout, 5=admin CQE status err) + last read values.
+        self.fail_code  = Signal(8)
+        self.dbg_cqe3   = Signal(32)
+        self.dbg_cmd    = Signal(8)
 
         # CFG accessor drive (BDF fixed to 0:1:0).
         self.cfg_start = Signal()
@@ -144,6 +149,7 @@ class LiteNVMeInitSequencer(LiteXModule):
         cq_head = Signal(max=admin_q_entries)
         cq_phase = Signal(reset=1)
         poll    = Signal(max=poll_timeout)
+        retry   = Signal(4)   # config-access retry counter (transients right after device reset).
 
         cfg_reg_v, cfg_dat_v = Signal(6), Signal(32)
         self.comb += Case(ci, {i: [cfg_reg_v.eq(r), cfg_dat_v.eq(d)] for i, (r, d) in enumerate(cfg_tab)})
@@ -187,7 +193,27 @@ class LiteNVMeInitSequencer(LiteXModule):
         self.comb += self.busy.eq(~(fsm.ongoing("IDLE") | fsm.ongoing("READY") | fsm.ongoing("FAILED")))
 
         fsm.act("IDLE",
-            If(start_pulse, NextValue(ci, 0), NextState("CFG-ISSUE")),
+            If(start_pulse, NextValue(retry, 0), NextState("CFG-PROBE")),
+        )
+
+        # ---- 0. Probe config space (read VID/DID) with retries: confirms the config path is up
+        #         after the device's reset before any writes (mirrors the firmware's retried read,
+        #         and the value lands in dbg_cfg). fail_code=1 here => config path/timing problem. ----
+        fsm.act("CFG-PROBE",
+            self.cfg_start.eq(1), self.cfg_we.eq(0), self.cfg_reg.eq(0),
+            NextState("CFG-PROBE-WAIT"),
+        )
+        fsm.act("CFG-PROBE-WAIT",
+            self.cfg_we.eq(0), self.cfg_reg.eq(0),
+            If(self.cfg_done,
+                If((~self.cfg_err) & (self.cfg_rdata != 0) & (self.cfg_rdata != 0xffffffff),
+                    NextValue(ci, 0), NextState("CFG-ISSUE"),       # path good -> do the writes.
+                ).Elif(retry == 0xf,
+                    NextValue(self.fail_code, 1), NextState("FAILED"),
+                ).Else(
+                    NextValue(retry, retry + 1), NextState("CFG-PROBE"),
+                ),
+            ),
         )
 
         # ---- 1. Config space: BAR0 assign + Command MEM/BME. ----
@@ -199,7 +225,7 @@ class LiteNVMeInitSequencer(LiteXModule):
         fsm.act("CFG-WAIT",
             self.cfg_reg.eq(cfg_reg_v), self.cfg_wdata.eq(cfg_dat_v), self.cfg_we.eq(1),
             If(self.cfg_done,
-                If(self.cfg_err, NextState("FAILED")
+                If(self.cfg_err, NextValue(self.fail_code, 6), NextState("FAILED")  # write failed (read worked).
                 ).Elif(ci == (len(cfg_tab) - 1), NextState("ROOT-ISSUE")
                 ).Else(NextValue(ci, ci + 1), NextState("CFG-ISSUE")),
             ),
@@ -225,7 +251,7 @@ class LiteNVMeInitSequencer(LiteXModule):
             self.mmio_adr.eq(bar0_base + CAP),
             If(self.mmio_done,
                 If(self.mmio_rdata != 0, NextValue(mi, 0), NextState("MMIO-ISSUE")
-                ).Elif(poll == (poll_timeout - 1), NextState("FAILED")
+                ).Elif(poll == (poll_timeout - 1), NextValue(self.fail_code, 2), NextState("FAILED")
                 ).Else(NextValue(poll, poll + 1), NextState("CAP-ISSUE")),
             ),
         )
@@ -249,7 +275,7 @@ class LiteNVMeInitSequencer(LiteXModule):
             self.mmio_adr.eq(bar0_base + CSTS),
             If(self.mmio_done,
                 If(self.mmio_rdata[0], NextValue(cmd_idx, 0), NextState("ADMIN-START")
-                ).Elif(poll == (poll_timeout - 1), NextState("FAILED")
+                ).Elif(poll == (poll_timeout - 1), NextValue(self.fail_code, 3), NextState("FAILED")
                 ).Else(NextValue(poll, poll + 1), NextState("RDY-ISSUE")),
             ),
         )
@@ -291,11 +317,11 @@ class LiteNVMeInitSequencer(LiteXModule):
         )
         fsm.act("CQE-CHK",
             If(cqe_phase == cq_phase, NextState("CQE-STS")
-            ).Elif(poll == (poll_timeout - 1), NextState("FAILED")
+            ).Elif(poll == (poll_timeout - 1), NextValue(self.fail_code, 4), NextState("FAILED")
             ).Else(NextValue(poll, poll + 1), NextState("CQE-RD")),
         )
         fsm.act("CQE-STS",
-            If((cqe_sc != 0) | (cqe_sct != 0), NextState("FAILED")
+            If((cqe_sc != 0) | (cqe_sct != 0), NextValue(self.fail_code, 5), NextState("FAILED")
             ).Else(
                 If(cq_head == (admin_q_entries - 1), NextValue(cq_phase, ~cq_phase)),
                 NextValue(cq_head, cq_head_next),
@@ -330,6 +356,12 @@ class LiteNVMeInitSequencer(LiteXModule):
         fsm.act("FAILED", NextValue(self.init_error, 1), NextState("FAILED-HOLD"))
         fsm.act("FAILED-HOLD")
 
+        # Diagnostics.
+        self.comb += [
+            self.dbg_cqe3.eq(cqe3),
+            self.dbg_cmd.eq(cmd_idx),
+        ]
+
         if with_csr:
             self.add_csr()
 
@@ -339,13 +371,23 @@ class LiteNVMeInitSequencer(LiteXModule):
             CSRField("start", size=1, offset=0, pulse=True, description="Start NVMe RTL bring-up."),
         ])
         self._status = CSRStatus(fields=[
-            CSRField("done",  size=1, offset=0, description="Bring-up complete."),
-            CSRField("error", size=1, offset=1, description="Bring-up failed."),
-            CSRField("busy",  size=1, offset=2, description="Bring-up in progress."),
+            CSRField("done",      size=1, offset=0,  description="Bring-up complete."),
+            CSRField("error",     size=1, offset=1,  description="Bring-up failed."),
+            CSRField("busy",      size=1, offset=2,  description="Bring-up in progress."),
+            CSRField("fail_code", size=8, offset=8,  description="1=cfg 2=CAP 3=RDY 4=CQE-timeout 5=CQE-status."),
+            CSRField("cmd",       size=2, offset=24, description="Admin command index in flight."),
         ])
+        self._dbg_cqe3  = CSRStatus(32, description="Last admin CQE dw3.")
+        self._dbg_mmio  = CSRStatus(32, description="Last MMIO read data.")
+        self._dbg_cfg   = CSRStatus(32, description="Last CFG read data.")
         self.comb += [
             self.start.eq(self._ctrl.fields.start),
             self._status.fields.done.eq(self.init_done),
             self._status.fields.error.eq(self.init_error),
             self._status.fields.busy.eq(self.busy),
+            self._status.fields.fail_code.eq(self.fail_code),
+            self._status.fields.cmd.eq(self.dbg_cmd),
+            self._dbg_cqe3.status.eq(self.dbg_cqe3),
+            self._dbg_mmio.status.eq(self.mmio_rdata),
+            self._dbg_cfg.status.eq(self.cfg_rdata),
         ]
