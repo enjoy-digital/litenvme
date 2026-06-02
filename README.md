@@ -142,6 +142,7 @@ CPU (a pure-RTL init sequencer is on the roadmap). Details: `doc/NVME_CORE_COMPA
 
 | Doc | Contents |
 |-----|----------|
+| `doc/DIAGRAMS.md`             | Visual architecture diagrams (Mermaid): system, bring-up, data flow, engine FSM. |
 | `doc/ARCHITECTURE.md`         | As-built Gen3-256b architecture (datapath, accessors, engine). |
 | `doc/STANDALONE_CORE.md`      | Generation, interface, usage, integration flow, resources. |
 | `doc/NVME_PERFORMANCE.md`     | Throughput study, the 512 B MPS ceiling, transfer-size sweep. |

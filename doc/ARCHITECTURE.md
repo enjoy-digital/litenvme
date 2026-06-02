@@ -10,6 +10,7 @@ SPDX-License-Identifier: BSD-2-Clause
 This document describes the system **as it actually runs today**: an FPGA acting as a PCIe
 **Root Complex** that drives a real NVMe SSD, with the NVMe command engine in RTL and a soft CPU
 for bring-up/orchestration. For the original bottom-up plan see `NVME_ARCHITECTURE.md` (historical).
+For visual (Mermaid) diagrams of this architecture see [`DIAGRAMS.md`](DIAGRAMS.md).
 
 - **Board:** Alibaba KU3P (Xilinx XCKU3P).
 - **SSD:** Crucial CT500P310SSD8 (NVMe, MDTS=256 KiB, MPS-supported=512 B).
