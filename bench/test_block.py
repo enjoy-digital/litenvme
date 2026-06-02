@@ -43,12 +43,25 @@ def wait_done(read_status, done_bit=0, timeout=15.0):
     return False
 
 
+def block_xfer(r, write, sector, count, bist):
+    """Program + run one block-streamer transfer. `bist`: 0b01=wr_en, 0b10=rd_en, 0=off."""
+    w64(r.nvme_block_sector_lo, r.nvme_block_sector_hi, sector)
+    r.nvme_block_count.write(count)
+    r.nvme_block_nsid.write(1)
+    r.nvme_block_bist_control.write(bist)
+    r.nvme_block_ctrl.write(0b11 if write else 0b01)  # start (| write).
+    return wait_done(r.nvme_block_status.read)
+
+
 def main():
     p = argparse.ArgumentParser(description="LiteNVMe Etherbone block test.")
     p.add_argument("--csr-csv", default="build/alibaba_xcku3p/csr.csv")
     p.add_argument("--lba",     default="0x100000", help="Start LBA.")
     p.add_argument("--nlb",     default=16, type=int, help="Sectors per command (<=16 => no PRP list).")
     p.add_argument("--count",   default=1000, type=int, help="Commands for the throughput run.")
+    p.add_argument("--isolated", action="store_true",
+                   help="Isolated write proof: write, scrub staging with a different LBA, read back.")
+    p.add_argument("--lba-b",   default="0x300000", help="Scrub LBA for --isolated (must differ from --lba).")
     args = p.parse_args()
     lba = int(args.lba, 0)
 
@@ -89,27 +102,29 @@ def main():
     # --- Correctness: block streamer + BIST (front-end sel=1). ---------------------------
     r.nvme_block_bist_sel.write(1)
     sector, count = lba, args.nlb
-    w64(r.nvme_block_sector_lo, r.nvme_block_sector_hi, sector)
-    r.nvme_block_count.write(count)
-    r.nvme_block_nsid.write(1)
+    exp_beats = count * 512 // 32
 
     # Write: BIST counter -> wr_sink -> staging -> SSD.
-    r.nvme_block_bist_control.write(0b01)  # wr_en.
-    r.nvme_block_ctrl.write(0b11)          # start | write.
-    wr_ok = wait_done(r.nvme_block_status.read)
+    wr_ok    = block_xfer(r, write=1, sector=sector, count=count, bist=0b01)
     wr_beats = r.nvme_block_bist_wr_beats.read()
 
-    # Read: SSD -> staging -> rd_source -> BIST checker.
-    r.nvme_block_bist_control.write(0b10)  # rd_en.
-    r.nvme_block_ctrl.write(0b01)          # start (read).
-    rd_ok = wait_done(r.nvme_block_status.read)
-    rd_beats   = r.nvme_block_bist_rd_beats.read()
-    bist_err   = r.nvme_block_bist_errors.read()
-    strm_err   = (r.nvme_block_status.read() >> 2) & 1
-    exp_beats  = count * 512 // 32
+    if args.isolated:
+        # Scrub staging by reading a DIFFERENT LBA (checker on; mismatch vs the counter is
+        # expected). Staging then holds LBA-B data, so the final read of `sector` can only
+        # match the counter if the write truly persisted to disk -- not stale staging.
+        lba_b = int(args.lba_b, 0)
+        block_xfer(r, write=0, sector=lba_b, count=count, bist=0b10)
+        print(f"scrub(LBA {lba_b:#x}): bist_errors={r.nvme_block_bist_errors.read()} (mismatch expected)")
+
+    # Read back `sector` (errors reset on this start) -> BIST checker.
+    rd_ok    = block_xfer(r, write=0, sector=sector, count=count, bist=0b10)
+    rd_beats = r.nvme_block_bist_rd_beats.read()
+    bist_err = r.nvme_block_bist_errors.read()
+    strm_err = (r.nvme_block_status.read() >> 2) & 1
 
     ok = wr_ok and rd_ok and (bist_err == 0) and (strm_err == 0) and (rd_beats == exp_beats)
-    print(f"correctness(LBA {sector:#x} x {count} sectors): wr_beats={wr_beats} rd_beats={rd_beats}"
+    label = "correctness(isolated)" if args.isolated else "correctness"
+    print(f"{label}(LBA {sector:#x} x {count} sectors): wr_beats={wr_beats} rd_beats={rd_beats}"
           f"/{exp_beats} bist_errors={bist_err} streamer_error={strm_err} -> {'PASS' if ok else 'FAIL'}")
 
     bus.close()
