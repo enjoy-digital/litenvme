@@ -106,12 +106,16 @@ NVMe initialization*, and this is the one genuine architectural difference:
   and instead expects an **external host** to run the init over the control bus. So LiteNVMe today
   always needs software for bring-up (embedded *or* external); it has **no pure-RTL init**.
 
-So `cpu: None` lowers BRAM to ≈ window (64) + PCIe wrapper (22), but it does **not** make LiteNVMe
-a drop-in autonomous controller the way Design Gateway is — bring-up still has to come from a host.
-**Matching DG's fully-standalone operation is real future work: a pure-RTL init sequencer** that
-replays the firmware bring-up as a state machine (the firmware in `bench/firmware/main.c` is the
-exact spec for it). The trade today is deliberate: doing init in C makes it easy to read, extend
-(new admin commands, vendor quirks) and debug, at the cost of the CPU's area.
+So `cpu: None` lowers BRAM to ≈ window (64) + PCIe wrapper (22), but on its own it does not make
+LiteNVMe a drop-in autonomous controller — bring-up has to come from a host. The fully-standalone
+answer is a **pure-RTL init sequencer** that replays the firmware bring-up as a state machine.
+**This is now demonstrated** (`litenvme/init.py`, `--with-rtl-init`, on the `rtl-init` branch):
+`LiteNVMeInitSequencer` drives config BAR0 assign, the root memory window, controller enable, the
+three admin commands (Set Features / Create IO CQ / Create IO SQ) and the engine config entirely
+in hardware, and is **HW-validated on the Alibaba KU3P with no CPU and no firmware** (init_done,
+then a read completes errors=0). It's opt-in; the firmware bring-up stays the default because
+doing init in C makes it far easier to read, extend (new admin commands, vendor quirks) and debug
+— RTL init is for CPU-less deploy / minimum area, where it brings LiteNVMe to DG's standalone class.
 
 Everything else is already competitive: the 256 KiB data buffer (≈ 64 BRAM) is in Design Gateway's
 class, `hostmem_size` / a DDR-backed `hostmem_backend` tune it further, and the soft logic is

@@ -131,7 +131,9 @@ CPU (a pure-RTL init sequencer is on the roadmap). Details: `doc/NVME_CORE_COMPA
 ----------
 
 * PCIe Gen4 / Gen5 and wider lanes (PHY + datapath scaling) for higher throughput.
-* A pure-RTL init sequencer to drop the bring-up CPU for fully software-free operation.
+* Pure-RTL init sequencer for fully software-free (CPU-less) bring-up — **prototyped and
+  HW-validated** on the `rtl-init` branch (`litenvme/init.py`, `--with-rtl-init`); the firmware
+  bring-up stays the default (easier to extend), RTL init is for CPU-less deploy / minimum area.
 * Multi-chunk transfers larger than the staging window; DDR/LiteDRAM-backed host memory.
 
 Want to support or accelerate these? Contact us at florent [AT] enjoy-digital.fr.
