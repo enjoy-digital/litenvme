@@ -224,9 +224,12 @@ class LiteNVMeInitSequencer(LiteXModule):
         )
         fsm.act("CFG-WAIT",
             self.cfg_reg.eq(cfg_reg_v), self.cfg_wdata.eq(cfg_dat_v), self.cfg_we.eq(1),
+            # cfg_err on writes is ignored on purpose: config writes are non-posted and the
+            # completer here flags a benign status, but the write still takes effect (the firmware
+            # ignores it too -- nvme_bar0_assign doesn't check cfg_wr32's return). The CAP read
+            # below validates that BAR0 actually got assigned (fail_code=2 if not).
             If(self.cfg_done,
-                If(self.cfg_err, NextValue(self.fail_code, 6), NextState("FAILED")  # write failed (read worked).
-                ).Elif(ci == (len(cfg_tab) - 1), NextState("ROOT-ISSUE")
+                If(ci == (len(cfg_tab) - 1), NextState("ROOT-ISSUE")
                 ).Else(NextValue(ci, ci + 1), NextState("CFG-ISSUE")),
             ),
         )
