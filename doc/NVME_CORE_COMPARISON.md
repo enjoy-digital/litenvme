@@ -124,8 +124,11 @@ modest (~7 k LUT for the datapath, ~11.5 k incl. PCIe + CPU) with **0 URAM / 0 D
    metrics each publishes — especially on writes.
 2. **Higher absolute numbers in the market are Gen4/Gen5/x8**, i.e. a PHY/lane scaling story, not
    a host-core-architecture gap. That is the clearest optimization direction for LiteNVMe.
-3. LiteNVMe is, as far as we can find, the **only open-source NVMe *host* core** — the other open
-   cores (OpenExpress, Cosmos+ OpenSSD) are device/SSD controllers, a different problem.
+3. Open-source NVMe *host* cores are **rare** — most open NVMe FPGA work is device/SSD
+   controllers (OpenExpress, Cosmos+ OpenSSD), a different problem. A few open *host* efforts do
+   exist (e.g. DUNE's `pl-nvme` VHDL host, and a handful of academic/Chisel/RTL projects);
+   LiteNVMe is the LiteX-native one, and the one with published, reproducible perf/resource
+   numbers here. (We have not benchmarked the other open host cores head-to-head.)
 
 ---
 

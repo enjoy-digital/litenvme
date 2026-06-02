@@ -13,8 +13,8 @@
 LiteNVMe is an **open-source NVMe host core** for FPGAs. It is the PCIe *RootPort* side: it
 brings up an off-the-shelf NVMe SSD (controller enable, Identify, create the I/O queues) and lets
 your logic read/write it through a simple block interface — **no host CPU, OS or driver on the
-data path**. Most NVMe FPGA cores are the *device* (the SSD controller); LiteNVMe is, to our
-knowledge, the only open-source NVMe *host*.
+data path**. Most NVMe FPGA cores are the *device* (the SSD controller); open-source NVMe *host*
+cores are rare (a few exist, e.g. DUNE's `pl-nvme`), and LiteNVMe is the LiteX-native one.
 
 It is **functional and hardware-validated** at PCIe Gen3 x4 (~2.7 GB/s), and can be generated as a
 **standalone Verilog core** for use outside LiteX.
