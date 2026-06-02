@@ -76,6 +76,32 @@
 /* UART                                                                  */
 /*-----------------------------------------------------------------------*/
 
+/* Local 0x-hex / decimal -> uint64_t parser. The minimal picolibc (the LiteX default) does not
+ * provide strtoull, so parse 64-bit operands here to keep the firmware self-contained. */
+static uint64_t parse_u64(const char *s)
+{
+	uint64_t v = 0;
+	if (s == NULL)
+		return 0;
+	while (*s == ' ' || *s == '\t')
+		s++;
+	if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+		for (s += 2; *s; s++) {
+			char c = *s;
+			uint32_t d;
+			if (c >= '0' && c <= '9')      d = (uint32_t)(c - '0');
+			else if (c >= 'a' && c <= 'f') d = (uint32_t)(c - 'a' + 10);
+			else if (c >= 'A' && c <= 'F') d = (uint32_t)(c - 'A' + 10);
+			else break;
+			v = (v << 4) | d;
+		}
+	} else {
+		for (; *s >= '0' && *s <= '9'; s++)
+			v = v * 10 + (uint64_t)(*s - '0');
+	}
+	return v;
+}
+
 static char *readstr(void)
 {
 	char c[2];
@@ -163,6 +189,7 @@ static void help(void)
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
 #if NVME_ENGINE_AVAILABLE
 	puts("nvme_engine_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] - Benchmark the HW I/O engine (RTL-driven)");
+	puts("nvme_setup [bar0] - One-time NVMe bring-up + engine enable + init_done (for Etherbone-driven host tests)");
 #endif
 }
 
@@ -1159,7 +1186,7 @@ static void nvme_identify_cmd(char *str)
 		char *a = get_token(&str);
 		char *b = get_token(&str);
 		if (a && strlen(a))
-			base_addr = strtoull(a, NULL, 0);
+			base_addr = parse_u64(a);
 		if (b && strlen(b))
 			cid = (uint16_t)strtoul(b, NULL, 0);
 	}
@@ -1439,9 +1466,9 @@ static void nvme_engine_bench_cmd(char *str)
 			if (strcmp(a, "write") == 0) { do_write = 1; op_name = "write"; }
 			else if (strcmp(a, "read") != 0) { puts("ERR: op must be 'read' or 'write'."); return; }
 		}
-		if (b && strlen(b)) base_addr = strtoull(b, NULL, 0);
+		if (b && strlen(b)) base_addr = parse_u64(b);
 		if (c && strlen(c)) nsid = (uint32_t)strtoul(c, NULL, 0);
-		if (d && strlen(d)) slba = strtoull(d, NULL, 0);
+		if (d && strlen(d)) slba = parse_u64(d);
 		if (e && strlen(e)) nlb  = (uint32_t)strtoul(e, NULL, 0);
 		if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
 		if (g && strlen(g)) step = (uint32_t)strtoul(g, NULL, 0);
@@ -1571,17 +1598,46 @@ static void nvme_engine_bench_cmd(char *str)
 }
 
 /*
- * nvme_engine_diag: on-chip diagnostic for the HW I/O engine bring-up. Everything here is
- * read and printed BY THE SOFT CPU over UART, so it does not depend on the (sometimes
- * unreliable) host Etherbone channel. It:
- *   1. programs the engine + generator CSRs (same as nvme_engine_bench) but reads each
- *      back and prints it -- proving the writes land and acting as a config flush;
- *   2. kicks a small run and polls submitted/busy/inflight/completed over time, showing
- *      WHERE it stalls (never submits vs submits-but-never-completes);
- *   3. dumps the first SQ entry (16 dwords) and first CQ entry (4 dwords) from host
- *      memory, revealing whether a valid SQE was built and whether the SSD posted a CQE.
- * Usage: nvme_engine_diag <read|write> [bar0] [nsid] [slba] [nlb] [count]
+ * nvme_autoinit / nvme_setup: one-time NVMe bring-up for Etherbone-driven testing. Does the
+ * same admin + engine configuration as nvme_engine_bench (controller enable, create IO SQ/CQ,
+ * program the engine queue/doorbell/PRP-list CSRs, enable), then raises nvme_ctrl.init_done so
+ * a host script can drive the request generator / block streamer over Etherbone without using
+ * the console. Run once after boot (the engine then owns the IO ring; don't also run the
+ * console nvme_engine_bench / nvme_verify in the same session).
  */
+static int nvme_autoinit(uint64_t base_addr)
+{
+	uint64_t cap = 0;
+	if (nvme_bar0_assign(base_addr)) return -1;
+	if (nvme_admin_init(&cap))       return -1;
+	if (nvme_io_setup(cap))          return -1;
+	uint64_t sq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
+	uint64_t cq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
+	nvme_engine_write64(nvme_engine_engine_sq_base_lo_write, nvme_engine_engine_sq_base_hi_write, (uint64_t)IO_SQ_ADDR);
+	nvme_engine_write64(nvme_engine_engine_cq_base_lo_write, nvme_engine_engine_cq_base_hi_write, (uint64_t)IO_CQ_ADDR);
+	nvme_engine_write64(nvme_engine_engine_sq_db_lo_write,   nvme_engine_engine_sq_db_hi_write,   sq_db);
+	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
+	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write,
+	                    (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u));
+	nvme_engine_engine_enable_write(1);
+	return 0;
+}
+
+static void nvme_setup_cmd(char *str)
+{
+	uint64_t base_addr = 0xe0000000ull;
+	if (str && strlen(str)) {
+		char *a = get_token(&str);
+		if (a && strlen(a)) base_addr = parse_u64(a);
+	}
+	int err = nvme_autoinit(base_addr);
+#ifdef CSR_NVME_CTRL_INIT_DONE_ADDR
+	if (err) nvme_ctrl_init_error_write(1);
+	else     nvme_ctrl_init_done_write(1);
+#endif
+	if (err) puts("ERR: nvme_setup failed.");
+	else     puts("SETUP OK: engine enabled, init_done=1");
+}
 #endif /* NVME_ENGINE_AVAILABLE */
 
 static void nvme_dump_buffer(uint32_t dwords)
@@ -1614,9 +1670,9 @@ static void nvme_read_cmd(char *str)
 		char *b = get_token(&str);
 		char *c = get_token(&str);
 		char *d = get_token(&str);
-		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (a && strlen(a)) base_addr = parse_u64(a);
 		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
-		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (c && strlen(c)) slba = parse_u64(c);
 		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
 	}
 
@@ -1638,9 +1694,9 @@ static void nvme_write_cmd(char *str)
 		char *b = get_token(&str);
 		char *c = get_token(&str);
 		char *d = get_token(&str);
-		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (a && strlen(a)) base_addr = parse_u64(a);
 		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
-		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (c && strlen(c)) slba = parse_u64(c);
 		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
 	}
 
@@ -1695,9 +1751,9 @@ static void nvme_verify_cmd(char *str)
 		char *c = get_token(&str);
 		char *d = get_token(&str);
 		char *e = get_token(&str);
-		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
+		if (a && strlen(a)) base_addr = parse_u64(a);
 		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
-		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
+		if (c && strlen(c)) slba = parse_u64(c);
 		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
 		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
 	}
@@ -1800,6 +1856,8 @@ static void console_service(void)
 #if NVME_ENGINE_AVAILABLE
 	else if (strcmp(token, "nvme_engine_bench") == 0)
 		nvme_engine_bench_cmd(str);
+	else if (strcmp(token, "nvme_setup") == 0)
+		nvme_setup_cmd(str);
 #endif
 	prompt();
 }

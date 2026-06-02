@@ -45,7 +45,7 @@ from litex.build.generic_platform import *
 
 from litepcie.core.rootport import LitePCIeRootPort
 
-from litenvme.core import LiteNVMe
+from litenvme.core import LiteNVMe, LiteNVMeCoreControl
 from litenvme.cfg  import LiteNVMeRootCfgMgmt
 
 # IOs / Interfaces ---------------------------------------------------------------------------------
@@ -139,14 +139,6 @@ class LiteNVMeCRG(LiteXModule):
                 self.cd_sys.clk.eq(pcie_clk),
                 self.cd_sys.rst.eq(pcie_rst),
             ]
-
-# LiteNVMeCoreControl ------------------------------------------------------------------------------
-
-class LiteNVMeCoreControl(LiteXModule):
-    """init_done / init_error: firmware sets them after NVMe bring-up; wired to top-level pins."""
-    def __init__(self):
-        self.init_done  = CSRStorage()
-        self.init_error = CSRStorage()
 
 # LiteNVMeCore -------------------------------------------------------------------------------------
 

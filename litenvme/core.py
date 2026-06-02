@@ -45,10 +45,23 @@ from migen import *
 
 from litex.gen import *
 
+from litex.soc.interconnect.csr import *
+
 from litenvme.cfg       import LiteNVMePCIeCfgAccessor
 from litenvme.mem       import LiteNVMePCIeMmioAccessor
 from litenvme.hostmem   import LiteNVMeHostMemResponder
 from litenvme.io_engine import LiteNVMeIOEngineAXI
+
+# LiteNVMe Core Control ----------------------------------------------------------------------------
+
+class LiteNVMeCoreControl(LiteXModule):
+    """init_done / init_error: bring-up firmware sets these after NVMe initialization.
+
+    A standalone core wires them to top-level status pins; a test SoC reads them over CSR/
+    Etherbone. User/data logic gates on `init_done & ~init_error` (like LiteDRAM's core)."""
+    def __init__(self):
+        self.init_done  = CSRStorage()
+        self.init_error = CSRStorage()
 
 # LiteNVMe Core ------------------------------------------------------------------------------------
 

@@ -36,6 +36,65 @@ from litenvme.mem       import LiteNVMePCIeMmioAccessor
 from litenvme.hostmem   import LiteNVMeHostMemResponder
 from litenvme.io_engine   import LiteNVMeIOEngineAXI
 from litenvme.request_gen import LiteNVMeRequestGen
+from litenvme.block       import LiteNVMeBlockStreamer
+from litenvme.core        import LiteNVMeCoreControl
+
+# Block-streamer BIST ------------------------------------------------------------------------------
+
+class _BlockBIST(LiteXModule):
+    """CSR-driven counter source / checker around the block streamer's data ports.
+
+    The board has no external data source for wr_sink, so to exercise the streamer end to
+    end over Etherbone we feed wr_sink a per-beat counter and check rd_source against the
+    same sequence: write the counter to an LBA range, read it back, and PASS when errors==0.
+    Counters reset on each streamer `start` (so a write run and the following read run both
+    start the sequence at 0; the SSD round-trip makes the readback match)."""
+    def __init__(self, streamer, data_width):
+        self._sel = CSRStorage(1, description="Engine front-end: 0=request_gen, 1=block streamer.")
+        self.sel  = self._sel.storage
+        self._control = CSRStorage(fields=[
+            CSRField("wr_en", size=1, offset=0, description="Feed wr_sink with a counter pattern."),
+            CSRField("rd_en", size=1, offset=1, description="Check rd_source against the counter."),
+        ])
+        self._errors   = CSRStatus(32, description="Read-back mismatches.")
+        self._wr_beats = CSRStatus(32, description="Beats fed into wr_sink.")
+        self._rd_beats = CSRStatus(32, description="Beats checked from rd_source.")
+
+        # # #
+
+        wr_cnt   = Signal(data_width)
+        rd_cnt   = Signal(data_width)
+        errors   = Signal(32)
+        wr_beats = Signal(32)
+        rd_beats = Signal(32)
+
+        wr_fire = Signal()
+        rd_fire = Signal()
+        self.comb += [
+            streamer.wr_sink.valid.eq(self._control.fields.wr_en),
+            streamer.wr_sink.data.eq(wr_cnt),
+            streamer.rd_source.ready.eq(self._control.fields.rd_en),
+            wr_fire.eq(streamer.wr_sink.valid & streamer.wr_sink.ready),
+            rd_fire.eq(streamer.rd_source.valid & streamer.rd_source.ready),
+            self._errors.status.eq(errors),
+            self._wr_beats.status.eq(wr_beats),
+            self._rd_beats.status.eq(rd_beats),
+        ]
+        self.sync += [
+            If(streamer.start,
+                wr_cnt.eq(0), rd_cnt.eq(0), errors.eq(0), wr_beats.eq(0), rd_beats.eq(0),
+            ).Else(
+                If(wr_fire,
+                    wr_cnt.eq(wr_cnt + 1),
+                    wr_beats.eq(wr_beats + 1),
+                ),
+                If(rd_fire,
+                    rd_cnt.eq(rd_cnt + 1),
+                    rd_beats.eq(rd_beats + 1),
+                    If(streamer.rd_source.data != rd_cnt, errors.eq(errors + 1)),
+                ),
+            ),
+        ]
 
 # CRG ----------------------------------------------------------------------------------------------
 
@@ -64,6 +123,9 @@ class BaseSoC(SoCCore):
         eth_ip          = "192.168.1.50",
         with_io_engine  = False,
         io_engine_qd    = 32,
+        with_block_streamer = False,
+        staging_base    = 0x40000,
+        staging_size    = 0x40000,
         **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = alibaba_xcku3p.Platform()
@@ -209,14 +271,38 @@ class BaseSoC(SoCCore):
             self.comb += io_engine.connect_mmio(self.mmio_db)
             io_engine_masters = [io_engine.axi]
 
+            # Core control (init_done) — firmware raises it after NVMe bring-up so host scripts
+            # over Etherbone can poll readiness before driving the engine.
+            self.nvme_ctrl = LiteNVMeCoreControl()
+
             # Hardware request generator: drives the engine at full rate (no CPU in the
             # steady-state loop) and counts completions/cycles/errors, so the engine's
             # true throughput can be measured. Firmware programs it via nvme_gen_* CSRs.
             self.nvme_gen = nvme_gen = LiteNVMeRequestGen(with_csr=True)
-            self.comb += [
-                nvme_gen.source.connect(io_engine.sink),
-                io_engine.source.connect(nvme_gen.sink),
-            ]
+
+            # Optional block streamer (the LiteSATA-style front-end) for correctness testing
+            # over Etherbone. Both front-ends are present; a 1-bit CSR muxes which one owns the
+            # engine streams (0 = request_gen / throughput, 1 = block streamer / correctness).
+            if with_block_streamer:
+                self.nvme_block = nvme_block = LiteNVMeBlockStreamer(
+                    data_width=self.pcie_phy.data_width, hostmem_base=hostmem_base,
+                    staging_base=staging_base, staging_size=staging_size, with_csr=True)
+                io_engine_masters.append(nvme_block.dma.axi)
+                self.nvme_block_bist = bist = _BlockBIST(nvme_block, self.pcie_phy.data_width)
+
+                sel = bist.sel
+                self.comb += If(sel,
+                    *nvme_block.source.connect(io_engine.sink),
+                    *io_engine.source.connect(nvme_block.sink),
+                ).Else(
+                    *nvme_gen.source.connect(io_engine.sink),
+                    *io_engine.source.connect(nvme_gen.sink),
+                )
+            else:
+                self.comb += [
+                    nvme_gen.source.connect(io_engine.sink),
+                    io_engine.source.connect(nvme_gen.sink),
+                ]
 
         self.hostmem_port = endpoint.crossbar.get_slave_port(address_decoder=hostmem_decoder)
         self.hostmem = LiteNVMeHostMemResponder(
@@ -354,6 +440,7 @@ def main():
     parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
     parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
+    parser.add_argument("--with-block-streamer", action="store_true",                  help="Add the block-streamer front-end + BIST (Etherbone correctness).")
     args = parser.parse_args()
 
     def build_soc(cpu_firmware=None, force_run=None):
@@ -365,6 +452,7 @@ def main():
             with_etherbone = args.with_etherbone,
             with_io_engine = args.with_io_engine,
             io_engine_qd   = args.io_engine_qd,
+            with_block_streamer = args.with_block_streamer,
             **parser.soc_argdict,
         )
         if args.litescope_probe == "pcie":
