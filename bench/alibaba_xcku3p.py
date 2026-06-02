@@ -473,9 +473,10 @@ def main():
         # First build to generate software headers.
         soc, builder = build_soc(cpu_firmware=None, force_run=False)
 
-        # Compile firmware against generated headers.
+        # Compile firmware against generated headers. BUILD_DIR must be absolute: the firmware
+        # make runs with `-C firmware`, so a relative output_dir would resolve under firmware/.
         fw_dir = os.path.join(os.path.dirname(__file__), "firmware")
-        build_dir = builder.output_dir
+        build_dir = os.path.abspath(builder.output_dir)
         os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} BOOT={args.cpu_boot} clean all")
 
         # Second build:
