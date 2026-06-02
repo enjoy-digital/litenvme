@@ -59,17 +59,27 @@ layer supports in principle — it is future work here, not an architectural lim
 ## Resource footprint context
 
 Per-LUT/FF resource numbers are essentially **never published** by the commercial cores, so a
-direct logic comparison isn't possible. The one published data point is memory:
+direct logic comparison isn't possible. The one comparable published axis is memory:
 
-- **Design Gateway NVMe-IP**: ~**66 BRAM tiles** (standard), or **8 URAM + 2 BRAM** with the URAM
-  option, plus a 256 KB internal data buffer — CPU-less, no DDR.
-- **LiteNVMe**: BRAM-dominated, scaling with the host-memory window — ~**114 BRAM tiles for a
-  512 KB window** (≈ 66 for a 256 KB window, matching Design Gateway's class), 0 URAM, ~0 DSP,
-  plus a small VexRiscv (~2.3 k LUT) used only for one-time bring-up. See
-  `doc/STANDALONE_CORE.md` §5 for the full breakdown.
+| Core | LUT | FF | BRAM tiles | URAM | DSP | Data buffer |
+|------|----:|---:|-----------:|-----:|----:|-------------|
+| **LiteNVMe** (256 KB window) | n/p\* | n/p\* | ~66 | 0 | ~0 | 256 KB host-mem window |
+| **LiteNVMe** (512 KB window) | n/p\* | n/p\* | ~114 | 0 | ~0 | 512 KB host-mem window |
+| Design Gateway NVMe-IP (std) | n/p | n/p | 66 | 0 | n/p | 256 KB internal RAM |
+| Design Gateway NVMe-IP (URAM)| n/p | n/p | 2 | 8 | n/p | 256 KB internal RAM |
+| IntelliProp / iWave          | n/p | n/p | n/p | n/p | n/p | user-defined (BRAM/DDR) |
 
-So LiteNVMe is in the **same memory/area class** as a commercial CPU-less host IP, while being
-open source and giving exact, reproducible numbers.
+\* Core-only soft logic was **not** independently synthesized out-of-context. The measured
+**reference test SoC** (Gen3 x4, XCKU3P, post-place) — which additionally includes the
+Ethernet/Etherbone bridge, the request-generator/BIST harness and the bring-up VexRiscv — totals
+**14,699 LUT / 18,765 FF / 325 BRAM tiles / 0 URAM / 2 DSP**, of which the PCIe hard-IP wrapper is
+1,326 LUT / 4,912 FF / 22 BRAM and the VexRiscv is ~2,295 LUT. The standalone core (no harness) is
+smaller. Full breakdown: `doc/STANDALONE_CORE.md` §5.
+
+So on the one axis everyone reports — memory — LiteNVMe is in the **same class** as a commercial
+CPU-less host IP (~66 BRAM for an equivalent 256 KB buffer), while being open source and giving
+exact, reproducible numbers. Its BRAM is the tunable cost (`hostmem_size`, or a DDR-backed
+backend); the competitors with a URAM option trade BRAM for URAM the same way.
 
 ## Takeaways
 
