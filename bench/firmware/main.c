@@ -153,27 +153,16 @@ static void help(void)
 	puts("help               - Show this command");
 	puts("reboot             - Reboot CPU");
 	puts("status             - Print PCIe link + hostmem counters");
-	puts("cfg_rd <reg>       - Read CFG dword (reg index)");
-	puts("cfg_wr <reg> <v>   - Write CFG dword (reg index)");
 	puts("cmd_enable         - Set Command.MEM + Command.BME");
 	puts("cmd_disable        - Clear Command.MEM + Command.BME");
 	puts("nvme_reset         - Clear cached NVMe init state and disable controller");
-	puts("mmio_warn_writes <0|1> - Enable/disable warnings on MMIO writes (default 0)");
-	puts("nvme_debug <0|1>   - Enable/disable NVMe debug prints");
 	puts("nvme_fill <pattern> - Set write buffer fill pattern (hex)");
-	puts("mmio_rd <addr>     - MMIO read dword at absolute address");
-	puts("mmio_wr <addr> <v> - MMIO write dword at absolute address");
-	puts("mmio_dump <addr> <len> [s] - Dump MMIO space (bytes), optional stride");
 	puts("nvme_identify [bar0] [cid] - Auto BAR0 assign + enable MEM/BME/INTx off + Identify");
 	puts("nvme_read [bar0] [nsid] [slba] [nlb]  - Read NLB blocks into hostmem");
-	puts("nvme_read_dump [bar0] [nsid] [slba] [nlb] [dwords] - Read + dump hostmem");
-	puts("nvme_write_readback [bar0] [nsid] [slba] [nlb] [dwords] - Write then read+dump");
 	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
-	puts("nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] [qd] - Run IOPS/MBps benchmark (qd=queue depth)");
 #if NVME_ENGINE_AVAILABLE
 	puts("nvme_engine_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] - Benchmark the HW I/O engine (RTL-driven)");
-	puts("nvme_engine_diag <read|write> [bar0] [nsid] [slba] [nlb] [count] - On-chip engine diagnostic: config readback, run trace, SQ/CQ dump");
 #endif
 }
 
@@ -400,55 +389,6 @@ static int mmio_wr64(uint64_t addr, uint64_t val)
 	return 0;
 }
 
-static void mmio_rd_cmd(char *str)
-{
-	uint64_t addr = strtoull(str, NULL, 0);
-	uint32_t v = 0;
-	if (mmio_rd32(addr, &v))
-		printf("ERR\n");
-	else
-		printf("0x%08" PRIx32 "\n", v);
-}
-
-static void mmio_wr_cmd(char *str)
-{
-	char *a = get_token(&str);
-	char *b = get_token(&str);
-	uint64_t addr = strtoull(a, NULL, 0);
-	uint32_t v    = (uint32_t)strtoul(b, NULL, 0);
-	if (mmio_wr32(addr, v))
-		printf("ERR\n");
-}
-
-static void mmio_dump_cmd(char *str)
-{
-	char *a = get_token(&str);
-	char *b = get_token(&str);
-	char *c = get_token(&str);
-	uint64_t addr = strtoull(a, NULL, 0);
-	uint32_t len  = (uint32_t)strtoul(b, NULL, 0);
-	uint32_t stride = c ? (uint32_t)strtoul(c, NULL, 0) : 4;
-	if (stride == 0)
-		stride = 4;
-	for (uint32_t off = 0; off < len; off += stride) {
-		uint32_t v = 0;
-		mmio_rd32(addr + off, &v);
-		printf("0x%08" PRIx32 ": 0x%08" PRIx32 "\n", off, v);
-	}
-}
-
-static void mmio_warn_writes_cmd(char *str)
-{
-	mmio_warn_writes = (int)strtoul(str, NULL, 0) ? 1 : 0;
-	printf("mmio_warn_writes = %d\n", mmio_warn_writes);
-}
-
-static void nvme_debug_cmd(char *str)
-{
-	nvme_debug = (int)strtoul(str, NULL, 0) ? 1 : 0;
-	printf("nvme_debug = %d\n", nvme_debug);
-}
-
 static void nvme_fill_cmd(char *str)
 {
 	nvme_fill_pattern = (uint32_t)strtoul(str, NULL, 0);
@@ -574,28 +514,6 @@ static int cfg_wr32(uint8_t reg, uint32_t val)
 	cfg_ctrl_write(1 | (1 << 1));
 	cfg_ctrl_write(0);
 	return cfg_wait_done(1000000);
-}
-
-static void cfg_rd_cmd(char *str)
-{
-	uint8_t reg = (uint8_t)strtoul(str, NULL, 0);
-	uint32_t v = 0;
-	if (cfg_rd32(reg, &v))
-		printf("ERR\n");
-	else
-		printf("0x%08" PRIx32 "\n", v);
-	if (cfg_last_err)
-		puts("WARN: cfg_rd err=1 (read may still be valid).");
-}
-
-static void cfg_wr_cmd(char *str)
-{
-	char *a = get_token(&str);
-	char *b = get_token(&str);
-	uint8_t reg = (uint8_t)strtoul(a, NULL, 0);
-	uint32_t v  = (uint32_t)strtoul(b, NULL, 0);
-	if (cfg_wr32(reg, v))
-		printf("WARN: cfg_wr err=1 (write may still be accepted)\n");
 }
 
 static int cfg_rd32_retry(uint8_t reg, uint32_t *val, int tries);  /* defined below */
@@ -1233,101 +1151,6 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	return cqe_ok(cqe[3]) ? 0 : 1;
 }
 
-/*
- * Queue-depth (QD>1) benchmark window: keep up to `qd` commands in flight using a
- * sliding window over the IO SQ/CQ rings.
- *
- * - Submits up to `qd` commands (one SQE per slot, distinct per-slot PRP1 buffer),
- *   advancing io_sq_tail, then rings the SQ doorbell ONCE per batch (coalesced).
- * - Reaps all currently-complete CQEs by phase bit (draining the CQ in order),
- *   refilling the window as slots free, then rings the CQ doorbell once per batch.
- *
- * Uses the persistent io_sq_tail / io_cq_head / io_cq_phase globals so it stays in sync
- * with the device across calls. No per-slot CQ pre-clear is needed: a stale CQE keeps
- * the previous lap's phase, which never matches the expected flipped phase.
- *
- * CID == SQ slot index. Completions may arrive out of order; we only count them and
- * check status. Reuse of slot/buffer i is safe because at most qd < IO_Q_ENTRIES
- * commands are outstanding (the command that last used slot i, IO_Q_ENTRIES submissions
- * ago, is guaranteed complete).
- *
- * Returns 0 on success, 1 on CQ timeout. *errors_out gets the count of failed CQEs.
- */
-static int nvme_io_bench_window(uint64_t cap, int do_write, uint32_t nsid,
-                                uint64_t slba, uint32_t step, uint16_t nlb_m1,
-                                uint32_t count, uint32_t qd, uint32_t *errors_out)
-{
-	uint64_t db_sq = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
-	uint64_t db_cq = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
-	uint32_t submitted = 0, completed = 0, inflight = 0;
-	uint64_t lba = slba;
-	uint32_t errors = 0;
-	uint32_t cmd[16];
-	uint32_t timeout_start = bench_timer_get();
-
-	if (qd < 1)         qd = 1;
-	if (qd > IO_QD_MAX) qd = IO_QD_MAX;
-
-	while (completed < count) {
-		/* Fill the in-flight window. */
-		int rang_sq = 0;
-		while (inflight < qd && submitted < count) {
-			uint16_t slot = io_sq_tail;
-			uint16_t cid  = slot;
-			uint64_t buf  = IO_BUF(slot);
-			if (do_write)
-				nvme_cmd_write(cid, nsid, buf, lba, nlb_m1, cmd);
-			else
-				nvme_cmd_read(cid, nsid, buf, lba, nlb_m1, cmd);
-
-			uint32_t sqe_addr = IO_SQ_ADDR + slot * 64;
-			for (int i = 0; i < 16; i++)
-				hostmem_wr32(sqe_addr + i * 4, cmd[i]);
-
-			io_sq_tail = (io_sq_tail + 1) % IO_Q_ENTRIES;
-			submitted++;
-			inflight++;
-			lba += step;
-			rang_sq = 1;
-			bench_io_submit_count++;
-		}
-		if (rang_sq)
-			(void)mmio_wr32(db_sq, io_sq_tail);
-
-		/* Reap everything currently complete (phase-bit scan). */
-		int reaped = 0;
-		for (;;) {
-			bench_io_poll_loops++;
-			uint32_t d3 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 12);
-			if (((d3 >> 16) & 0x1u) != io_cq_phase)
-				break;
-			uint32_t sts = (d3 >> 16) & 0xffffu;
-			uint32_t sc  = (sts >> 1) & 0xffu;
-			uint32_t sct = (sts >> 9) & 0x7u;
-			if (sc || sct)
-				errors++;
-			io_cq_head = (io_cq_head + 1) % IO_Q_ENTRIES;
-			if (io_cq_head == 0)
-				io_cq_phase ^= 1u;
-			completed++;
-			inflight--;
-			reaped++;
-		}
-		if (reaped) {
-			(void)mmio_wr32(db_cq, io_cq_head);
-			timeout_start = bench_timer_get();  /* progress: reset watchdog. */
-		} else if (bench_timeout_expired(timeout_start, NVME_CQE_TIMEOUT_TICKS)) {
-			if (errors_out)
-				*errors_out = errors;
-			return 1;
-		}
-	}
-
-	if (errors_out)
-		*errors_out = errors;
-	return 0;
-}
-
 static void nvme_identify_cmd(char *str)
 {
 	uint64_t base_addr = 0xe0000000ull;
@@ -1400,88 +1223,6 @@ static uint8_t pcie_express_cap_offset(void)
 	return 0;
 }
 
-static void nvme_mps_cmd(char *str)
-{
-	int do_set = 0, do_dump = 0, mps_only = 0;
-	uint32_t target = 0;
-	char *a = (str && strlen(str)) ? get_token(&str) : NULL;
-	if (a && strlen(a) && (strcmp(a, "set") == 0 || strcmp(a, "setmps") == 0)) {
-		do_set = 1;
-		mps_only = (strcmp(a, "setmps") == 0);  /* setmps: change MPS only, leave MRRS intact. */
-		char *t = get_token(&str);
-		if (t && strlen(t)) target = (uint32_t)strtoul(t, NULL, 0);
-		if (target > 5) { puts("ERR: mps encoding must be 0..5 (128..4096B)."); return; }
-	} else if (a && strlen(a) && strcmp(a, "dump") == 0) {
-		do_dump = 1;
-	}
-
-	/* Prime the CFG accessor exactly like every other nvme command: nvme_bar0_assign drives the
-	 * initial cfg reads that put the PCIe cfg-management interface into the completing state.
-	 * Skipping it leaves cfg_rd32 timing out (err=1) and returning stale rdata. It is cached
-	 * (returns early once BAR0 is assigned), so this does not re-size or disturb the live BAR. */
-	if (nvme_bar0_assign(0xe0000000ull)) { puts("ERR: BAR0 assign failed (no device?)."); return; }
-
-	if (do_dump) {
-		for (int dw = 0; dw < 0x10; dw++) {
-			uint32_t v = 0; cfg_rd32_stable(dw, &v);
-			printf("cfg[0x%02x]=%08x\n", dw * 4, (unsigned)v);
-		}
-		/* Trace the capability walk so we can see exactly where it stops. */
-		uint32_t v = 0;
-		cfg_rd32_stable(1, &v);
-		printf("status=%08x capslist=%u\n", (unsigned)v, (unsigned)((v >> 20) & 1));
-		cfg_rd32_stable(0x34 / 4, &v);
-		uint8_t off = v & 0xfc;
-		printf("capptr=0x%02x\n", off);
-		for (int g = 0; g < 48 && off >= 0x40; g++) {
-			if (cfg_rd32_stable(off / 4, &v)) { printf("  walk @0x%02x READ-ERR\n", off); break; }
-			printf("  cap @0x%02x id=0x%02x next=0x%02x\n",
-			       off, (unsigned)(v & 0xff), (unsigned)((v >> 8) & 0xfc));
-			if ((v & 0xff) == 0x10) { printf("  -> Express Cap @0x%02x\n", off); break; }
-			off = (v >> 8) & 0xfc;
-		}
-		return;
-	}
-
-	uint8_t cap = pcie_express_cap_offset();
-	if (!cap) { puts("ERR: PCIe Express Capability not found."); return; }
-
-	uint32_t devcap = 0, dc = 0;
-	if (cfg_rd32_stable((cap + 0x04) / 4, &devcap) || cfg_rd32_stable((cap + 0x08) / 4, &dc)) {
-		puts("ERR: DevCap/DevCtl read failed."); return;
-	}
-	uint32_t mps_sup = devcap & 0x7;
-	printf("SSD : mps_supported=%u (%sB)  devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
-	       (unsigned)mps_sup, mps_str(mps_sup),
-	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
-	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
-	/* Our root complex's operational MPS/MRRS, straight from the hard IP (already in bytes). */
-#ifdef CSR_PCIE_PHY_PHY_MAX_PAYLOAD_SIZE_ADDR
-	printf("RC  : op_mps=%uB  op_mrrs=%uB  (root complex; firmware cannot raise this)\n",
-	       (unsigned)pcie_phy_phy_max_payload_size_read(),
-	       (unsigned)pcie_phy_phy_max_request_size_read());
-#endif
-
-	if (!do_set) return;
-
-	if (target > mps_sup) {
-		printf("WARN: target %u > supported %u, clamping.\n", (unsigned)target, (unsigned)mps_sup);
-		target = mps_sup;
-	}
-	/* Preserve DevCtl bits other than the fields we change; keep DevSts (upper half).
-	 * Default sets both MPS[7:5] and MRRS[14:12]; 'setmps' changes MPS only (MRRS untouched). */
-	uint32_t clr  = mps_only ? (0x7u << 5) : ((0x7u << 5) | (0x7u << 12));
-	uint32_t setb = mps_only ? ((target & 0x7u) << 5)
-	                         : (((target & 0x7u) << 5) | ((target & 0x7u) << 12));
-	uint32_t newctl = (dc & ~clr) | setb;
-	if (cfg_wr32((cap + 0x08) / 4, (dc & 0xffff0000u) | (newctl & 0xffffu)))
-		puts("WARN: DevCtl write err=1.");
-	if (cfg_rd32_stable((cap + 0x08) / 4, &dc)) { puts("ERR: DevCtl re-read failed."); return; }
-	printf("after: devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
-	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
-	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
-}
-
 /* ---- Root Port local config space (via the hard-IP cfg_mgmt bridge) ----------------------------
  * Unlike cfg_rd32/cfg_wr32 (which issue CFG TLPs to the downstream SSD), these reach OUR root
  * port's own config space, so we can raise the root port's DevCtl.MPS (the read bottleneck). */
@@ -1510,31 +1251,6 @@ static int rootcfg_wr32(uint16_t byte_off, uint32_t val, uint32_t be) { return r
 
 /* Generic debug command: rootcfg rd <dwaddr> | rootcfg wr <dwaddr> <val> [be]. dwaddr is a
  * DWORD index into the root port's own config space (byte_off/4). */
-static void rootcfg_cmd(char *str)
-{
-	char *op = get_token(&str);
-	if (!op || !strlen(op)) { puts("usage: rootcfg rd <dw> | rootcfg wr <dw> <val> [be]"); return; }
-	uint16_t dw = (uint16_t)strtoul(get_token(&str), NULL, 0);
-	if (strcmp(op, "rd") == 0) {
-		uint32_t v = 0;
-		if (rootcfg_op(dw, 0, 0, 0xf, &v)) { puts("ERR: rootcfg rd timeout."); return; }
-		printf("rootcfg[dw 0x%03x] = 0x%08x\n", (unsigned)dw, (unsigned)v);
-	} else if (strcmp(op, "wr") == 0) {
-		uint32_t val = (uint32_t)strtoul(get_token(&str), NULL, 0);
-		char *bt = get_token(&str);
-		uint32_t be = (bt && strlen(bt)) ? (uint32_t)strtoul(bt, NULL, 0) : 0xf;
-		uint32_t v0 = 0, v1 = 0;
-		rootcfg_op(dw, 0, 0, 0xf, &v0);
-		if (rootcfg_op(dw, 1, val, be, NULL)) { puts("WARN: rootcfg wr timeout."); }
-		rootcfg_op(dw, 0, 0, 0xf, &v1);
-		printf("rootcfg[dw 0x%03x]: before=0x%08x wrote=0x%08x be=0x%x after=0x%08x %s\n",
-		       (unsigned)dw, (unsigned)v0, (unsigned)val, (unsigned)be, (unsigned)v1,
-		       (v1 == v0) ? "(UNCHANGED)" : "(changed)");
-	} else {
-		puts("usage: rootcfg rd <dw> | rootcfg wr <dw> <val> [be]");
-	}
-}
-
 /* Find the PCIe Express Capability (id 0x10) in the root port's own config space. */
 static uint16_t rootcfg_express_cap(void)
 {
@@ -1549,63 +1265,6 @@ static uint16_t rootcfg_express_cap(void)
 	return 0;
 }
 
-static void rootmps_cmd(char *str)
-{
-	int do_set = 0, mps_only = 0;
-	uint32_t target = 0;
-	char *a = (str && strlen(str)) ? get_token(&str) : NULL;
-	if (a && strlen(a) && (strcmp(a, "set") == 0 || strcmp(a, "setmps") == 0)) {
-		do_set = 1;
-		mps_only = (strcmp(a, "setmps") == 0);
-		char *t = get_token(&str);
-		if (t && strlen(t)) target = (uint32_t)strtoul(t, NULL, 0);
-		if (target > 5) { puts("ERR: mps encoding must be 0..5 (128..4096B)."); return; }
-	}
-
-	uint32_t id = 0;
-	if (rootcfg_rd32(0x00, &id)) { puts("ERR: rootcfg read timeout (cfg_mgmt)."); return; }
-	printf("RootPort VID/DID = 0x%08" PRIx32 "\n", id);
-
-	uint16_t cap = rootcfg_express_cap();
-	if (!cap) { puts("ERR: root PCIe Express Capability not found."); return; }
-	printf("RootPort Express Cap @ 0x%02x\n", (unsigned)cap);
-
-	uint32_t devcap = 0, dc = 0;
-	if (rootcfg_rd32(cap + 0x04, &devcap) || rootcfg_rd32(cap + 0x08, &dc)) {
-		puts("ERR: root DevCap/DevCtl read failed."); return;
-	}
-	printf("Root: mps_supported=%u (%sB)  devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
-	       (unsigned)(devcap & 0x7), mps_str(devcap & 0x7),
-	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
-	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
-#ifdef CSR_PCIE_PHY_PHY_MAX_PAYLOAD_SIZE_ADDR
-	printf("RC op (hard IP): op_mps=%uB  op_mrrs=%uB\n",
-	       (unsigned)pcie_phy_phy_max_payload_size_read(),
-	       (unsigned)pcie_phy_phy_max_request_size_read());
-#endif
-
-	if (!do_set) return;
-
-	uint32_t mps_sup = devcap & 0x7;
-	if (target > mps_sup) {
-		printf("WARN: target %u > supported %u, clamping.\n", (unsigned)target, (unsigned)mps_sup);
-		target = mps_sup;
-	}
-	uint32_t clr  = mps_only ? (0x7u << 5) : ((0x7u << 5) | (0x7u << 12));
-	uint32_t setb = mps_only ? ((target & 0x7u) << 5)
-	                         : (((target & 0x7u) << 5) | ((target & 0x7u) << 12));
-	uint32_t newctl = (dc & ~clr) | setb;
-	/* Write only the low 16b (DevCtl); byte-enable the lower two bytes, keep DevSts. */
-	if (rootcfg_wr32(cap + 0x08, (dc & 0xffff0000u) | (newctl & 0xffffu), 0x3))
-		puts("WARN: root DevCtl write timeout.");
-	if (rootcfg_rd32(cap + 0x08, &dc)) { puts("ERR: root DevCtl re-read failed."); return; }
-	printf("after: root devctl_mps=%u (%sB)  mrrs=%u (%sB)\n",
-	       (unsigned)((dc >> 5) & 0x7), mps_str((dc >> 5) & 0x7),
-	       (unsigned)((dc >> 12) & 0x7), mps_str((dc >> 12) & 0x7));
-#ifdef CSR_PCIE_PHY_PHY_MAX_PAYLOAD_SIZE_ADDR
-	printf("RC op (hard IP) now: op_mps=%uB\n", (unsigned)pcie_phy_phy_max_payload_size_read());
-#endif
-}
 #endif /* CSR_PCIE_ROOTCFG_CTRL_ADDR */
 
 /* Auto-raise MaxPayloadSize on both ends to the link maximum = min(root DevCap, SSD DevCap).
@@ -1639,6 +1298,11 @@ static void nvme_configure_mps_once(void)
 	uint32_t snew = (sdc & ~(0x7u << 5)) | ((target & 0x7u) << 5);
 	cfg_wr32((scap + 0x08) / 4, (sdc & 0xffff0000u) | (snew & 0xffffu));
 
+	/* Root-port bridge memory window (config byte 0x20 = MemLimit[31:16]|MemBase[15:0], each
+	 * [15:4] = addr[31:20]). Cover 0xe000_0000..0xe00f_ffff so the root forwards our MemRd/MemWr
+	 * to the SSD BAR0 (otherwise a UR/no-data completion). */
+	rootcfg_wr32(0x20, 0xe000e000u, 0xf);
+
 	done = 1;
 	printf("MPS auto-set: enc=%u (%sB)  [root_sup=%u ssd_sup=%u]\n",
 	       (unsigned)target, mps_str(target), (unsigned)root_sup, (unsigned)ssd_sup);
@@ -1647,38 +1311,6 @@ static void nvme_configure_mps_once(void)
 
 /* Isolate MMIO read vs write at the current datapath width (debug): assign BAR0 (cfg), read
  * CAP/CSTS/CC, then write AQA and read it back. No admin init, no CC enable. */
-static void nvme_mmiotest_cmd(void)
-{
-	if (nvme_bar0_assign(0xe0000000ull)) { puts("ERR: bar0 assign failed."); return; }
-	cmd_enable_cmd();  /* enable memory space + bus master (else BAR0 ignores MMIO) */
-	{ uint32_t cmdsts = 0; cfg_rd32_retry(1, &cmdsts, 5);
-	  printf("bar0_base=0x%llx  CMD/STS=0x%08x (MEM=%d BME=%d)\n",
-	         (unsigned long long)bar0_base, (unsigned)cmdsts, (int)((cmdsts>>1)&1), (int)((cmdsts>>2)&1)); }
-#ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
-	/* Root-port bridge memory window (byte 0x20 = MemLimit[31:16]|MemBase[15:0], each [15:4]=
-	 * addr[31:20]). Set to cover 0xe000_0000..0xe00f_ffff so the root forwards our MemRd downstream
-	 * to the SSD BAR0 (a UR/no-data completion otherwise -> reads return 0). */
-	rootcfg_wr32(0x20, 0xe000e000u, 0xf);
-	{ uint32_t mw = 0; rootcfg_rd32(0x20, &mw); printf("root MemBase/Limit(0x20)=0x%08x\n", (unsigned)mw); }
-#endif
-	uint64_t cap = 0; uint32_t csts = 0, cc = 0, rb = 0;
-	int e1 = mmio_rd64(bar0_base + NVME_CAP,  &cap);
-	int e2 = mmio_rd32(bar0_base + NVME_CSTS, &csts);
-	int e3 = mmio_rd32(bar0_base + NVME_CC,   &cc);
-	printf("MMIO RD: cap=0x%016llx(e%d) csts=0x%08x(e%d) cc=0x%08x(e%d)\n",
-	       (unsigned long long)cap, e1, (unsigned)csts, e2, (unsigned)cc, e3);
-	uint32_t tv = 0x003f003f;
-	int e4 = mmio_wr32(bar0_base + NVME_AQA, tv);
-	int e5 = mmio_rd32(bar0_base + NVME_AQA, &rb);
-	printf("MMIO WR32: AQA<=0x%08x(e%d) readback=0x%08x(e%d) %s\n",
-	       (unsigned)tv, e4, (unsigned)rb, e5, (rb == tv) ? "MATCH" : "MISMATCH");
-	int e6 = mmio_wr64(bar0_base + NVME_ASQ, 0x12340000ull);
-	uint32_t lo = 1, hi = 1; int e7 = mmio_rd32(bar0_base + NVME_ASQ, &lo); int e8 = mmio_rd32(bar0_base + NVME_ASQ + 4, &hi);
-	printf("MMIO WR64: ASQ<=0x12340000 (e%d) readback=0x%08x%08x (e%d/%d)\n", e6, (unsigned)hi, (unsigned)lo, e7, e8);
-	uint32_t csts2 = 0; int e9 = mmio_rd32(bar0_base + NVME_CSTS, &csts2);
-	printf("MMIO post-write CSTS: 0x%08x (e%d) %s\n", (unsigned)csts2, e9, e9 ? "TIMEOUT(wedged)" : "ok");
-}
-
 static int nvme_io_setup(uint64_t cap)
 {
 	if (nvme_io_ready)
@@ -1701,15 +1333,6 @@ static int nvme_io_setup(uint64_t cap)
 	if (nvme_admin_submit(cap, cmd, cqe)) {
 		puts("ERR: Create IO CQ failed.");
 		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
-		/* Diagnostic: dump the admin CQ region (slots 0..3). Tells us WHERE the SSD's CQE
-		 * landed -- slot 1 (correct) vs slot 0 (sub-beat write misalignment). */
-		printf("ACQ dump @0x%08x:\n", (unsigned)ACQ_ADDR);
-		for (uint32_t s = 0; s < 4; s++) {
-			uint32_t a = ACQ_ADDR + s * 16;
-			printf("  slot%u(+0x%02x): %08x %08x %08x %08x\n", s, s * 16,
-			       (unsigned)hostmem_rd32(a + 0), (unsigned)hostmem_rd32(a + 4),
-			       (unsigned)hostmem_rd32(a + 8), (unsigned)hostmem_rd32(a + 12));
-		}
 		return 1;
 	}
 
@@ -1769,187 +1392,6 @@ static void print_fixed3_u64(const char *label, uint64_t numer, uint64_t denom, 
 	whole = numer / denom;
 	frac  = ((numer % denom) * 1000ull) / denom;
 	printf("%s: %" PRIu64 ".%03" PRIu64 " %s\n", label, whole, frac, unit);
-}
-
-static void nvme_bench_cmd(char *str)
-{
-	const char *op_name = "read";
-	int do_write = 0;
-	uint64_t base_addr = 0xe0000000ull;
-	uint32_t nsid = 1;
-	uint64_t slba = 0;
-	uint32_t nlb  = 1;
-	uint32_t count = 100;
-	uint32_t step = 0;
-	uint32_t warmup = 1;
-	uint32_t qd = 1;
-	uint32_t bench_errors = 0;
-	uint64_t cap = 0;
-	uint32_t setup_tick_start, setup_tick_end;
-	uint32_t io_tick_start, io_tick_end;
-	uint64_t setup_ticks, io_ticks, total_ticks;
-	uint64_t total_bytes;
-	uint64_t rd_before = 0, rd_after = 0;
-	uint64_t wr_before = 0, wr_after = 0;
-	uint64_t mmio_rd_before, mmio_rd_after;
-	uint64_t mmio_wr_before, mmio_wr_after;
-	uint64_t mmio_wait_before, mmio_wait_after;
-	uint64_t mmio_rd_ticks_before, mmio_rd_ticks_after;
-	uint64_t mmio_wr_ticks_before, mmio_wr_ticks_after;
-	uint64_t admin_submit_before, admin_submit_after;
-	uint64_t io_submit_before, io_submit_after;
-	uint64_t admin_poll_before, admin_poll_after;
-	uint64_t io_poll_before, io_poll_after;
-	uint64_t lba;
-	uint32_t cmd[16];
-	uint32_t cqe[4];
-
-	if (str == NULL || strlen(str) == 0) {
-		puts("usage: nvme_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] [warmup] [qd]");
-		return;
-	}
-
-	char *a = get_token(&str);
-	char *b = get_token(&str);
-	char *c = get_token(&str);
-	char *d = get_token(&str);
-	char *e = get_token(&str);
-	char *f = get_token(&str);
-	char *g = get_token(&str);
-	char *h = get_token(&str);
-	char *iq = get_token(&str);
-
-	if (a && strlen(a)) {
-		if (strcmp(a, "write") == 0) {
-			do_write = 1;
-			op_name = "write";
-		} else if (strcmp(a, "read") != 0) {
-			puts("ERR: op must be 'read' or 'write'.");
-			return;
-		}
-	}
-	if (b && strlen(b)) base_addr = strtoull(b, NULL, 0);
-	if (c && strlen(c)) nsid = (uint32_t)strtoul(c, NULL, 0);
-	if (d && strlen(d)) slba = strtoull(d, NULL, 0);
-	if (e && strlen(e)) nlb  = (uint32_t)strtoul(e, NULL, 0);
-	if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
-	if (g && strlen(g)) step = (uint32_t)strtoul(g, NULL, 0);
-	if (h && strlen(h)) warmup = (uint32_t)strtoul(h, NULL, 0);
-	if (iq && strlen(iq)) qd = (uint32_t)strtoul(iq, NULL, 0);
-
-	if (nlb == 0) {
-		puts("ERR: nlb must be >= 1.");
-		return;
-	}
-	if (nlb > 8) {
-		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
-		return;
-	}
-	if (count == 0) {
-		puts("ERR: count must be >= 1.");
-		return;
-	}
-	if (qd < 1)         qd = 1;
-	if (qd > IO_QD_MAX) qd = IO_QD_MAX;
-
-	setup_tick_start = bench_timer_get();
-	if (nvme_bar0_assign(base_addr))
-		return;
-	if (nvme_admin_init(&cap))
-		return;
-	if (nvme_io_setup(cap))
-		return;
-	setup_tick_end = bench_timer_get();
-	setup_ticks = bench_ticks_elapsed(setup_tick_start, setup_tick_end);
-
-	/* Prefill per-slot data buffers (write source pattern; read dest cleared). */
-	for (uint32_t s = 0; s < qd; s++)
-		hostmem_fill(IO_BUF(s), 0x1000, do_write ? nvme_fill_pattern : 0);
-
-	(void)cmd; (void)cqe;
-
-	/* Warmup window (excluded from timing). */
-	if (warmup) {
-		if (nvme_io_bench_window(cap, do_write, nsid, slba, step,
-		                         (uint16_t)(nlb - 1), warmup, qd, &bench_errors)) {
-			printf("ERR: warmup %s timed out\n", op_name);
-			return;
-		}
-	}
-
-	mmio_rd_before       = bench_mmio_rd32_count;
-	mmio_wr_before       = bench_mmio_wr32_count;
-	mmio_wait_before     = bench_mmio_wait_loops;
-	mmio_rd_ticks_before = bench_mmio_rd_ticks;
-	mmio_wr_ticks_before = bench_mmio_wr_ticks;
-	admin_submit_before  = bench_admin_submit_count;
-	io_submit_before     = bench_io_submit_count;
-	admin_poll_before    = bench_admin_poll_loops;
-	io_poll_before       = bench_io_poll_loops;
-
-#ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
-	rd_before = hostmem_csr_dma_rd_count_read();
-#endif
-#ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
-	wr_before = hostmem_csr_dma_wr_count_read();
-#endif
-
-	io_tick_start = bench_timer_get();
-	lba = slba + (uint64_t)warmup * step;
-	bench_errors = 0;
-	if (nvme_io_bench_window(cap, do_write, nsid, lba, step,
-	                         (uint16_t)(nlb - 1), count, qd, &bench_errors)) {
-		printf("ERR: benchmark %s timed out (completed < count)\n", op_name);
-		return;
-	}
-	io_tick_end = bench_timer_get();
-	io_ticks = bench_ticks_elapsed(io_tick_start, io_tick_end);
-	total_ticks = setup_ticks + io_ticks;
-
-#ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
-	rd_after = hostmem_csr_dma_rd_count_read();
-#endif
-#ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
-	wr_after = hostmem_csr_dma_wr_count_read();
-#endif
-	mmio_rd_after      = bench_mmio_rd32_count;
-	mmio_wr_after      = bench_mmio_wr32_count;
-	mmio_wait_after    = bench_mmio_wait_loops;
-	mmio_rd_ticks_after = bench_mmio_rd_ticks;
-	mmio_wr_ticks_after = bench_mmio_wr_ticks;
-	admin_submit_after = bench_admin_submit_count;
-	io_submit_after    = bench_io_submit_count;
-	admin_poll_after   = bench_admin_poll_loops;
-	io_poll_after      = bench_io_poll_loops;
-
-	total_bytes = (uint64_t)count * (uint64_t)nlb * 512ull;
-
-	printf("Benchmark %s: count=%" PRIu32 " nlb=%" PRIu32 " start_lba=%" PRIu64 " step=%" PRIu32 " qd=%" PRIu32 "\n",
-	       op_name, count, nlb, slba, step, qd);
-	printf("warmup: %" PRIu32 "\n", warmup);
-	printf("errors: %" PRIu32 "\n", bench_errors);
-	printf("ticks_setup: %" PRIu64 "\n", setup_ticks);
-	printf("ticks_io: %" PRIu64 "\n", io_ticks);
-	printf("ticks_total: %" PRIu64 "\n", total_ticks);
-	print_fixed3_u64("latency_avg", io_ticks * 1000000ull, (uint64_t)count * CONFIG_CLOCK_FREQUENCY, "us");
-	print_fixed3_u64("throughput", total_bytes * CONFIG_CLOCK_FREQUENCY, io_ticks * 1000000ull, "MB/s");
-	print_fixed3_u64("iops", (uint64_t)count * CONFIG_CLOCK_FREQUENCY, io_ticks, "IOPS");
-	printf("payload_bytes: %" PRIu64 "\n", total_bytes);
-	printf("mmio_rd32: %" PRIu64 "\n", mmio_rd_after - mmio_rd_before);
-	printf("mmio_wr32: %" PRIu64 "\n", mmio_wr_after - mmio_wr_before);
-	printf("mmio_wait_loops: %" PRIu64 "\n", mmio_wait_after - mmio_wait_before);
-	printf("mmio_rd_ticks: %" PRIu64 "\n", mmio_rd_ticks_after - mmio_rd_ticks_before);
-	printf("mmio_wr_ticks: %" PRIu64 "\n", mmio_wr_ticks_after - mmio_wr_ticks_before);
-	printf("admin_submit: %" PRIu64 "\n", admin_submit_after - admin_submit_before);
-	printf("io_submit: %" PRIu64 "\n", io_submit_after - io_submit_before);
-	printf("admin_cq_poll_loops: %" PRIu64 "\n", admin_poll_after - admin_poll_before);
-	printf("io_cq_poll_loops: %" PRIu64 "\n", io_poll_after - io_poll_before);
-#ifdef CSR_HOSTMEM_CSR_DMA_RD_COUNT_ADDR
-	printf("hostmem_dma_rd_beats: %" PRIu64 "\n", rd_after - rd_before);
-#endif
-#ifdef CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
-	printf("hostmem_dma_wr_beats: %" PRIu64 "\n", wr_after - wr_before);
-#endif
 }
 
 /*-----------------------------------------------------------------------*/
@@ -2140,149 +1582,6 @@ static void nvme_engine_bench_cmd(char *str)
  *      memory, revealing whether a valid SQE was built and whether the SSD posted a CQE.
  * Usage: nvme_engine_diag <read|write> [bar0] [nsid] [slba] [nlb] [count]
  */
-static void nvme_engine_diag_cmd(char *str)
-{
-	const char *op_name = "read";
-	int do_write = 0;
-	uint64_t base_addr = 0xe0000000ull;
-	uint32_t nsid = 1;
-	uint64_t slba = 0;
-	uint32_t nlb  = 8;
-	uint32_t count = 4;
-	uint32_t step = 8;
-	uint64_t cap = 0;
-
-	if (str && strlen(str)) {
-		char *a = get_token(&str);
-		char *b = get_token(&str);
-		char *c = get_token(&str);
-		char *d = get_token(&str);
-		char *e = get_token(&str);
-		char *f = get_token(&str);
-		if (a && strlen(a)) {
-			if (strcmp(a, "write") == 0) { do_write = 1; op_name = "write"; }
-			else if (strcmp(a, "read") != 0) { puts("ERR: op must be 'read' or 'write'."); return; }
-		}
-		if (b && strlen(b)) base_addr = strtoull(b, NULL, 0);
-		if (c && strlen(c)) nsid = (uint32_t)strtoul(c, NULL, 0);
-		if (d && strlen(d)) slba = strtoull(d, NULL, 0);
-		if (e && strlen(e)) nlb  = (uint32_t)strtoul(e, NULL, 0);
-		if (f && strlen(f)) count = (uint32_t)strtoul(f, NULL, 0);
-	}
-
-	/* Unconfounded doorbell test: if NVME_DIAG_FWRING is set below, the engine's SQ
-	 * doorbell is pointed at a harmless scratch BAR0 offset (0xf00, unused, within BAR0
-	 * size 0x4000) so the engine's own ring does NOT advance the SSD-visible SQ tail. After
-	 * the engine submits its SQEs, firmware rings the REAL SQ doorbell via the proven
-	 * pcie_mmio path. If the SSD then completes, the engine's own doorbell TLP is the bug. */
-
-	if (nlb == 0 || nlb > 16) { puts("ERR: nlb must be 1..16 for engine diag."); return; }
-	if (count == 0)           { puts("ERR: count must be >= 1."); return; }
-
-	if (nvme_bar0_assign(base_addr)) return;
-	if (nvme_admin_init(&cap))       return;
-	if (nvme_io_setup(cap))          return;
-
-	uint64_t sq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 0);
-	uint64_t cq_db = nvme_db_addr((uint64_t)bar0_base, cap, 1, 1);
-	uint64_t prp_list = (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u);
-
-	/* Make sure the engine is idle before we reprogram it. */
-	nvme_engine_engine_enable_write(0);
-
-	/* Program engine CSRs, reading each back immediately (proves the write landed). */
-	nvme_engine_write64(nvme_engine_engine_sq_base_lo_write, nvme_engine_engine_sq_base_hi_write, (uint64_t)IO_SQ_ADDR);
-	nvme_engine_write64(nvme_engine_engine_cq_base_lo_write, nvme_engine_engine_cq_base_hi_write, (uint64_t)IO_CQ_ADDR);
-	nvme_engine_write64(nvme_engine_engine_sq_db_lo_write,   nvme_engine_engine_sq_db_hi_write,   sq_db);
-	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
-	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write, prp_list);
-
-	printf("cfg sqb=%08x cqb=%08x sqdb=%08x cqdb=%08x\n",
-	       (unsigned)nvme_engine_engine_sq_base_lo_read(),
-	       (unsigned)nvme_engine_engine_cq_base_lo_read(),
-	       (unsigned)nvme_engine_engine_sq_db_lo_read(),
-	       (unsigned)nvme_engine_engine_cq_db_lo_read());
-
-	/* Clear the IO CQ so the phase bits start at 0 (engine expects phase 1 on first pass). */
-	hostmem_fill(IO_CQ_ADDR, IO_Q_ENTRIES * 16, 0);
-	/* Clear the SQ slots so a stale/garbage SQE is distinguishable from one the engine built. */
-	hostmem_fill(IO_SQ_ADDR, IO_Q_ENTRIES * 64, 0);
-
-	/* Prefill per-slot data buffers. */
-	for (uint32_t s = 0; s < IO_Q_ENTRIES; s++)
-		hostmem_fill(IO_BUF(s), 0x1000, do_write ? nvme_fill_pattern : 0);
-
-	/* Program the generator, reading each field back. */
-	nvme_gen_op_write(do_write ? 1u : 0u);
-	nvme_gen_nsid_write(nsid);
-	nvme_gen_base_lba_lo_write((uint32_t)(slba & 0xffffffffu));
-	nvme_gen_base_lba_hi_write((uint32_t)((slba >> 32) & 0xffffffffu));
-	nvme_gen_nlb_write(nlb);
-	nvme_gen_lba_step_write(step);
-	nvme_gen_count_write(count);
-	nvme_gen_buf_base_lo_write((uint32_t)(IO_BUF_BASE & 0xffffffffu));
-	nvme_gen_buf_base_hi_write(0);
-	nvme_gen_buf_stride_write(0x1000);
-	nvme_gen_qmod_write(IO_Q_ENTRIES);
-
-	printf("gen op=%u nlb=%u count=%u buf=%08x stride=%x qmod=%u\n",
-	       (unsigned)nvme_gen_op_read(), (unsigned)nvme_gen_nlb_read(),
-	       (unsigned)nvme_gen_count_read(), (unsigned)nvme_gen_buf_base_lo_read(),
-	       (unsigned)nvme_gen_buf_stride_read(), (unsigned)nvme_gen_qmod_read());
-
-	/* Sentinel self-test: write a known marker into SQ[0].dw0 via the CSR-debug port and
-	 * read it straight back. Proves the CSR read/write path AND gives the engine something
-	 * to overwrite -- if after the run SQ[0].dw0 still reads the sentinel, the engine's AXI
-	 * SQE write never reached this backend location (vs the CSR port writing the SAME spot,
-	 * which the SSD executes via nvme_bench). */
-	/* Sequential read self-test: write 4 distinct values to consecutive dwords, then read
-	 * them back in order. Proves hostmem_rd32 returns the requested address (not stale). */
-	for (uint32_t i = 0; i < 4; i++)
-		hostmem_wr32(IO_SQ_ADDR + 4 * i, 0x1000u + i);
-	{
-		uint32_t ok = 1;
-		for (uint32_t i = 0; i < 4; i++) {
-			uint32_t v = hostmem_rd32(IO_SQ_ADDR + 4 * i);
-			if (v != 0x1000u + i) ok = 0;
-		}
-		printf("seqread selftest: %s\n", ok ? "OK" : "BROKEN (stale reads)");
-	}
-
-	hostmem_wr32(IO_SQ_ADDR, 0x5E471A10u);
-	{
-		uint32_t sb = hostmem_rd32(IO_SQ_ADDR);
-		printf("sentinel: wrote 0x5E471A10 read 0x%08x (%s)\n",
-		       (unsigned)sb, sb == 0x5E471A10u ? "CSR path OK" : "CSR PATH BROKEN");
-	}
-
-	/* Enable engine, then kick the generator. */
-	nvme_engine_engine_enable_write(1);
-	nvme_gen_ctrl_write(1);
-
-	/* Poll to done (or ~2s timeout). */
-	uint32_t start = bench_timer_get();
-	while (!((nvme_gen_status_read() & 0x1u) && nvme_gen_completed_read() >= count)) {
-		if (bench_ticks_elapsed(start, bench_timer_get()) > (uint64_t)CONFIG_CLOCK_FREQUENCY * 2ull)
-			break;
-	}
-
-	uint32_t cycles      = nvme_gen_cycles_read();
-	uint32_t last_status = nvme_gen_last_status_read();
-	uint32_t errs        = nvme_gen_errors_read();
-	printf("final sub=%u cmp=%u err=%u cyc=%u st=%04x\n",
-	       (unsigned)nvme_engine_engine_submitted_read(), (unsigned)nvme_gen_completed_read(),
-	       (unsigned)errs, (unsigned)cycles, (unsigned)last_status);
-	if (errs) {
-		/* First-error detail: SC=status[8:1], SCT=status[11:9]; idx = which completion. */
-		uint32_t es = nvme_gen_first_err_status_read();
-		printf("err0 status=%04x sc=%02x sct=%x cid=%u idx=%u\n",
-		       (unsigned)es, (unsigned)((es >> 1) & 0xff), (unsigned)((es >> 9) & 0x7),
-		       (unsigned)nvme_gen_first_err_cid_read(), (unsigned)nvme_gen_first_err_idx_read());
-	}
-
-	nvme_engine_engine_enable_write(0);
-	(void)op_name;
-}
 #endif /* NVME_ENGINE_AVAILABLE */
 
 static void nvme_dump_buffer(uint32_t dwords)
@@ -2325,33 +1624,6 @@ static void nvme_read_cmd(char *str)
 		return;
 
 	nvme_dump_buffer(16);
-}
-
-static void nvme_read_dump_cmd(char *str)
-{
-	uint64_t base_addr = 0xe0000000ull;
-	uint32_t nsid = 1;
-	uint64_t slba = 0;
-	uint32_t nlb  = 1;
-	uint32_t dwords = 64;
-
-	if (str && strlen(str)) {
-		char *a = get_token(&str);
-		char *b = get_token(&str);
-		char *c = get_token(&str);
-		char *d = get_token(&str);
-		char *e = get_token(&str);
-		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
-		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
-		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
-		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
-		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
-	}
-
-	if (nvme_read_do(base_addr, nsid, slba, nlb))
-		return;
-
-	nvme_dump_buffer(dwords);
 }
 
 static void nvme_write_cmd(char *str)
@@ -2407,67 +1679,6 @@ static void nvme_write_cmd(char *str)
 	}
 
 	puts("Write completed.");
-}
-
-static void nvme_write_readback_cmd(char *str)
-{
-	uint64_t base_addr = 0xe0000000ull;
-	uint32_t nsid = 1;
-	uint64_t slba = 0;
-	uint32_t nlb  = 1;
-	uint32_t dwords = 64;
-
-	if (str && strlen(str)) {
-		char *a = get_token(&str);
-		char *b = get_token(&str);
-		char *c = get_token(&str);
-		char *d = get_token(&str);
-		char *e = get_token(&str);
-		if (a && strlen(a)) base_addr = strtoull(a, NULL, 0);
-		if (b && strlen(b)) nsid = (uint32_t)strtoul(b, NULL, 0);
-		if (c && strlen(c)) slba = strtoull(c, NULL, 0);
-		if (d && strlen(d)) nlb  = (uint32_t)strtoul(d, NULL, 0);
-		if (e && strlen(e)) dwords = (uint32_t)strtoul(e, NULL, 0);
-	}
-
-	if (nlb == 0) {
-		puts("ERR: nlb must be >= 1.");
-		return;
-	}
-	if (nlb > 8) {
-		puts("ERR: nlb too large for PRP1-only (max 8 blocks @ 512B).");
-		return;
-	}
-
-	if (nvme_bar0_assign(base_addr))
-		return;
-
-	uint64_t cap = 0;
-	if (nvme_admin_init(&cap))
-		return;
-	if (nvme_io_setup(cap))
-		return;
-
-	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
-	if (nvme_debug) {
-		uint32_t w0 = hostmem_rd32(IO_WR_BUF_ADDR + 0);
-		uint32_t w1 = hostmem_rd32(IO_WR_BUF_ADDR + 4);
-		printf("WR buf[0..1] = %08" PRIx32 " %08" PRIx32 "\n", w0, w1);
-	}
-
-	uint32_t cmd[16];
-	uint32_t cqe[4];
-	nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, slba, (uint16_t)(nlb - 1), cmd);
-	if (nvme_io_submit(cap, cmd, cqe)) {
-		puts("ERR: Write command failed.");
-		decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
-		return;
-	}
-
-	puts("Write completed. Readback:");
-	if (nvme_read_do(base_addr, nsid, slba, nlb))
-		return;
-	nvme_dump_buffer(dwords);
 }
 
 static void nvme_verify_cmd(char *str)
@@ -2539,104 +1750,6 @@ static void nvme_verify_cmd(char *str)
 		       slba, slba + (uint64_t)nlb - 1, nvme_fill_pattern);
 }
 
-static void nvme_req_service(void)
-{
-#ifdef CSR_NVME_REQ_REQ_CTRL_ADDR
-	uint32_t ctrl = nvme_req_req_ctrl_read();
-	if ((ctrl & 0x1u) == 0)
-		return;
-
-	uint32_t op   = nvme_req_req_op_read();
-	uint32_t nsid = nvme_req_req_nsid_read();
-	uint64_t lba  = ((uint64_t)nvme_req_req_lba_hi_read() << 32) | nvme_req_req_lba_lo_read();
-	uint32_t nlb  = nvme_req_req_nlb_read();
-	uint64_t buf  = ((uint64_t)nvme_req_req_buf_hi_read() << 32) | nvme_req_req_buf_lo_read();
-	uint64_t bar0 = ((uint64_t)nvme_req_req_bar0_hi_read() << 32) | nvme_req_req_bar0_lo_read();
-
-	if (nvme_debug) {
-		printf("REQ op=%" PRIu32 " nsid=%" PRIu32 " lba=%" PRIu64 " nlb=%" PRIu32 "\n",
-		       op, nsid, lba, nlb);
-		printf("REQ buf=0x%016" PRIx64 " bar0=0x%016" PRIx64 "\n", buf, bar0);
-	}
-
-	uint64_t cycle_start = cpu_cycle_get();
-	uint32_t bytes_done = 0;
-
-	nvme_req_req_status_write(1); // busy=1, done=0, error=0
-	nvme_req_req_cqe_status_write(0);
-	nvme_req_req_cycles_write(0);
-	nvme_req_req_bytes_done_write(0);
-
-	int err = 0;
-	uint32_t cqe[4] = {0, 0, 0, 0};
-
-	if (bar0 == 0)
-		bar0 = 0xe0000000ull;
-
-	if (nvme_bar0_assign(bar0))
-		err = 1;
-
-	if (!err) {
-		uint64_t cap = 0;
-		if (nvme_admin_init(&cap)) {
-			err = 1;
-		} else if (op == NVME_REQ_OP_IDENTIFY) {
-			hostmem_fill(ACQ_ADDR, ADMIN_Q_ENTRIES * 16, 0);
-			hostmem_fill(ID_BUF_ADDR, 0x100, 0);
-			uint32_t cmd[16];
-			nvme_cmd_identify_controller(1, (uint64_t)ID_BUF_ADDR, cmd);
-			if (nvme_admin_submit(cap, cmd, cqe))
-				err = 1;
-			else
-				bytes_done = 0x100;
-		} else if (op == NVME_REQ_OP_READ || op == NVME_REQ_OP_WRITE) {
-			if (nvme_io_setup(cap)) {
-				err = 1;
-			} else {
-				if (nlb == 0 || nlb > 8) {
-					err = 1;
-				} else {
-					if (op == NVME_REQ_OP_WRITE)
-						hostmem_fill((uint32_t)buf, 0x1000, nvme_fill_pattern);
-					uint32_t cmd[16];
-					if (op == NVME_REQ_OP_READ)
-						nvme_cmd_read(0x30, nsid, buf, lba, (uint16_t)(nlb - 1), cmd);
-					else
-						nvme_cmd_write(0x31, nsid, buf, lba, (uint16_t)(nlb - 1), cmd);
-					if (nvme_io_submit(cap, cmd, cqe))
-						err = 1;
-					else
-						bytes_done = nlb * 512u;
-				}
-			}
-		} else {
-			err = 1;
-		}
-	}
-
-	{
-		uint64_t cycle_end = cpu_cycle_get();
-		uint64_t cycle_delta = cycle_end - cycle_start;
-		if (cycle_delta > 0xffffffffull)
-			cycle_delta = 0xffffffffull;
-		nvme_req_req_cycles_write((uint32_t)cycle_delta);
-		nvme_req_req_bytes_done_write(bytes_done);
-	}
-
-	if (err) {
-		nvme_req_req_status_write(0x6); // done=1, error=1
-	} else {
-		nvme_req_req_status_write(0x2); // done=1, error=0
-	}
-	nvme_req_req_cqe_status_write(cqe[3]);
-	if (nvme_debug)
-		printf("REQ done err=%d cqe=0x%08" PRIx32 "\n", err, cqe[3]);
-
-	// Clear start.
-	nvme_req_req_ctrl_write(0);
-#endif
-}
-
 /*-----------------------------------------------------------------------*/
 /* Console service / Main                                                */
 /*-----------------------------------------------------------------------*/
@@ -2656,57 +1769,25 @@ static void console_service(void)
 		reboot_cmd();
 	else if (strcmp(token, "status") == 0)
 		status_cmd();
-	else if (strcmp(token, "cfg_rd") == 0)
-		cfg_rd_cmd(str);
-	else if (strcmp(token, "cfg_wr") == 0)
-		cfg_wr_cmd(str);
 	else if (strcmp(token, "cmd_enable") == 0)
 		cmd_enable_cmd();
 	else if (strcmp(token, "cmd_disable") == 0)
 		cmd_disable_cmd();
 	else if (strcmp(token, "nvme_reset") == 0)
 		nvme_reset_cmd();
-	else if (strcmp(token, "mmio_rd") == 0)
-		mmio_rd_cmd(str);
-	else if (strcmp(token, "mmio_wr") == 0)
-		mmio_wr_cmd(str);
-	else if (strcmp(token, "mmio_dump") == 0)
-		mmio_dump_cmd(str);
-	else if (strcmp(token, "mmio_warn_writes") == 0)
-		mmio_warn_writes_cmd(str);
-	else if (strcmp(token, "nvme_debug") == 0)
-		nvme_debug_cmd(str);
 	else if (strcmp(token, "nvme_fill") == 0)
 		nvme_fill_cmd(str);
-	else if (strcmp(token, "nvme_mmiotest") == 0)
-		nvme_mmiotest_cmd();
 	else if (strcmp(token, "nvme_identify") == 0)
 		nvme_identify_cmd(str);
-#ifdef CSR_PCIE_ROOTCFG_CTRL_ADDR
-	else if (strcmp(token, "rootmps") == 0)
-		rootmps_cmd(str);
-	else if (strcmp(token, "rootcfg") == 0)
-		rootcfg_cmd(str);
-#endif
-	else if (strcmp(token, "nvme_mps") == 0)
-		nvme_mps_cmd(str);
 	else if (strcmp(token, "nvme_read") == 0)
 		nvme_read_cmd(str);
-	else if (strcmp(token, "nvme_read_dump") == 0)
-		nvme_read_dump_cmd(str);
-	else if (strcmp(token, "nvme_write_readback") == 0)
-		nvme_write_readback_cmd(str);
 	else if (strcmp(token, "nvme_verify") == 0)
 		nvme_verify_cmd(str);
 	else if (strcmp(token, "nvme_write") == 0)
 		nvme_write_cmd(str);
-	else if (strcmp(token, "nvme_bench") == 0)
-		nvme_bench_cmd(str);
 #if NVME_ENGINE_AVAILABLE
 	else if (strcmp(token, "nvme_engine_bench") == 0)
 		nvme_engine_bench_cmd(str);
-	else if (strcmp(token, "nvme_engine_diag") == 0)
-		nvme_engine_diag_cmd(str);
 #endif
 	prompt();
 }
@@ -2724,7 +1805,6 @@ int main(void)
 	prompt();
 
 	while (1) {
-		nvme_req_service();
 		console_service();
 	}
 
