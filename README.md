@@ -55,16 +55,23 @@ fragmentation) — the design is device/link-bound, not core-bound (`doc/NVME_PE
 [> Resources
 ------------
 
-Standalone core (`litenvme_core`, default config: 256 KiB window + bring-up CPU, XCKU3P):
+Standalone core (`litenvme_core`, default config: 256 KiB window + bring-up CPU, XCKU3P,
+out-of-context synth), broken down by block:
 
-| LUT    | FF     | BRAM  | URAM | DSP |
-|-------:|-------:|------:|-----:|----:|
-| 11,577 | 14,408 | 133   | 0    | 0   |
+| Block | LUT | FF | BRAM | URAM | DSP |
+|-------|----:|---:|-----:|-----:|----:|
+| PCIe hard IP (`pcie4_uscale_plus` + GTY) | 2,960 | 6,303 | 22 | 0 | 0 |
+| VexRiscv bring-up CPU (+ ROM/RAM)        | 1,695 |   749 | ~25 | 0 | 0 |
+| 256 KiB host-memory window               |   —   |   —   | ~64 | 0 | 0 |
+| NVMe datapath + I/O engine + block streamer + FIFOs | ~6,920 | ~7,360 | ~22 | 0 | 0 |
+| **Total**                                | **11,577** | **14,408** | **133** | **0** | **0** |
 
-LUT/FF + BRAM only (0 URAM, 0 DSP) — ports cleanly across Ultrascale+. BRAM is the tunable cost
-(the host-memory window + the bring-up CPU's ROM/RAM). The **CPU-less RTL-init** path
-(`--with-rtl-init`) drops the soft-CPU entirely — HW-measured saving of **−2,560 LUT / −25 BRAM**
-(→ ~108 BRAM standalone). See `doc/STANDALONE_CORE.md` §5 and `doc/NVME_CORE_COMPARISON.md`.
+LUT/FF + BRAM only (**0 URAM, 0 DSP**) — ports cleanly across Ultrascale+. BRAM is the tunable
+cost: the 256 KiB window dominates (move it to URAM/DDR via `hostmem_backend`), and the **CPU-less
+RTL-init** path (`--with-rtl-init`) drops the soft-CPU entirely — HW-measured saving of
+**−2,560 LUT / −25 BRAM** (→ ~108 BRAM standalone). The 22-tile PCIe IP is the Xilinx hard block
+(commercial cores tally it separately). Full analysis incl. the vs-Design-Gateway breakdown:
+`doc/STANDALONE_CORE.md` §5 and `doc/NVME_CORE_COMPARISON.md`.
 
 [> Interface
 ------------
