@@ -204,7 +204,9 @@ The standalone core is a plain Verilog module — instantiate it like any IP:
 
 ---
 
-## 5. Performance
+## 5. Performance & resources
+
+### Throughput
 
 Measured on an Alibaba KU3P (XCKU3P) with a Crucial CT500P310SSD8, Gen3 x4, 256-bit @ 125 MHz:
 
@@ -230,6 +232,40 @@ Design notes that bound throughput (see `doc/NVME_PERFORMANCE.md` for the full s
 To enlarge the host-memory window / staging beyond the on-FPGA BRAM (for very large transfers),
 provide a DDR-backed `hostmem_backend` (e.g. a LiteDRAM AXI port) — the responder accepts any
 backend exposing a matching `.axi` slave.
+
+### Resource utilization
+
+Post-place utilization of the **reference test SoC** (`bench/alibaba_xcku3p.py --with-cpu
+--with-etherbone --with-io-engine --with-block-streamer`) on the XCKU3P (`xcku3p-ffvb676-2-e`),
+Gen3 x4 / 256-bit, timing met at 125 MHz:
+
+| Resource | Used | Device | % |
+|----------|-----:|-------:|--:|
+| CLB LUTs       | 14,699 | 162,720 | 9.0 % |
+| CLB Registers  | 18,765 | 325,440 | 5.8 % |
+| Block RAM tiles| 325    | 360     | 90 % |
+| URAM           | 0      | 48      | 0 % |
+| DSP            | 2      | 1,368   | 0.1 % |
+
+Attribution of the big blocks (from the hierarchical report):
+
+| Block | LUT | FF | RAMB36 |
+|-------|----:|---:|-------:|
+| PCIe hard-IP wrapper (`pcie4_uscale_plus` + GTY) | 1,326 | 4,912 | 22 |
+| VexRiscv bring-up CPU (minimal)                  | 2,295 |   749 | 0 (+2 RAMB18) |
+| host-memory window (512 KiB BRAM)                | —     | —     | ~114 |
+| NVMe datapath + Ethernet/Etherbone harness + glue (flat top) | ~11,000 | ~13,000 | remainder |
+
+Reading this for the **standalone core** specifically:
+- **BRAM is the dominant, and the tunable, cost.** The 512 KiB host-memory window is ~114 of
+  the 360 BRAM tiles; the rest is the CPU ROM/RAM and (in this SoC) the Ethernet/Etherbone
+  buffers. Shrink `hostmem_size`, or point `hostmem_backend` at DDR/LiteDRAM, to cut BRAM
+  sharply — the soft logic barely changes.
+- The standalone core **omits the Ethernet/Etherbone + request-generator/BIST test harness**
+  that this reference SoC includes, so its soft-logic (LUT/FF) footprint is correspondingly
+  smaller than the ~14.7 k LUT total above.
+- **0 URAM, ~0 DSP** — the design is LUT/FF + BRAM only, so it ports cleanly across Ultrascale+
+  parts. The PCIe hard IP (1 GTY quad) and one QPLL are the only hard resources required.
 
 ---
 
