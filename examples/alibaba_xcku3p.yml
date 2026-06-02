@@ -1,0 +1,57 @@
+# LiteNVMe standalone core — Alibaba KU3P, PCIe Gen3 x4, 256-bit datapath.
+# Generate with:  litenvme_gen examples/alibaba_xcku3p.yml
+{
+    # PCIe PHY (RootPort).
+    "phy"           : "USPPCIEPHY",
+    "phy_device"    : "xcku3p-ffvb676-2-e",
+    "phy_lanes"     : 4,
+    "ep_max_pending_requests" : 8,   # outstanding-request buffers. 8 = full throughput; lowering to
+                                     # 2 saves ~15 BRAM but costs ~20% read throughput (HW-measured).
+    "phy_speed"     : "gen3",
+    "phy_ip_name"   : "pcie4_uscale_plus",
+    "data_width"    : 256,
+    "phy_config"    : {
+        "mode_selection"  : "Advanced",
+        "en_gt_selection" : "true",
+        "select_quad"     : "GTY_Quad_225",
+        "pcie_blk_locn"   : "X0Y0",
+        "gen_x0y0"        : "true",
+        "gen_x1y0"        : "false",
+        "plltype"         : "QPLL0",
+        "axisten_freq"    : 125,   # 256b @ 125MHz = 4.0 GB/s user datapath.
+        "coreclk_freq"    : 250,
+    },
+
+    # Clocking: sys clock derived from the PCIe user clock (internal mode).
+    "clk_freq"      : 125e6,
+    "clk_external"  : False,
+
+    # Embedded CPU (runs NVMe bring-up firmware, raises init_done).
+    "cpu"           : "vexriscv",   # bring-up only (one-time init), so the minimal variant.
+    "cpu_variant"   : "minimal",
+    "uart"          : "serial",
+    # "none": boot the LiteX BIOS (works today). "minimal": a code-only firmware (auto-init +
+    # idle, no console/prints) baked into a small ROM with no main_ram -> smallest CPU footprint;
+    # NOTE: minimal/auto self-init on the generated core still needs the firmware<->core CSR
+    # names aligned (the wrapper nests cfg/mmio as nvme_cfg/nvme_mmio) -- a tracked follow-up.
+    "firmware"      : "none",
+
+    # I/O engine + host-memory window. The block streamer issues one command at a time, so a
+    # small ring (qsize/qd) is enough and keeps the PRP-list region (qsize pages) tiny. The
+    # window holds only the queues + PRP region + the data-staging buffer -- no per-slot
+    # request-generator buffers -- so 256 KiB is plenty (vs 512 KiB for the benchmark variant).
+    "qid"           : 1,
+    "qsize"         : 8,        # PRP-list region = qsize*4KiB = 32 KiB.
+    "qd"            : 4,
+    "hostmem_base"  : 0x10000000,
+    "hostmem_size"  : 0x40000,  # 256 KiB.
+
+    # Data interface: the LiteSATA-style block streamer is the sole front-end, exposed at the
+    # top as wr_sink/rd_source + command/status pins. (Set with_request_gen instead for a
+    # CSR-driven benchmark variant.) The CSR memory-debug frontend (which replicates the window
+    # BRAM) is dropped automatically for this pin-driven core.
+    "with_request_gen"    : False,
+    "with_block_streamer" : True,
+    "staging_base"        : 0x10000,  # 64 KiB in (clear of SQ/CQ@0x3-4000, PRP@0x5000).
+    "staging_size"        : 0x30000,  # 192 KiB staging -> up to 384-sector transfers.
+}
