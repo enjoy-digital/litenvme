@@ -209,6 +209,6 @@ the only scenario where a 512-bit datapath would help.
 The soft CPU runs `bench/firmware/main.c`: BAR0 assign + `MEM`/`BME` enable, auto-MPS, admin init
 (AQA/ASQ/ACQ, CC.EN, CSTS.RDY), Identify, Set Features (#queues), Create IO CQ/SQ, then programs and
 kicks the RTL engine for benchmarks. It is **bring-up/orchestration only** — steady-state I/O is
-hardware-driven by the engine. A LiteScope harness (`--litescope-probe {mmio,mmiowire,hmwrite,...}`)
+hardware-driven by the engine. A LiteScope harness (`--litescope-probe pcie`)
 and HW scripts (`bench/hw_*.sh`) reproduce link training, throughput, integrity, and the captures
 that located the bugs in §6.

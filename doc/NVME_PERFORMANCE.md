@@ -29,8 +29,8 @@ than 4 KiB. Writes vary run-to-run (SSD-side cache/GC), reads at 8 KiB are stabl
   duty cycle is ~56–68% with **<2% of cycles stalled by us** — we keep up with
   the data; the gaps are the SSD/PCIe completion cadence.
 - **MPS cannot be raised:** the SSD's DevCap caps MaxPayloadSize at **512 B**, so
-  read-data arrives in 512-byte MemWr TLPs. `nvme_mps set 3` (1024 B) is clamped
-  to 512 B by the device; throughput is unchanged. MRRS is the same story.
+  read-data arrives in 512-byte MemWr TLPs. Programming DevCtl.MPS to 1024 B is
+  clamped back to 512 B by the device; throughput is unchanged. MRRS is the same story.
 - **512-bit datapath would give ~0 gain** on this link: width × user-clock is
   pinned by the link, so 512-bit @ 62.5 MHz = 256-bit @ 125 MHz = 4.0 GB/s, and
   the Gen3 x4 link itself caps at **~3.4 GB/s** usable. 512-bit only pays off with
