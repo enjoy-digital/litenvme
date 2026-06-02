@@ -32,6 +32,9 @@ Validated end-to-end on real hardware (Alibaba KU3P + a commercial NVMe SSD) and
 * PCIe link up (Gen3 x4, RootPort), BAR0 discovery, NVMe controller enable.
 * Admin Identify + create I/O SQ/CQ; read/write with DMA to/from the host-memory window.
 * Hardware I/O engine (QD 32) and the block-streaming interface; write→read-back bit-exact.
+* **Two bring-up paths** (pick at build time): **firmware** on the embedded soft-CPU (default,
+  easiest to extend) or a **pure-RTL init sequencer** (`--with-rtl-init`, fully CPU-less) — both
+  HW-validated end to end.
 
 ![NVMe Identify over the firmware console](doc/images/litenvme_identify.png)
 
@@ -59,7 +62,9 @@ Standalone core (`litenvme_core`, default config: 256 KiB window + bring-up CPU,
 | 11,577 | 14,408 | 133   | 0    | 0   |
 
 LUT/FF + BRAM only (0 URAM, 0 DSP) — ports cleanly across Ultrascale+. BRAM is the tunable cost
-(the host-memory window + the bring-up CPU's ROM/RAM); see `doc/STANDALONE_CORE.md` §5.
+(the host-memory window + the bring-up CPU's ROM/RAM). The **CPU-less RTL-init** path
+(`--with-rtl-init`) drops the soft-CPU entirely — HW-measured saving of **−2,560 LUT / −25 BRAM**
+(→ ~108 BRAM standalone). See `doc/STANDALONE_CORE.md` §5 and `doc/NVME_CORE_COMPARISON.md`.
 
 [> Interface
 ------------
@@ -104,6 +109,15 @@ emitted `.tcl`, wire the PCIe pads + block interface, and build. Steps: `doc/STA
 python3 bench/test_block.py --isolated                # write/scrub/read-back proof
 ```
 
+**2b. CPU-less (pure-RTL init)** — same SoC with `--with-rtl-init` and no CPU; a hardware
+sequencer brings the SSD up (no firmware):
+
+```sh
+./bench/alibaba_xcku3p.py --with-etherbone --with-io-engine --with-rtl-init \
+    --csr-csv=csr.csv --build --load
+./bench/hw_rtlinit.sh        # RTL bring-up (init_done) + a read, all over Etherbone
+```
+
 **3. Use it as a LiteX package** — instantiate `LiteNVMe(pcie_endpoint, ...)` (`litenvme/core.py`)
 on a `LitePCIeRootPort`; `bench/alibaba_xcku3p.py` is the worked example.
 
@@ -131,9 +145,8 @@ CPU (a pure-RTL init sequencer is on the roadmap). Details: `doc/NVME_CORE_COMPA
 ----------
 
 * PCIe Gen4 / Gen5 and wider lanes (PHY + datapath scaling) for higher throughput.
-* Pure-RTL init sequencer for fully software-free (CPU-less) bring-up — **prototyped and
-  HW-validated** on the `rtl-init` branch (`litenvme/init.py`, `--with-rtl-init`); the firmware
-  bring-up stays the default (easier to extend), RTL init is for CPU-less deploy / minimum area.
+* Widen the RTL init sequencer's SSD coverage (read `CAP.DSTRD` / BAR type instead of assuming
+  the common case) so the CPU-less path matches the firmware's broad SSD support.
 * Multi-chunk transfers larger than the staging window; DDR/LiteDRAM-backed host memory.
 
 Want to support or accelerate these? Contact us at florent [AT] enjoy-digital.fr.

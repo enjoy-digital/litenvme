@@ -268,7 +268,7 @@ Notes (post-synthesis estimate; post-place is slightly lower):
     `nvme_cfg`/`nvme_mmio` while the firmware uses `cfg_cfg_*`/`mmio_mem_*`) — a tracked follow-up.
   - `cpu: None` removes the CPU and its ROM/RAM entirely; bring-up then comes from an external
     host over the control bus.
-  - **RTL init** (`litenvme/init.py`, `--with-rtl-init`, `rtl-init` branch) does the whole
+  - **RTL init** (`litenvme/init.py`, `--with-rtl-init`) does the whole
     bring-up *in hardware* — no CPU at all. Measured on the bench SoC, swapping VexRiscv+firmware
     for the sequencer saves **−2,560 LUT / −3,116 FF / −25 BRAM** (the CPU's ROM/RAM); the
     sequencer FSM itself is small and uses 0 BRAM. So the RTL-init core is strictly smaller and
