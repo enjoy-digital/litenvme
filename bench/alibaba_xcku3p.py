@@ -34,7 +34,6 @@ from litescope import LiteScopeAnalyzer
 from litenvme.cfg       import LiteNVMePCIeCfgAccessor, LiteNVMeRootCfgMgmt
 from litenvme.mem       import LiteNVMePCIeMmioAccessor
 from litenvme.hostmem   import LiteNVMeHostMemResponder
-from litenvme.req       import LiteNVMeRequestCSR
 from litenvme.io_engine   import LiteNVMeIOEngineAXI
 from litenvme.request_gen import LiteNVMeRequestGen
 
@@ -184,10 +183,6 @@ class BaseSoC(SoCCore):
         )
         self.add_module(name="pcie_mmio", module=self.mmio)
 
-        # NVMe Request CSR (firmware-driven).
-        self.req = LiteNVMeRequestCSR()
-        self.add_module(name="nvme_req", module=self.req)
-
         # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
 
         hostmem_base = 0x10000000
@@ -233,110 +228,6 @@ class BaseSoC(SoCCore):
             extra_axi_masters = io_engine_masters,
         )
 
-
-    # LiteScope Probe (pcie-domain wire: hard-IP boundary) -----------------------------------------
-
-    def add_mmio_wire_probe(self):
-        # Capture, in the pcie clock domain, the MemRd descriptor AT the hard-IP boundary
-        # (s_axis_rq_adapt.m_axis: is the request correct?) and the RAW Xilinx completion
-        # (m_axis_rc_adapt.s_axis: is byte_count where the RC adapter reads it?). Trigger on the
-        # MemRd to the high address (addr[31]=1 distinguishes MMIO 0xe000.. from cfg register).
-        rqa = self.pcie_phy.s_axis_rq_adapt   # RQ adapter output -> hard IP (descriptor).
-        rca = self.pcie_phy.m_axis_rc_adapt   # raw RC from hard IP -> RC adapter input.
-
-        sigs = []
-        def add(s): sigs.append(s)
-        def add_slice(sig, width, name):
-            s = Signal(width, name=name); self.comb += s.eq(sig); add(s)
-
-        add(self.pcie_phy._link_status.fields.status)
-
-        # MemRd-to-high-address trigger qualifier.
-        rq_memhi = Signal(name="rq_memhi")
-        self.comb += rq_memhi.eq(rqa.m_axis_tvalid & rqa.m_axis_tdata[31])
-        add(rq_memhi)
-
-        # RQ descriptor to the hard IP: DW0=addr_lo, DW1=addr_hi, DW2=dwlen/reqtype, DW3=tag/reqid.
-        add(rqa.m_axis_tvalid); add(rqa.m_axis_tlast)
-        add_slice(rqa.m_axis_tdata[0:128], 128, "rq_desc")
-        add_slice(rqa.m_axis_tkeep, len(rqa.m_axis_tkeep), "rq_keep")
-
-        # Raw Xilinx completion from the hard IP: DW0-2 = descriptor (byte_count/dwlen/status/
-        # loweraddr, requester_id/tag, ...). This is the RC adapter's INPUT.
-        add(rca.s_axis_tvalid); add(rca.s_axis_tlast)
-        add_slice(rca.s_axis_tdata[0:96], 96, "rc_desc")
-
-        self.analyzer = LiteScopeAnalyzer(sigs, depth=1024, clock_domain="pcie",
-            register=True, csr_csv="analyzer.csv")
-
-    # LiteScope Probe (focused MMIO debug) ---------------------------------------------------------
-
-    def add_mmio_probe(self):
-        # Narrow, targeted capture to debug "MMIO read returns 0/garbage at 256b while CFG works".
-        # Avoids 256b payload buses; only low dwords + handshakes (~200 signals, depth 1024).
-        mem_req = self.mem_port.source   # MemRd/MemWr we issue to the SSD BAR0.
-        mem_cmp = self.mem_port.sink     # Completion routed back to the MMIO accessor.
-        cfg_cmp = self.cfg_port.sink     # CFG completion (works) -- reference.
-        cs      = self.pcie_phy.cmp_source  # Raw completion from the hard IP (after RC adapter).
-
-        sigs = []
-        def add(s): sigs.append(s)
-        def add_opt(o, n):
-            if hasattr(o, n): add(getattr(o, n))
-        def add_slice(sig, width, name):  # LiteScope needs named Signals, not raw _Slice.
-            s = Signal(width, name=name); self.comb += s.eq(sig); add(s)
-
-        add(self.pcie_phy._link_status.fields.status)
-
-        # MMIO request out (handshake + low address + tag).
-        for n in ("valid", "ready", "we"): add_opt(mem_req, n)
-        add_slice(mem_req.adr[0:32], 32, "memreq_adr_lo"); add_opt(mem_req, "tag")
-
-        # Raw completion in from the hard IP (litepcie raw): DW0=hdr, DW1=status/bytecnt,
-        # DW2=loweraddr/tag/reqid, DW3=DATA. Capture DW0-3 to see tag routing AND the data dword.
-        for n in ("valid", "ready", "first", "last"): add_opt(cs, n)
-        add_slice(cs.dat[0:128], 128, "cmpsrc_dat")
-
-        # MMIO completion routed to the accessor (THE data the accessor latches + its tag).
-        for n in ("valid", "ready", "first", "last", "err"): add_opt(mem_cmp, n)
-        add_slice(mem_cmp.dat[0:32], 32, "memcmp_dat_lo"); add_opt(mem_cmp, "tag")
-
-        self.analyzer = LiteScopeAnalyzer(sigs, depth=1024, clock_domain="sys",
-            register=True, csr_csv="analyzer.csv")
-
-    # LiteScope Probe (hostmem completer WRITE path) -----------------------------------------------
-
-    def add_hostmem_write_probe(self):
-        # Debug "admin CQE write to ACQ+16 lands wrong at 256b". Capture the completer MemWr from the
-        # SSD as it reaches the hostmem responder: address, byte-enables and the low data dwords --
-        # so we can see whether a 16B write to a non-32B-aligned offset is shifted/dropped.
-        hm = self.hostmem_port.sink
-
-        sigs = []
-        def add(s): sigs.append(s)
-        def add_opt(o, n):
-            if hasattr(o, n): add(getattr(o, n))
-        def add_slice(sig, width, name):
-            s = Signal(width, name=name); self.comb += s.eq(sig); add(s)
-
-        add(self.pcie_phy._link_status.fields.status)
-        for n in ("valid", "ready", "we", "first", "last"): add_opt(hm, n)
-        add_slice(hm.adr[0:32], 32, "hm_adr")
-        hm_dat = hm.dat if hasattr(hm, "dat") else hm.data
-        add_slice(hm_dat[0:256], 256, "hm_dat")
-
-        # DMA write-path internals: the address offset and the shifted data/strobe actually pushed
-        # to the backend (proves whether the sub-beat alignment fix executes on hardware).
-        dma = self.hostmem.dma
-        add_slice(dma.off_dw, len(dma.off_dw), "off_dw")
-        wf = dma.wr_fifo.sink
-        for n in ("valid", "ready"): add_opt(wf, n)
-        add_slice(wf.addr[0:32], 32, "wf_addr")
-        add_slice(wf.data[0:256], 256, "wf_data")
-        add_slice(wf.strb, len(wf.strb), "wf_strb")
-
-        self.analyzer = LiteScopeAnalyzer(sigs, depth=512, clock_domain="sys",
-            register=True, csr_csv="analyzer.csv")
 
     # LiteScope Probe (Overview) -------------------------------------------------------------------
 
@@ -460,7 +351,7 @@ def main():
     parser.add_argument("--with-cpu",        action="store_true",                      help="Enable VexRiscv soft CPU.")
     parser.add_argument("--cpu-boot",        default="rom", choices=["rom", "bios"], help="CPU boot mode: ROM firmware or LiteX BIOS.")
     parser.add_argument("--cpu-firmware",    default="auto",                           help="Integrated ROM init file for soft CPU (hex/bin or 'auto').")
-    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie", "mmio", "mmiowire", "hmwrite"], help="Select LiteScope probe set.")
+    parser.add_argument("--litescope-probe", default="none", choices=["none", "pcie"], help="Select LiteScope probe set.")
     parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     args = parser.parse_args()
@@ -478,12 +369,6 @@ def main():
         )
         if args.litescope_probe == "pcie":
             soc.add_pcie_probe()
-        elif args.litescope_probe == "mmio":
-            soc.add_mmio_probe()
-        elif args.litescope_probe == "mmiowire":
-            soc.add_mmio_wire_probe()
-        elif args.litescope_probe == "hmwrite":
-            soc.add_hostmem_write_probe()
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
