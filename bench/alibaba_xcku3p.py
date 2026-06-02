@@ -126,6 +126,7 @@ class BaseSoC(SoCCore):
         with_block_streamer = False,
         staging_base    = 0x40000,
         staging_size    = 0x40000,
+        with_rtl_init   = False,
         **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = alibaba_xcku3p.Platform()
@@ -226,24 +227,30 @@ class BaseSoC(SoCCore):
 
         requester_id = getattr(self.pcie_phy, "requester_id", 0x0000)
 
+        # With the RTL init sequencer, cfg/mmio/rootcfg are driven by hardware (no firmware), so
+        # they carry no CSRs; otherwise they are firmware-driven (the default path).
+        acc_csr = not with_rtl_init
+
         self.cfg = LiteNVMePCIeCfgAccessor(
             port         = cfg_port,
             requester_id = requester_id,
             tag          = 0x42,
-            with_csr     = True,
+            with_csr     = acc_csr,
         )
-        self.add_module(name="pcie_cfg", module=self.cfg)
+        if acc_csr:
+            self.add_module(name="pcie_cfg", module=self.cfg)
 
         # Root-port cfg management: lets firmware raise our own DevCtl.MPS (read path bottleneck).
         # (Auto-registers as "pcie_rootcfg" -> firmware CSRs pcie_rootcfg_*.)
-        self.pcie_rootcfg = LiteNVMeRootCfgMgmt(self.pcie_phy)
+        self.pcie_rootcfg = LiteNVMeRootCfgMgmt(self.pcie_phy, with_csr=acc_csr)
 
         self.mmio = LiteNVMePCIeMmioAccessor(
             port     = mem_port,
             tag      = 0x44,
-            with_csr = True,
+            with_csr = acc_csr,
         )
-        self.add_module(name="pcie_mmio", module=self.mmio)
+        if acc_csr:
+            self.add_module(name="pcie_mmio", module=self.mmio)
 
         # Host Memory Responder (NVMe -> RootPort DMA target) -------------------------------------
 
@@ -262,9 +269,10 @@ class BaseSoC(SoCCore):
         if with_io_engine:
             self.io_engine = io_engine = LiteNVMeIOEngineAXI(
                 qid=1, qsize=64, qd=io_engine_qd,
-                data_width=self.pcie_phy.data_width, with_csr=True,
+                data_width=self.pcie_phy.data_width, with_csr=acc_csr,
                 hostmem_base=hostmem_base)
-            self.add_module(name="nvme_engine", module=io_engine.engine)
+            if acc_csr:
+                self.add_module(name="nvme_engine", module=io_engine.engine)
 
             io_db_port = endpoint.crossbar.get_master_port()
             self.mmio_db = LiteNVMePCIeMmioAccessor(port=io_db_port, tag=0x45, with_csr=False)
@@ -302,6 +310,45 @@ class BaseSoC(SoCCore):
                 self.comb += [
                     nvme_gen.source.connect(io_engine.sink),
                     io_engine.source.connect(nvme_gen.sink),
+                ]
+
+            # Optional pure-RTL init sequencer (CPU-less bring-up). When enabled it drives the
+            # cfg/mmio/rootcfg accessors + the engine config (firmware does none of the init), and
+            # joins the hostmem arbiter with its own dword master for admin SQE/CQE access. A host
+            # pulses nvme_init_ctrl.start over Etherbone and polls nvme_init_status.
+            if with_rtl_init:
+                from litenvme.init import LiteNVMeInitSequencer
+                from litenvme.io_engine import LiteNVMeMemPortToAXI
+                self.nvme_init = seq = LiteNVMeInitSequencer(
+                    bar0_base=0xe0000000, hostmem_base=hostmem_base, io_q_entries=64, with_csr=True)
+                self.nvme_init_bridge = init_bridge = LiteNVMeMemPortToAXI(
+                    seq.mem, data_width=self.pcie_phy.data_width, address_width=32, base=hostmem_base)
+                io_engine_masters.append(init_bridge.axi)
+                self.comb += [
+                    # CFG accessor.
+                    self.cfg.start.eq(seq.cfg_start), self.cfg.we.eq(seq.cfg_we),
+                    self.cfg.wdata.eq(seq.cfg_wdata), self.cfg.reg.eq(seq.cfg_reg),
+                    self.cfg.ext_reg.eq(0), self.cfg.bus.eq(seq.cfg_bus),
+                    self.cfg.device.eq(seq.cfg_dev), self.cfg.function.eq(seq.cfg_func),
+                    seq.cfg_done.eq(self.cfg.done), seq.cfg_err.eq(self.cfg.err),
+                    seq.cfg_rdata.eq(self.cfg.rdata),
+                    # MMIO accessor.
+                    self.mmio.start.eq(seq.mmio_start), self.mmio.we.eq(seq.mmio_we),
+                    self.mmio.adr.eq(seq.mmio_adr), self.mmio.wdata.eq(seq.mmio_wdata),
+                    self.mmio.wsel.eq(seq.mmio_wsel), self.mmio.len.eq(seq.mmio_len),
+                    seq.mmio_done.eq(self.mmio.done), seq.mmio_err.eq(self.mmio.err),
+                    seq.mmio_rdata.eq(self.mmio.rdata),
+                    # Root cfg-mgmt (memory window).
+                    self.pcie_rootcfg.start.eq(seq.root_start),
+                    self.pcie_rootcfg.write.eq(seq.root_write),
+                    self.pcie_rootcfg.addr.eq(seq.root_addr),
+                    self.pcie_rootcfg.wdata.eq(seq.root_wdata),
+                    self.pcie_rootcfg.be.eq(0xf), self.pcie_rootcfg.func.eq(0),
+                    seq.root_done.eq(self.pcie_rootcfg.done),
+                    # Engine config (from the sequencer instead of firmware CSRs).
+                    io_engine.enable.eq(seq.eng_enable), io_engine.sq_base.eq(seq.eng_sq_base),
+                    io_engine.cq_base.eq(seq.eng_cq_base), io_engine.sq_db_adr.eq(seq.eng_sq_db),
+                    io_engine.cq_db_adr.eq(seq.eng_cq_db), io_engine.prp_list_base.eq(seq.eng_prp_list),
                 ]
 
         self.hostmem_port = endpoint.crossbar.get_slave_port(address_decoder=hostmem_decoder)
@@ -441,6 +488,7 @@ def main():
     parser.add_argument("--with-io-engine",  action="store_true",                      help="Enable the hardware NVMe I/O command engine.")
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     parser.add_argument("--with-block-streamer", action="store_true",                  help="Add the block-streamer front-end + BIST (Etherbone correctness).")
+    parser.add_argument("--with-rtl-init",       action="store_true",                  help="Pure-RTL NVMe bring-up (no firmware init; cfg/mmio/engine driven by the sequencer).")
     args = parser.parse_args()
 
     def build_soc(cpu_firmware=None, force_run=None):
@@ -453,6 +501,7 @@ def main():
             with_io_engine = args.with_io_engine,
             io_engine_qd   = args.io_engine_qd,
             with_block_streamer = args.with_block_streamer,
+            with_rtl_init       = args.with_rtl_init,
             **parser.soc_argdict,
         )
         if args.litescope_probe == "pcie":

@@ -29,6 +29,8 @@ from migen import *
 
 from litex.gen import *
 
+from litex.soc.interconnect.csr import *
+
 from litenvme.io_engine import LiteNVMeMemPort
 
 # Sequencer ----------------------------------------------------------------------------------------
@@ -37,7 +39,7 @@ class LiteNVMeInitSequencer(LiteXModule):
     def __init__(self, bar0_base=0xe000_0000, hostmem_base=0x1000_0000,
                  admin_q_entries=2, io_q_entries=64, io_qid=1,
                  mem_window_dw=0x20, mem_window_val=0xe000_e000, mem_adr_width=32,
-                 poll_timeout=2**22):
+                 poll_timeout=2**22, with_csr=False):
         # Host-memory layout (must match the engine + the hostmem responder window).
         ASQ   = hostmem_base + 0x0000
         ACQ   = hostmem_base + 0x1000
@@ -327,3 +329,23 @@ class LiteNVMeInitSequencer(LiteXModule):
         fsm.act("READY")                            # eng_*/init_done held by their registers.
         fsm.act("FAILED", NextValue(self.init_error, 1), NextState("FAILED-HOLD"))
         fsm.act("FAILED-HOLD")
+
+        if with_csr:
+            self.add_csr()
+
+    # CSRs (for host-triggered bring-up / status over Etherbone) ------------------------------------
+    def add_csr(self):
+        self._ctrl = CSRStorage(fields=[
+            CSRField("start", size=1, offset=0, pulse=True, description="Start NVMe RTL bring-up."),
+        ])
+        self._status = CSRStatus(fields=[
+            CSRField("done",  size=1, offset=0, description="Bring-up complete."),
+            CSRField("error", size=1, offset=1, description="Bring-up failed."),
+            CSRField("busy",  size=1, offset=2, description="Bring-up in progress."),
+        ])
+        self.comb += [
+            self.start.eq(self._ctrl.fields.start),
+            self._status.fields.done.eq(self.init_done),
+            self._status.fields.error.eq(self.init_error),
+            self._status.fields.busy.eq(self.busy),
+        ]
