@@ -59,35 +59,49 @@ layer supports in principle — it is future work here, not an architectural lim
 ## Resource footprint context
 
 LUT/FF are **never published** by the commercial cores, so a full logic comparison isn't
-possible — but LiteNVMe's own core-only numbers are exact. The standalone `litenvme_core` was
-synthesized on its own (out-of-context, XCKU3P, Gen3 x4 / 256-bit, default 512 KB window +
-embedded bring-up CPU); the Vivado hierarchy gives:
+possible — but LiteNVMe's own core-only numbers are exact. The standalone `litenvme_core`
+(block-streamer product config, `examples/alibaba_xcku3p.yml`) was synthesized on its own
+(out-of-context, XCKU3P, Gen3 x4 / 256-bit); the Vivado hierarchy gives:
 
 | Core | LUT | FF | BRAM tiles | URAM | DSP | Data buffer / CPU |
 |------|----:|---:|-----------:|-----:|----:|-------------------|
-| **LiteNVMe** standalone core | **13,303** | **15,397** | **325** | 0 | 0 | 512 KB window + soft-CPU |
+| **LiteNVMe** standalone core | **11,577** | **14,408** | **133** | 0 | 0 | 256 KB window + soft-CPU |
 |  ├ PCIe hard-IP wrapper (+GTY)| 2,960 | 6,303 | 22 | 0 | 0 | — |
-|  ├ VexRiscv bring-up CPU      | 2,182 |   749 |  0 (+2 RAMB18) | 0 | 0 | — |
-|  └ NVMe datapath + streamer + hostmem + glue | ~8,161 | ~8,345 | ~298 | 0 | 0 | incl. the 512 KB window |
+|  ├ VexRiscv bring-up CPU      | 1,695 |   749 |  0 (+2 RAMB18) | 0 | 0 | ROM/RAM ≈ 34 BRAM |
+|  └ NVMe datapath + streamer + 256 KB window + glue | ~6,922 | ~7,356 | ~106 | 0 | 0 | window ≈ 64 BRAM |
 | Design Gateway NVMe-IP (std)  | n/p | n/p | 66 | 0 | n/p | 256 KB RAM, **CPU-less** |
 | Design Gateway NVMe-IP (URAM) | n/p | n/p | 2  | 8 | n/p | 256 KB RAM, **CPU-less** |
 | IntelliProp / iWave           | n/p | n/p | n/p| n/p | n/p | user-defined (BRAM/DDR) |
 
-(Post-synthesis estimate; post-place would be slightly lower. Numbers are for the
-block-streamer product config — `examples/alibaba_xcku3p.yml`.)
+(Post-synthesis estimate; post-place would be slightly lower.)
 
-Honest read of this: **LiteNVMe currently uses more BRAM than the leanest CPU-less commercial
-cores** (325 tiles vs Design Gateway's 66). Two reasons, both configurable:
-1. The **default host-memory window is 512 KB** (~half the BRAM) vs Design Gateway's 256 KB —
-   shrink `hostmem_size`, or point `hostmem_backend` at DDR/LiteDRAM, to cut it.
-2. LiteNVMe **embeds a soft-CPU** (ROM/RAM) for one-time bring-up, where Design Gateway is
-   pure-RTL CPU-less — the `cpu: None` variant removes the CPU (and its ROM/RAM) in favour of an
-   external control bus, at the cost of doing NVMe init from the host.
+### Understanding the BRAM difference
 
-On **soft logic** LiteNVMe is modest (~8 k LUT for the NVMe datapath itself, ~13 k including the
-PCIe wrapper and CPU) and uses **0 URAM / 0 DSP**, so it ports cleanly across Ultrascale+. The
-honest summary: LiteNVMe trades some BRAM (bigger default buffer + embedded CPU) for open-source
-flexibility and self-contained bring-up; the area is reasonable and tunable, not best-in-class.
+An earlier build of this core used **325 BRAM tiles (90 % of the device)** — clearly out of line
+with Design Gateway's 66. Investigating *why* found two fixable causes, now addressed:
+
+1. **A debug-read port was replicating the whole window (~2×).** The host-memory BRAM already
+   uses a read+write (true-dual-port) pair for the data path; the CSR memory-readback feature
+   added a *third* port, which Vivado can only satisfy by **duplicating the entire array**. That
+   feature is debug-only and is now **off by default** for the pin-driven standalone core (it
+   stays on the test SoC, where firmware `nvme_verify` needs it). → removes ~half the window BRAM.
+2. **The default window was oversized.** 512 KiB included 256 KiB of per-slot buffers that only
+   the *request generator* uses — the block streamer doesn't. The standalone core now defaults
+   to a **256 KiB window** (queues + PRP region + a 192 KiB staging buffer) with a small ring
+   (`qsize=8`), matching Design Gateway's 256 KiB data-buffer class.
+
+Result: **325 → 133 BRAM tiles (90 % → 37 %)**, leaving ~63 % of the device's BRAM free.
+
+### Where LiteNVMe still differs
+
+The remaining gap to Design Gateway's 66 is almost entirely the **embedded bring-up CPU**
+(≈ 34 BRAM of ROM/RAM) — LiteNVMe does NVMe init in firmware on a soft-CPU, where Design Gateway
+is pure-RTL and CPU-less. The `cpu: None` variant removes the CPU (and its ROM/RAM), bringing the
+core to ≈ window (64) + PCIe wrapper (22) ≈ **the same ~66–90 BRAM class**, at the cost of doing
+bring-up from an external host over the control bus. The data buffer itself (≈ 64 BRAM for
+256 KiB) is already in Design Gateway's class, and `hostmem_size` / a DDR-backed `hostmem_backend`
+tune it further. Soft logic is modest (~7 k LUT for the datapath, ~11.5 k incl. PCIe + CPU), with
+**0 URAM / 0 DSP** — it ports cleanly across Ultrascale+.
 
 ## Takeaways
 

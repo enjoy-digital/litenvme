@@ -234,6 +234,9 @@ class LiteNVMeCore(SoCCore):
             with_request_gen = with_request_gen,
             with_block_streamer = with_block_streamer,
             block_streamer_csr  = not expose_block_pins,
+            # The CSR memory-debug frontend adds a third BRAM port that replicates the whole
+            # host-memory window; the pin-driven standalone core does not need it.
+            with_hostmem_csr = core_config.get("with_hostmem_csr", not expose_block_pins),
             staging_base     = core_config.get("staging_base", 0x4_0000),
             staging_size     = core_config.get("staging_size", 0x4_0000),
         )

@@ -32,18 +32,22 @@
     # auto-init firmware into ROM (needs the Phase C auto-init firmware + nvme_ctrl CSRs).
     "firmware"      : "none",
 
-    # I/O engine + host-memory window.
+    # I/O engine + host-memory window. The block streamer issues one command at a time, so a
+    # small ring (qsize/qd) is enough and keeps the PRP-list region (qsize pages) tiny. The
+    # window holds only the queues + PRP region + the data-staging buffer -- no per-slot
+    # request-generator buffers -- so 256 KiB is plenty (vs 512 KiB for the benchmark variant).
     "qid"           : 1,
-    "qsize"         : 64,
-    "qd"            : 32,
+    "qsize"         : 8,        # PRP-list region = qsize*4KiB = 32 KiB.
+    "qd"            : 4,
     "hostmem_base"  : 0x10000000,
-    "hostmem_size"  : 0x80000,
+    "hostmem_size"  : 0x40000,  # 256 KiB.
 
     # Data interface: the LiteSATA-style block streamer is the sole front-end, exposed at the
     # top as wr_sink/rd_source + command/status pins. (Set with_request_gen instead for a
-    # CSR-driven benchmark variant.)
+    # CSR-driven benchmark variant.) The CSR memory-debug frontend (which replicates the window
+    # BRAM) is dropped automatically for this pin-driven core.
     "with_request_gen"    : False,
     "with_block_streamer" : True,
-    "staging_base"        : 0x40000,  # 256KB into the 512KB window (clear of SQ/CQ/PRP).
-    "staging_size"        : 0x40000,
+    "staging_base"        : 0x10000,  # 64 KiB in (clear of SQ/CQ@0x3-4000, PRP@0x5000).
+    "staging_size"        : 0x30000,  # 192 KiB staging -> up to 384-sector transfers.
 }

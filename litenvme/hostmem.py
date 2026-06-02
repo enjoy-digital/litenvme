@@ -31,7 +31,8 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
     - Single-beat AXI transactions (len=0).
     - Read latency is 1 cycle, with a small response FIFO to sustain 1 beat/clk.
     """
-    def __init__(self, size, data_width, address_width=32, id_width=1, rd_fifo_depth=64):
+    def __init__(self, size, data_width, address_width=32, id_width=1, rd_fifo_depth=64,
+                 with_dbg=True):
         self.axi = axi.AXIInterface(
             data_width    = data_width,
             address_width = address_width,
@@ -47,12 +48,24 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
         mem = Memory(data_width, depth_words)
         rp  = mem.get_port(has_re=True, mode=READ_FIRST)
         wp  = mem.get_port(write_capable=True, we_granularity=8)
-        # Debug read-only port (word address).
-        self.dbg_adr  = Signal(32)
-        self.dbg_en   = Signal()
-        self.dbg_data = Signal(data_width)
-        dbg_rp = mem.get_port(has_re=True, mode=READ_FIRST)
-        self.specials += mem, rp, wp, dbg_rp
+        self.specials += mem, rp, wp
+        # Optional debug read-only port (word address). This is a THIRD memory port on top of
+        # the data path's read+write (true-dual-port) pair, so enabling it forces Vivado to
+        # REPLICATE the whole window BRAM (~2x its tiles). Only enable it when CSR memory
+        # readback is actually used (e.g. firmware nvme_verify on the test SoC); the standalone
+        # core leaves it off.
+        self.with_dbg = with_dbg
+        if with_dbg:
+            self.dbg_adr  = Signal(32)
+            self.dbg_en   = Signal()
+            self.dbg_data = Signal(data_width)
+            dbg_rp = mem.get_port(has_re=True, mode=READ_FIRST)
+            self.specials += dbg_rp
+            self.comb += [
+                dbg_rp.adr.eq(self.dbg_adr),
+                dbg_rp.re.eq(self.dbg_en),
+                self.dbg_data.eq(dbg_rp.dat_r),
+            ]
 
         # Read response FIFO (data/ids).
         self.submodules.rd_resp_fifo = rd_resp_fifo = stream.SyncFIFO(
@@ -141,13 +154,6 @@ class LiteNVMeHostMemAXIRAM(LiteXModule):
         ]
         for i in range(beat_bytes):
             self.comb += wp.we[i].eq(wr_commit & w_strb[i])
-
-        # Debug read port (word address).
-        self.comb += [
-            dbg_rp.adr.eq(self.dbg_adr),
-            dbg_rp.re.eq(self.dbg_en),
-            self.dbg_data.eq(dbg_rp.dat_r),
-        ]
 
         self.sync += [
             # Latch AW into its slot; a freshly-accepted AW wins over free-on-commit so we
@@ -756,9 +762,12 @@ class LiteNVMeHostMemResponder(LiteXModule):
         # backend typically has no BRAM-style debug read port (`dbg_*`); the CSR-debug
         # read path is then skipped (writes still work via the CSR's own AXI master).
         if backend is None:
+            # The debug read port (and the BRAM replication it costs) is only needed for the
+            # CSR memory-readback frontend; skip it when there is no CSR.
             self.backend = backend = LiteNVMeHostMemAXIRAM(
                 size       = size,
                 data_width = data_width,
+                with_dbg   = with_csr,
             )
         else:
             self.backend = backend

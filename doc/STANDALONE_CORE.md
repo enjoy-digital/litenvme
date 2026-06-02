@@ -236,14 +236,14 @@ backend exposing a matching `.axi` slave.
 ### Resource utilization
 
 Out-of-context synthesis of the **standalone `litenvme_core`** (this config:
-`examples/alibaba_xcku3p.yml`, Gen3 x4 / 256-bit, 512 KiB window + bring-up CPU) on the XCKU3P
+`examples/alibaba_xcku3p.yml`, Gen3 x4 / 256-bit, 256 KiB window + bring-up CPU) on the XCKU3P
 (`xcku3p-ffvb676-2-e`):
 
 | Resource | Used | Device | % |
 |----------|-----:|-------:|--:|
-| CLB LUTs       | 13,303 | 162,720 | 8.2 % |
-| CLB Registers  | 15,397 | 325,440 | 4.7 % |
-| Block RAM tiles| 325    | 360     | 90 % |
+| CLB LUTs       | 11,577 | 162,720 | 7.1 % |
+| CLB Registers  | 14,408 | 325,440 | 4.4 % |
+| Block RAM tiles| 133    | 360     | 37 % |
 | URAM           | 0      | 48      | 0 % |
 | DSP            | 0      | 1,368   | 0 % |
 
@@ -252,22 +252,25 @@ Per-block breakdown (Vivado hierarchy):
 | Block | LUT | FF | RAMB36 |
 |-------|----:|---:|-------:|
 | PCIe hard-IP wrapper (`pcie4_uscale_plus` + GTY) | 2,960 | 6,303 | 22 |
-| VexRiscv bring-up CPU (minimal)                  | 2,182 |   749 | 0 (+2 RAMB18) |
-| NVMe datapath + block streamer + host-memory + glue | ~8,161 | ~8,345 | ~298 (incl. the 512 KiB window) |
+| VexRiscv bring-up CPU (minimal)                  | 1,695 |   749 | 0 (+2 RAMB18) — ROM/RAM ≈ 34 |
+| NVMe datapath + block streamer + 256 KiB window + glue | ~6,922 | ~7,356 | ~106 (window ≈ 64) |
 
 Notes (post-synthesis estimate; post-place is slightly lower):
-- **BRAM is the dominant, and the tunable, cost.** The bulk of the ~298 RAMB36 is the 512 KiB
-  host-memory window plus the CPU ROM/RAM. Shrink `hostmem_size`, or point `hostmem_backend` at
-  DDR/LiteDRAM, to cut BRAM sharply — the soft logic barely changes. The `cpu: None` variant
-  additionally removes the CPU's ROM/RAM (bring-up then comes from an external control bus).
-- The NVMe datapath itself (engine + accessors + block streamer + host-memory controller) is
-  **~8 k LUT**; the PCIe hard-IP wrapper and the bring-up CPU account for the rest.
+- **BRAM is the dominant, tunable cost** and is split between the host-memory window (~64 RAMB36
+  for 256 KiB) and the CPU ROM/RAM (~34). Shrink `hostmem_size`, or point `hostmem_backend` at
+  DDR/LiteDRAM, to cut the window; the `cpu: None` variant removes the CPU's ROM/RAM (bring-up
+  then comes from an external control bus). See `doc/NVME_CORE_COMPARISON.md` for the BRAM
+  analysis vs other cores.
+- **Two earlier BRAM wastes were removed** to get here (from 325 → 133 tiles): the CSR memory-
+  debug frontend was replicating the whole window (a third BRAM port) and is now off by default
+  for the pin-driven core; and the window was right-sized to 256 KiB (the 512 KiB default carried
+  256 KiB of request-generator buffers the block streamer doesn't use).
 - **0 URAM, 0 DSP** — LUT/FF + BRAM only, so it ports cleanly across Ultrascale+ parts. The PCIe
   hard IP (1 GTY quad) and one QPLL are the only hard resources required.
 
 For reference, the **bench test SoC** (`--with-etherbone --with-block-streamer`, which adds the
-Ethernet/Etherbone bridge + request-generator/BIST harness) is a bit larger end-to-end
-(post-place: 14,699 LUT / 18,765 FF / 325 BRAM / 2 DSP, timing met @125 MHz).
+Ethernet/Etherbone bridge + request-generator/BIST harness + the 512 KiB window with CSR debug)
+is larger end-to-end (post-place: 14,699 LUT / 18,765 FF / 325 BRAM / 2 DSP, timing met @125 MHz).
 
 For how these numbers and the throughput compare to other publicly available NVMe cores
 (IntelliProp, Design Gateway, iWave, OpenExpress) and whether LiteNVMe is near-optimal, see

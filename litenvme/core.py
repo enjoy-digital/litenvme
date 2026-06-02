@@ -90,7 +90,7 @@ class LiteNVMe(LiteXModule):
     def __init__(self, pcie_endpoint, hostmem_base=0x1000_0000, hostmem_size=0x8_0000,
                  data_width=None, qid=1, qsize=64, qd=32, requester_id=0x0000,
                  hostmem_backend=None, with_request_gen=False,
-                 with_block_streamer=False, block_streamer_csr=True,
+                 with_block_streamer=False, block_streamer_csr=True, with_hostmem_csr=True,
                  staging_base=0x4_0000, staging_size=0x4_0000):
         # hostmem_backend: optional pre-built host-memory backend exposing a matching
         # `.axi` slave. Default (None) instantiates on-FPGA BRAM. Pass a LiteDRAM AXI
@@ -167,7 +167,7 @@ class LiteNVMe(LiteXModule):
             base              = hostmem_base,
             size              = hostmem_size,
             data_width        = data_width,
-            with_csr          = True,
+            with_csr          = with_hostmem_csr,
             extra_axi_masters = extra_axi_masters,
             backend           = hostmem_backend,
         )
