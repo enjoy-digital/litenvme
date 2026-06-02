@@ -44,6 +44,7 @@ setup(
     ],
     entry_points = {
         "console_scripts": [
+            "litenvme_gen=litenvme.gen:main",
         ],
     },
 )

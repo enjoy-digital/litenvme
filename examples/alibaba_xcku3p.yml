@@ -1,0 +1,44 @@
+# LiteNVMe standalone core — Alibaba KU3P, PCIe Gen3 x4, 256-bit datapath.
+# Generate with:  litenvme_gen examples/alibaba_xcku3p.yml
+{
+    # PCIe PHY (RootPort).
+    "phy"           : "USPPCIEPHY",
+    "phy_device"    : "xcku3p-ffvb676-2-e",
+    "phy_lanes"     : 4,
+    "phy_speed"     : "gen3",
+    "phy_ip_name"   : "pcie4_uscale_plus",
+    "data_width"    : 256,
+    "phy_config"    : {
+        "mode_selection"  : "Advanced",
+        "en_gt_selection" : "true",
+        "select_quad"     : "GTY_Quad_225",
+        "pcie_blk_locn"   : "X0Y0",
+        "gen_x0y0"        : "true",
+        "gen_x1y0"        : "false",
+        "plltype"         : "QPLL0",
+        "axisten_freq"    : 125,   # 256b @ 125MHz = 4.0 GB/s user datapath.
+        "coreclk_freq"    : 250,
+    },
+
+    # Clocking: sys clock derived from the PCIe user clock (internal mode).
+    "clk_freq"      : 125e6,
+    "clk_external"  : False,
+
+    # Embedded CPU (runs NVMe bring-up firmware, raises init_done).
+    "cpu"           : "vexriscv",
+    "cpu_variant"   : "minimal",
+    "uart"          : "serial",
+    # "none": boot the LiteX BIOS (validates generation today). "auto": bake the NVMe
+    # auto-init firmware into ROM (needs the Phase C auto-init firmware + nvme_ctrl CSRs).
+    "firmware"      : "none",
+
+    # I/O engine + host-memory window.
+    "qid"           : 1,
+    "qsize"         : 64,
+    "qd"            : 32,
+    "hostmem_base"  : 0x10000000,
+    "hostmem_size"  : 0x80000,
+
+    # Front-end (Phase A: request generator; block streamer added in Phase B).
+    "with_request_gen" : True,
+}
