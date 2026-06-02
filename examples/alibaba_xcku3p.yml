@@ -5,7 +5,8 @@
     "phy"           : "USPPCIEPHY",
     "phy_device"    : "xcku3p-ffvb676-2-e",
     "phy_lanes"     : 4,
-    "ep_max_pending_requests" : 2,   # control-plane only (cfg/mmio/doorbells) -> small; shrinks crossbar completion BRAM.
+    "ep_max_pending_requests" : 8,   # outstanding-request buffers. 8 = full throughput; lowering to
+                                     # 2 saves ~15 BRAM but costs ~20% read throughput (HW-measured).
     "phy_speed"     : "gen3",
     "phy_ip_name"   : "pcie4_uscale_plus",
     "data_width"    : 256,

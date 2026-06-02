@@ -241,9 +241,9 @@ Out-of-context synthesis of the **standalone `litenvme_core`** (this config:
 
 | Resource | Used | Device | % |
 |----------|-----:|-------:|--:|
-| CLB LUTs       | 11,122 | 162,720 | 6.8 % |
-| CLB Registers  | 14,279 | 325,440 | 4.4 % |
-| Block RAM tiles| 118    | 360     | 33 % |
+| CLB LUTs       | 11,577 | 162,720 | 7.1 % |
+| CLB Registers  | 14,408 | 325,440 | 4.4 % |
+| Block RAM tiles| 133    | 360     | 37 % |
 | URAM           | 0      | 48      | 0 % |
 | DSP            | 0      | 1,368   | 0 % |
 

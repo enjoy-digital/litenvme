@@ -127,6 +127,7 @@ class BaseSoC(SoCCore):
         staging_base    = 0x40000,
         staging_size    = 0x40000,
         with_rtl_init   = False,
+        ep_max_pending_requests = 8,
         **kwargs):
         # Platform ---------------------------------------------------------------------------------
         platform = alibaba_xcku3p.Platform()
@@ -196,7 +197,7 @@ class BaseSoC(SoCCore):
         })
         self.pcie_endpoint = LitePCIeRootPort(
             phy        = self.pcie_phy,
-            max_pending_requests = 8,
+            max_pending_requests = ep_max_pending_requests,
             endianness           = self.pcie_phy.endianness,
             address_width        = 64,
             with_configuration   = True,
@@ -489,6 +490,7 @@ def main():
     parser.add_argument("--io-engine-qd",    default=32, type=int,                     help="I/O engine queue depth (commands outstanding).")
     parser.add_argument("--with-block-streamer", action="store_true",                  help="Add the block-streamer front-end + BIST (Etherbone correctness).")
     parser.add_argument("--with-rtl-init",       action="store_true",                  help="Pure-RTL NVMe bring-up (no firmware init; cfg/mmio/engine driven by the sequencer).")
+    parser.add_argument("--ep-max-pending-requests", default=8, type=int,               help="LitePCIe outstanding-request buffers (control-plane); smaller saves BRAM.")
     args = parser.parse_args()
 
     def build_soc(cpu_firmware=None, force_run=None):
@@ -502,6 +504,7 @@ def main():
             io_engine_qd   = args.io_engine_qd,
             with_block_streamer = args.with_block_streamer,
             with_rtl_init       = args.with_rtl_init,
+            ep_max_pending_requests = args.ep_max_pending_requests,
             **parser.soc_argdict,
         )
         if args.litescope_probe == "pcie":
