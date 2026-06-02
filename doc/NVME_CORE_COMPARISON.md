@@ -92,6 +92,41 @@ with Design Gateway's 66. Investigating *why* found two fixable causes, now addr
 
 Result: **325 → 133 BRAM tiles (90 % → 37 %)**, leaving ~63 % of the device's BRAM free.
 
+### BRAM vs Design Gateway — where the tiles actually go
+
+Design Gateway's CPU-less NVMe-IP is quoted at **66 BRAM** (or **8 URAM + 2 BRAM** with the URAM
+option) for a 256 KiB internal buffer; it connects to AMD's *separate* PCIe Integrated Block.
+LiteNVMe's standalone core measures **133 BRAM tiles** (CPU-based) / **~108** (RTL init, CPU
+removed). That gap looks large until you break it down (LiteNVMe figures measured by OOC synth;
+DG figures inferred from its published 66 / URAM-option):
+
+| Component | LiteNVMe | Design Gateway |
+|-----------|---------:|---------------:|
+| 256 KiB data buffer/window      | ~64 BRAM | ~64 BRAM (or 8 URAM) |
+| PCIe hard-IP block (Xilinx)     | **22 BRAM (counted)** | **not counted** (separate PCIe block) |
+| Controller FIFOs / crossbar glue| ~22 BRAM | ~2 BRAM |
+| Bring-up CPU ROM/RAM            | ~23 BRAM (firmware) / **0 (RTL init)** | 0 (RTL) |
+
+So the difference is **not** a heavier NVMe engine — it is three separate things:
+
+1. **The PCIe IP (~22 BRAM) is a counting boundary.** LiteNVMe's number includes the Xilinx
+   `pcie4_uscale_plus` block (replay/buffers); DG quotes only its own IP and leaves the PCIe block
+   to the integrator. That alone is ~half the gap and isn't LiteNVMe being bigger.
+2. **The 256 KiB buffer (~64 BRAM) is a tie** — inherent to an on-chip staging buffer. Both can
+   move it off BRAM: DG via a URAM option, LiteNVMe via its pluggable `hostmem_backend`
+   (URAM or DDR/LiteDRAM) — neither is fundamental.
+3. **The controller glue (~22 vs ~2 BRAM) is the genuine overhead.** LitePCIe's crossbar
+   completion buffers and the engine/host-memory-responder stream FIFOs are throughput-sized
+   (depth-64 at 256-bit ≈ 1 BRAM each); a hand-optimized commercial core uses tight/distributed-RAM
+   FIFOs. This is the price of a composable, readable, open framework — and it is reducible
+   (smaller FIFOs, force distributed RAM) if area is critical.
+
+Net: with **RTL init** (drops the ~23-BRAM CPU) the core is ~108 tiles; excluding the PCIe IP
+(apples-to-apples with DG) that is ~86 = 64 (buffer) + ~22 (glue), vs DG's 66 = 64 + 2. The
+remaining ~20-tile difference is LiteX FIFO generosity, not the NVMe logic — and the buffer is
+URAM-movable in both. So LiteNVMe is in the **same class**, with a tunable, well-understood
+overhead rather than a hidden one.
+
 ### Where LiteNVMe still differs — and a real architectural gap
 
 The remaining BRAM gap to Design Gateway's 66 is almost entirely the **embedded bring-up CPU**
