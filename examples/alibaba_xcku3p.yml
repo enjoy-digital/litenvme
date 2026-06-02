@@ -39,6 +39,11 @@
     "hostmem_base"  : 0x10000000,
     "hostmem_size"  : 0x80000,
 
-    # Front-end (Phase A: request generator; block streamer added in Phase B).
-    "with_request_gen" : True,
+    # Data interface: the LiteSATA-style block streamer is the sole front-end, exposed at the
+    # top as wr_sink/rd_source + command/status pins. (Set with_request_gen instead for a
+    # CSR-driven benchmark variant.)
+    "with_request_gen"    : False,
+    "with_block_streamer" : True,
+    "staging_base"        : 0x40000,  # 256KB into the 512KB window (clear of SQ/CQ/PRP).
+    "staging_size"        : 0x40000,
 }

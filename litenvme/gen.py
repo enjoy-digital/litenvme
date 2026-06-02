@@ -81,6 +81,35 @@ def get_status_ios():
         ),
     ]
 
+def get_block_ios(data_width):
+    # LiteSATA-style block-streaming interface: a command/status port + two AXI-Stream data
+    # ports (write payload in, read payload out). The integrator drives the command, streams
+    # the write payload, and consumes the read payload — no knowledge of PRPs / host memory.
+    return [
+        ("block_ctrl", 0,
+            Subsignal("start",  Pins(1)),
+            Subsignal("write",  Pins(1)),   # 1 = write (host->SSD), 0 = read.
+            Subsignal("sector", Pins(64)),  # start LBA.
+            Subsignal("count",  Pins(32)),  # number of 512B sectors.
+            Subsignal("nsid",   Pins(32)),
+            Subsignal("done",   Pins(1)),
+            Subsignal("busy",   Pins(1)),
+            Subsignal("error",  Pins(1)),
+        ),
+        ("block_wr_axis", 0,  # write payload in.
+            Subsignal("tvalid", Pins(1)),
+            Subsignal("tready", Pins(1)),
+            Subsignal("tlast",  Pins(1)),
+            Subsignal("tdata",  Pins(data_width)),
+        ),
+        ("block_rd_axis", 0,  # read payload out.
+            Subsignal("tvalid", Pins(1)),
+            Subsignal("tready", Pins(1)),
+            Subsignal("tlast",  Pins(1)),
+            Subsignal("tdata",  Pins(data_width)),
+        ),
+    ]
+
 # CRG ----------------------------------------------------------------------------------------------
 
 class LiteNVMeCRG(LiteXModule):
@@ -195,6 +224,12 @@ class LiteNVMeCore(SoCCore):
         )
 
         # LiteNVMe core ----------------------------------------------------------------------------
+        with_request_gen    = core_config.get("with_request_gen", True)
+        with_block_streamer = core_config.get("with_block_streamer", False)
+        # When the block streamer is the sole front-end, expose its data/command interface at
+        # the top (pin-driven by external logic); otherwise it (if present) is CSR-driven.
+        expose_block_pins   = with_block_streamer and not with_request_gen
+
         self.nvme = nvme = LiteNVMe(
             pcie_endpoint    = self.pcie_endpoint,
             hostmem_base     = core_config.get("hostmem_base", 0x1000_0000),
@@ -204,11 +239,13 @@ class LiteNVMeCore(SoCCore):
             qsize            = core_config.get("qsize", 64),
             qd               = core_config.get("qd",    32),
             requester_id     = core_config.get("requester_id", 0x0000),
-            with_request_gen = core_config.get("with_request_gen", True),
+            with_request_gen = with_request_gen,
+            with_block_streamer = with_block_streamer,
+            block_streamer_csr  = not expose_block_pins,
+            staging_base     = core_config.get("staging_base", 0x4_0000),
+            staging_size     = core_config.get("staging_size", 0x4_0000),
         )
         nvme.add_csrs(self)
-        if core_config.get("with_request_gen", True):
-            self.add_module(name="nvme_gen", module=nvme.request_gen)
 
         # Root-port cfg management (raise our own DevCtl.MPS) — firmware uses it for auto-MPS.
         self.pcie_rootcfg = LiteNVMeRootCfgMgmt(self.pcie_phy)
@@ -220,6 +257,35 @@ class LiteNVMeCore(SoCCore):
             status_pads.init_done.eq(self.nvme_ctrl.init_done.storage),
             status_pads.init_error.eq(self.nvme_ctrl.init_error.storage),
         ]
+
+        # Block-streaming interface to the top (when it is the sole front-end) ------------------
+        if expose_block_pins:
+            platform.add_extension(get_block_ios(data_width))
+            bs   = nvme.block_streamer
+            ctrl = platform.request("block_ctrl")
+            wr   = platform.request("block_wr_axis")
+            rd   = platform.request("block_rd_axis")
+            self.comb += [
+                # Command (start gated on init_done so no transfer runs before bring-up).
+                bs.start.eq(ctrl.start & self.nvme_ctrl.init_done.storage),
+                bs.write.eq(ctrl.write),
+                bs.sector.eq(ctrl.sector),
+                bs.count.eq(ctrl.count),
+                bs.nsid.eq(ctrl.nsid),
+                ctrl.done.eq(bs.done),
+                ctrl.busy.eq(bs.busy),
+                ctrl.error.eq(bs.error),
+                # Write payload in.
+                bs.wr_sink.valid.eq(wr.tvalid),
+                wr.tready.eq(bs.wr_sink.ready),
+                bs.wr_sink.last.eq(wr.tlast),
+                bs.wr_sink.data.eq(wr.tdata),
+                # Read payload out.
+                rd.tvalid.eq(bs.rd_source.valid),
+                bs.rd_source.ready.eq(rd.tready),
+                rd.tlast.eq(bs.rd_source.last),
+                rd.tdata.eq(bs.rd_source.data),
+            ]
 
 # Build --------------------------------------------------------------------------------------------
 

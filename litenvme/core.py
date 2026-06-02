@@ -76,7 +76,9 @@ class LiteNVMe(LiteXModule):
     """
     def __init__(self, pcie_endpoint, hostmem_base=0x1000_0000, hostmem_size=0x8_0000,
                  data_width=None, qid=1, qsize=64, qd=32, requester_id=0x0000,
-                 hostmem_backend=None, with_request_gen=False):
+                 hostmem_backend=None, with_request_gen=False,
+                 with_block_streamer=False, block_streamer_csr=True,
+                 staging_base=0x4_0000, staging_size=0x4_0000):
         # hostmem_backend: optional pre-built host-memory backend exposing a matching
         # `.axi` slave. Default (None) instantiates on-FPGA BRAM. Pass a LiteDRAM AXI
         # port wrapper here for a DDR-backed host-memory window with large buffers
@@ -125,7 +127,25 @@ class LiteNVMe(LiteXModule):
             qid=qid, qsize=qsize, qd=qd, data_width=data_width, with_csr=True,
             hostmem_base=hostmem_base)
 
-        # Host-memory responder; the engine joins the AXI backend as an extra master.
+        # Engine front-ends share one AXI backend; build them before the responder so their
+        # masters join the arbiter. Front-ends (request_gen, block streamer, external logic)
+        # are mutually exclusive owners of the engine sink/source -- a generated core builds
+        # exactly one; a test SoC may build several and mux them externally.
+        extra_axi_masters = [io_engine.axi]
+
+        # Optional LiteSATA-style block-streaming front-end (sector read/write data streams).
+        if with_block_streamer:
+            from litenvme.block import LiteNVMeBlockStreamer
+            self.block_streamer = block_streamer = LiteNVMeBlockStreamer(
+                data_width   = data_width,
+                hostmem_base = hostmem_base,
+                staging_base = staging_base,
+                staging_size = staging_size,
+                with_csr     = block_streamer_csr,
+            )
+            extra_axi_masters.append(block_streamer.dma.axi)
+
+        # Host-memory responder; the engine + front-ends join the AXI backend as masters.
         def hostmem_decoder(a):
             return (a >= hostmem_base) & (a < (hostmem_base + hostmem_size))
         self.hostmem_port = endpoint.crossbar.get_slave_port(address_decoder=hostmem_decoder)
@@ -135,7 +155,7 @@ class LiteNVMe(LiteXModule):
             size              = hostmem_size,
             data_width        = data_width,
             with_csr          = True,
-            extra_axi_masters = [io_engine.axi],
+            extra_axi_masters = extra_axi_masters,
             backend           = hostmem_backend,
         )
 
@@ -146,15 +166,26 @@ class LiteNVMe(LiteXModule):
         if with_request_gen:
             from litenvme.request_gen import LiteNVMeRequestGen
             self.request_gen = request_gen = LiteNVMeRequestGen(with_csr=True)
+
+        # Front-end -> engine connection. When a single front-end is present it owns the
+        # engine streams; when several are present (test SoC), the SoC wires the mux and the
+        # raw engine streams are re-exported here for it.
+        if with_block_streamer and not with_request_gen:
+            self.comb += [
+                block_streamer.source.connect(io_engine.sink),
+                io_engine.source.connect(block_streamer.sink),
+            ]
+            self.request    = None
+            self.completion = None
+        elif with_request_gen and not with_block_streamer:
             self.comb += [
                 request_gen.source.connect(io_engine.sink),
                 io_engine.source.connect(request_gen.sink),
             ]
-            # Streams are owned by the generator in this mode.
             self.request    = None
             self.completion = None
         else:
-            # Re-export the request/completion streams as the core's data-command interface.
+            # No front-end, or several (muxed by the SoC): re-export the engine streams.
             self.request    = io_engine.sink
             self.completion = io_engine.source
 
@@ -170,3 +201,7 @@ class LiteNVMe(LiteXModule):
         soc.add_module(name=f"{name}_engine", module=self.io_engine.engine)
         if hasattr(self.hostmem, "csr"):
             soc.add_module(name=f"{name}_hostmem", module=self.hostmem.csr)
+        if hasattr(self, "request_gen"):
+            soc.add_module(name=f"{name}_gen",   module=self.request_gen)
+        if hasattr(self, "block_streamer") and hasattr(self.block_streamer, "_ctrl"):
+            soc.add_module(name=f"{name}_block", module=self.block_streamer)
