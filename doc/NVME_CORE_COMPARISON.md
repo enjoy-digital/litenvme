@@ -65,10 +65,10 @@ possible — but LiteNVMe's own core-only numbers are exact. The standalone `lit
 
 | Core | LUT | FF | BRAM tiles | URAM | DSP | Data buffer / CPU |
 |------|----:|---:|-----------:|-----:|----:|-------------------|
-| **LiteNVMe** standalone core | **11,577** | **14,408** | **133** | 0 | 0 | 256 KB window + soft-CPU |
+| **LiteNVMe** standalone core | **11,122** | **14,279** | **118** | 0 | 0 | 256 KB window + soft-CPU |
 |  ├ PCIe hard-IP wrapper (+GTY)| 2,960 | 6,303 | 22 | 0 | 0 | — |
 |  ├ VexRiscv bring-up CPU      | 1,695 |   749 |  0 (+2 RAMB18) | 0 | 0 | ROM/RAM ≈ 34 BRAM |
-|  └ NVMe datapath + streamer + 256 KB window + glue | ~6,922 | ~7,356 | ~106 | 0 | 0 | window ≈ 64 BRAM |
+|  └ NVMe datapath + streamer + 256 KB window + glue | ~6,467 | ~7,227 | ~91 | 0 | 0 | window ≈ 64, glue ≈ 6 |
 | Design Gateway NVMe-IP (std)  | n/p | n/p | 66 | 0 | n/p | 256 KB RAM, **CPU-less** |
 | Design Gateway NVMe-IP (URAM) | n/p | n/p | 2  | 8 | n/p | 256 KB RAM, **CPU-less** |
 | IntelliProp / iWave           | n/p | n/p | n/p| n/p | n/p | user-defined (BRAM/DDR) |
@@ -90,7 +90,9 @@ with Design Gateway's 66. Investigating *why* found two fixable causes, now addr
    to a **256 KiB window** (queues + PRP region + a 192 KiB staging buffer) with a small ring
    (`qsize=8`), matching Design Gateway's 256 KiB data-buffer class.
 
-Result: **325 → 133 BRAM tiles (90 % → 37 %)**, leaving ~63 % of the device's BRAM free.
+A later pass also trimmed the control-plane completion buffers (`ep_max_pending_requests` 8→2 — these serve only low-rate cfg/mmio/doorbell requests, not the SSD data path), dropping the FIFO glue from ~24 to ~6 BRAM.
+
+Result: **325 → 133 → 118 BRAM tiles (90 % → 33 %)**, leaving ~67 % of the device's BRAM free.
 
 ### BRAM vs Design Gateway — where the tiles actually go
 
@@ -104,7 +106,7 @@ DG figures inferred from its published 66 / URAM-option):
 |-----------|---------:|---------------:|
 | 256 KiB data buffer/window      | ~64 BRAM | ~64 BRAM (or 8 URAM) |
 | PCIe hard-IP block (Xilinx)     | **22 BRAM (counted)** | **not counted** (separate PCIe block) |
-| Controller FIFOs / crossbar glue| ~22 BRAM | ~2 BRAM |
+| Controller FIFOs / crossbar glue| ~6 BRAM (was ~24) | ~2 BRAM |
 | Bring-up CPU ROM/RAM            | ~23 BRAM (firmware) / **0 (RTL init)** | 0 (RTL) |
 
 So the difference is **not** a heavier NVMe engine — it is three separate things:

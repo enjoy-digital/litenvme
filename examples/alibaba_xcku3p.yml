@@ -5,6 +5,7 @@
     "phy"           : "USPPCIEPHY",
     "phy_device"    : "xcku3p-ffvb676-2-e",
     "phy_lanes"     : 4,
+    "ep_max_pending_requests" : 2,   # control-plane only (cfg/mmio/doorbells) -> small; shrinks crossbar completion BRAM.
     "phy_speed"     : "gen3",
     "phy_ip_name"   : "pcie4_uscale_plus",
     "data_width"    : 256,
