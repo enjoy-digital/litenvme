@@ -1727,6 +1727,18 @@ static void nvme_verify_cmd(char *str)
 	if (cmp_words > 256)
 		cmp_words = 256;
 
+	/* Write the fill pattern to the LBA range first, so verify is self-contained. */
+	uint32_t cmd[16], cqe[4];
+	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
+	for (uint32_t i = 0; i < nlb; i++) {
+		nvme_cmd_write(0x31, nsid, (uint64_t)IO_WR_BUF_ADDR, slba + i, 0, cmd);
+		if (nvme_io_submit(cap, cmd, cqe)) {
+			puts("ERR: write failed.");
+			decode_cqe(cqe[0], cqe[1], cqe[2], cqe[3]);
+			return;
+		}
+	}
+
 	for (uint32_t i = 0; i < nlb; i++) {
 		uint64_t lba = slba + i;
 		if (nvme_read_do(base_addr, nsid, lba, 1))
