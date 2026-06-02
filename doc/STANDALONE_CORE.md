@@ -267,6 +267,10 @@ Reading this for the **standalone core** specifically:
 - **0 URAM, ~0 DSP** — the design is LUT/FF + BRAM only, so it ports cleanly across Ultrascale+
   parts. The PCIe hard IP (1 GTY quad) and one QPLL are the only hard resources required.
 
+For how these numbers and the throughput compare to other publicly available NVMe cores
+(IntelliProp, Design Gateway, iWave, OpenExpress) and whether LiteNVMe is near-optimal, see
+`doc/NVME_CORE_COMPARISON.md`.
+
 ---
 
 ## 6. Test design (Etherbone)
