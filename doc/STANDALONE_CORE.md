@@ -278,7 +278,9 @@ Notes (post-synthesis estimate; post-place is slightly lower):
 
 For reference, the **bench test SoC** (`--with-etherbone --with-block-streamer`, which adds the
 Ethernet/Etherbone bridge + request-generator/BIST harness + the 512 KiB window with CSR debug)
-is larger end-to-end (post-place: 14,699 LUT / 18,765 FF / 325 BRAM / 2 DSP, timing met @125 MHz).
+is larger end-to-end (post-place: 14,667 LUT / 18,733 FF / 325 BRAM / 0 URAM / 2 DSP, timing met
+@125 MHz; HW-revalidated: Gen3 x4, ~2.69 GB/s reads errors=0, block-streamer correctness PASS,
+nvme_verify OK).
 
 For how these numbers and the throughput compare to other publicly available NVMe cores
 (IntelliProp, Design Gateway, iWave, OpenExpress) and whether LiteNVMe is near-optimal, see
