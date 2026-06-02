@@ -257,10 +257,18 @@ Per-block breakdown (Vivado hierarchy):
 
 Notes (post-synthesis estimate; post-place is slightly lower):
 - **BRAM is the dominant, tunable cost** and is split between the host-memory window (~64 RAMB36
-  for 256 KiB) and the CPU ROM/RAM (~34). Shrink `hostmem_size`, or point `hostmem_backend` at
-  DDR/LiteDRAM, to cut the window; the `cpu: None` variant removes the CPU's ROM/RAM (bring-up
-  then comes from an external control bus). See `doc/NVME_CORE_COMPARISON.md` for the BRAM
-  analysis vs other cores.
+  for 256 KiB) and the CPU ROM/RAM (~34, this config boots the LiteX BIOS: 24 KiB ROM + 64 KiB
+  main_ram). Shrink `hostmem_size`, or point `hostmem_backend` at DDR/LiteDRAM, to cut the window.
+- **CPU footprint** — the bring-up CPU is one-time-only, so it is already the smallest VexRiscv
+  (`cpu_variant: minimal`, ~1.7 k LUT) and never needs to be fast. To shrink its ROM/RAM:
+  - `firmware: minimal` bakes a **code-only firmware** (auto-init + idle, no console, no prints)
+    into a small ROM with **no main_ram** — ~8.6 KiB vs the 24 KiB BIOS, saving ~20 BRAM tiles
+    (→ core ≈ 113). *Status:* the minimal/auto firmware builds, but self-init on the **generated**
+    core still needs the firmware↔core CSR names aligned (the wrapper nests cfg/mmio as
+    `nvme_cfg`/`nvme_mmio` while the firmware uses `cfg_cfg_*`/`mmio_mem_*`) — a tracked follow-up.
+  - `cpu: None` removes the CPU and its ROM/RAM entirely; bring-up then comes from an external
+    host over the control bus (a pure-RTL init sequencer would make it fully autonomous — see
+    `doc/NVME_CORE_COMPARISON.md`).
 - **Two earlier BRAM wastes were removed** to get here (from 325 → 133 tiles): the CSR memory-
   debug frontend was replicating the whole window (a third BRAM port) and is now off by default
   for the pin-driven core; and the window was right-sized to 256 KiB (the 512 KiB default carried

@@ -25,11 +25,13 @@
     "clk_external"  : False,
 
     # Embedded CPU (runs NVMe bring-up firmware, raises init_done).
-    "cpu"           : "vexriscv",
+    "cpu"           : "vexriscv",   # bring-up only (one-time init), so the minimal variant.
     "cpu_variant"   : "minimal",
     "uart"          : "serial",
-    # "none": boot the LiteX BIOS (validates generation today). "auto": bake the NVMe
-    # auto-init firmware into ROM (needs the Phase C auto-init firmware + nvme_ctrl CSRs).
+    # "none": boot the LiteX BIOS (works today). "minimal": a code-only firmware (auto-init +
+    # idle, no console/prints) baked into a small ROM with no main_ram -> smallest CPU footprint;
+    # NOTE: minimal/auto self-init on the generated core still needs the firmware<->core CSR
+    # names aligned (the wrapper nests cfg/mmio as nvme_cfg/nvme_mmio) -- a tracked follow-up.
     "firmware"      : "none",
 
     # I/O engine + host-memory window. The block streamer issues one command at a time, so a

@@ -16,6 +16,22 @@
 #include <generated/soc.h>
 
 /*-----------------------------------------------------------------------*/
+/* Minimal build                                                          */
+/*-----------------------------------------------------------------------*/
+
+/* CONFIG_LITENVME_MINIMAL: a code-only firmware for the standalone core -- it auto-inits the
+ * NVMe device, raises init_done and idles, with NO interactive console and NO prints. Stubbing
+ * printf/puts here makes every print a no-op, so --gc-sections drops the whole printf/console
+ * machinery (~half the binary) and the firmware fits a small ROM with no main_ram. (Defined
+ * after the system headers so their `int printf(...)` declarations are untouched.) */
+#ifdef CONFIG_LITENVME_MINIMAL
+#undef printf
+#undef puts
+#define printf(...) ((void)0)
+#define puts(s)     ((void)0)
+#endif
+
+/*-----------------------------------------------------------------------*/
 /* CSR feature flags                                                      */
 /*-----------------------------------------------------------------------*/
 
@@ -26,11 +42,19 @@
 #endif
 
 /* The engine module is registered as "nvme_engine" wrapping a submodule "engine", so its
- * CSRs are double-prefixed: nvme_engine_engine_*. The generator is "nvme_gen". */
-#if defined(CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR) && defined(CSR_NVME_GEN_CTRL_ADDR)
+ * CSRs are double-prefixed: nvme_engine_engine_*. The engine works on its own (nvme_setup /
+ * auto-init); the request generator "nvme_gen" is a separate optional front-end used only by
+ * nvme_engine_bench, so it is gated independently. */
+#if defined(CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR)
 #define NVME_ENGINE_AVAILABLE 1
 #else
 #define NVME_ENGINE_AVAILABLE 0
+#endif
+
+#if defined(CSR_NVME_GEN_CTRL_ADDR)
+#define NVME_GEN_AVAILABLE 1
+#else
+#define NVME_GEN_AVAILABLE 0
 #endif
 
 /*-----------------------------------------------------------------------*/
@@ -187,8 +211,10 @@ static void help(void)
 	puts("nvme_read [bar0] [nsid] [slba] [nlb]  - Read NLB blocks into hostmem");
 	puts("nvme_verify [bar0] [nsid] [slba] [nlb] [dwords] - Verify pattern on LBA range");
 	puts("nvme_write [bar0] [nsid] [slba] [nlb] - Write NLB blocks from hostmem");
-#if NVME_ENGINE_AVAILABLE
+#if NVME_GEN_AVAILABLE
 	puts("nvme_engine_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step] - Benchmark the HW I/O engine (RTL-driven)");
+#endif
+#if NVME_ENGINE_AVAILABLE
 	puts("nvme_setup [bar0] - One-time NVMe bring-up + engine enable + init_done (for Etherbone-driven host tests)");
 #endif
 }
@@ -1432,6 +1458,7 @@ static void nvme_engine_write64(void (*wr_lo)(uint32_t), void (*wr_hi)(uint32_t)
 	wr_hi((uint32_t)((v >> 32) & 0xffffffffu));
 }
 
+#if NVME_GEN_AVAILABLE
 /*
  * nvme_engine_bench: measure the hardware I/O command engine, driven by the RTL request
  * generator (no CPU in the steady-state loop). Firmware only does one-time admin setup
@@ -1596,6 +1623,7 @@ static void nvme_engine_bench_cmd(char *str)
 	}
 #endif
 }
+#endif /* NVME_GEN_AVAILABLE */
 
 /*
  * nvme_autoinit / nvme_setup: one-time NVMe bring-up for Etherbone-driven testing. Does the
@@ -1853,9 +1881,11 @@ static void console_service(void)
 		nvme_verify_cmd(str);
 	else if (strcmp(token, "nvme_write") == 0)
 		nvme_write_cmd(str);
-#if NVME_ENGINE_AVAILABLE
+#if NVME_GEN_AVAILABLE
 	else if (strcmp(token, "nvme_engine_bench") == 0)
 		nvme_engine_bench_cmd(str);
+#endif
+#if NVME_ENGINE_AVAILABLE
 	else if (strcmp(token, "nvme_setup") == 0)
 		nvme_setup_cmd(str);
 #endif
@@ -1868,15 +1898,24 @@ int main(void)
 	irq_setmask(0);
 	irq_setie(1);
 #endif
-	uart_init();
 	bench_timer_init();
 
+#ifdef CONFIG_LITENVME_MINIMAL
+	/* Standalone core: auto-init the NVMe device, raise init_done, then idle. No console,
+	 * no prints (so --gc-sections drops printf + the whole console). */
+#if NVME_ENGINE_AVAILABLE
+	nvme_setup_cmd(NULL);
+#endif
+	while (1) {
+	}
+#else
+	uart_init();
 	help();
 	prompt();
-
 	while (1) {
 		console_service();
 	}
+#endif
 
 	return 0;
 }

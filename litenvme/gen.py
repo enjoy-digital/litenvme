@@ -166,17 +166,19 @@ class LiteNVMeCore(SoCCore):
             cpu_variant   = cpu_variant,
             uart_name     = uart_name,
         )
+        # firmware: "auto"/"minimal" bake the NVMe firmware into ROM (no main_ram); "none"
+        # boots the LiteX BIOS (ROM + main_ram). The same memory map must hold across both
+        # two-pass builds, so the ROM-boot layout is chosen from `firmware`, not from whether
+        # the firmware binary is present yet.
+        rom_boot = core_config.get("firmware", "none") in ("auto", "minimal")
         if cpu_type is not None:
-            if cpu_firmware is not None:
-                soc_kwargs.update(dict(
-                    integrated_rom_size = core_config.get("integrated_rom_size", 0x20000),
-                    integrated_rom_init = cpu_firmware,
-                ))
+            if rom_boot:
+                soc_kwargs["integrated_rom_size"] = core_config.get("integrated_rom_size", 0x20000)
+                if cpu_firmware is not None:
+                    soc_kwargs["integrated_rom_init"] = cpu_firmware
             else:
-                soc_kwargs.update(dict(
-                    integrated_rom_size      = core_config.get("integrated_rom_size", 0x10000),
-                    integrated_main_ram_size = core_config.get("integrated_main_ram_size", 0x10000),
-                ))
+                soc_kwargs["integrated_rom_size"]      = core_config.get("integrated_rom_size", 0x10000)
+                soc_kwargs["integrated_main_ram_size"] = core_config.get("integrated_main_ram_size", 0x10000)
         SoCCore.__init__(self, platform, sys_clk_freq, **soc_kwargs)
 
         # CRG --------------------------------------------------------------------------------------
@@ -322,11 +324,14 @@ def main():
         builder.build(build_name=build_name, regular_comb=False)
         return soc, builder
 
-    if core_config.get("cpu") is not None and firmware == "auto":
+    if core_config.get("cpu") is not None and firmware in ("auto", "minimal"):
         # Two-pass build: (1) emit software headers, (2) compile firmware, (3) bake into ROM.
+        # "minimal" -> code-only firmware (auto-init + idle, no console/prints) via MINIMAL=1.
         soc, builder = build(cpu_firmware=None, build_name=args.name)
-        fw_dir = os.path.join(os.path.dirname(__file__), "..", "bench", "firmware")
-        os.system(f"make -C {fw_dir} BUILD_DIR={builder.output_dir} BOOT=rom clean all")
+        fw_dir   = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bench", "firmware"))
+        build_abs = os.path.abspath(builder.output_dir)
+        make_args = "BOOT=rom" + (" MINIMAL=1" if firmware == "minimal" else "")
+        os.system(f"make -C {fw_dir} BUILD_DIR={build_abs} {make_args} clean all")
         fw_bin = os.path.join(fw_dir, "firmware.bin")
         soc, builder = build(cpu_firmware=fw_bin, build_name=args.name)
     else:

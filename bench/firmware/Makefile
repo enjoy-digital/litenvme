@@ -4,6 +4,11 @@ BOOT?=bios
 include $(BUILD_DIR)/software/include/generated/variables.mak
 include $(SOC_DIRECTORY)/software/common.mak
 
+# MINIMAL=1: code-only standalone firmware (auto-init + idle, no console/prints).
+ifeq ($(MINIMAL),1)
+CFLAGS += -DCONFIG_LITENVME_MINIMAL
+endif
+
 OBJECTS = crt0.o main.o
 LINKER ?= linker.ld
 
