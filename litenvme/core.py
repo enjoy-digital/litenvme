@@ -90,7 +90,9 @@ class LiteNVMe(LiteXModule):
                  data_width=None, qid=1, qsize=64, qd=32, requester_id=0x0000,
                  hostmem_backend=None, with_request_gen=False,
                  with_block_streamer=False, block_streamer_csr=True, with_hostmem_csr=True,
-                 staging_base=0x4_0000, staging_size=0x4_0000):
+                 staging_base=0x4_0000, staging_size=0x4_0000, with_csr=True,
+                 with_accessor_csr=None, with_engine_csr=None, with_request_gen_csr=None,
+                 extra_axi_masters=None):
         # hostmem_backend: optional pre-built host-memory backend exposing a matching
         # `.axi` slave. Default (None) instantiates on-FPGA BRAM. Pass a LiteDRAM AXI
         # port wrapper here for a DDR-backed host-memory window with large buffers
@@ -106,6 +108,15 @@ class LiteNVMe(LiteXModule):
 
         if data_width is None:
             data_width = endpoint.phy.data_width
+        if with_accessor_csr is None:
+            with_accessor_csr = with_csr
+        if with_engine_csr is None:
+            with_engine_csr = with_csr
+        if with_request_gen_csr is None:
+            with_request_gen_csr = with_csr
+        self.with_accessor_csr    = with_accessor_csr
+        self.with_engine_csr      = with_engine_csr
+        self.with_request_gen_csr = with_request_gen_csr
 
         # Master ports off the PCIe crossbar.
         cfg_port     = endpoint.crossbar.get_master_port()
@@ -117,14 +128,14 @@ class LiteNVMe(LiteXModule):
             port         = cfg_port,
             requester_id = requester_id,
             tag          = 0x42,
-            with_csr     = True,
+            with_csr     = with_accessor_csr,
         )
 
         # BAR0 MMIO accessor for controller setup (CAP/CC/CSTS/AQA/queue create) — CSR.
         self.mmio = LiteNVMePCIeMmioAccessor(
             port     = mmio_port,
             tag      = 0x44,
-            with_csr = True,
+            with_csr = with_accessor_csr,
         )
 
         # Dedicated MMIO accessor the engine uses for SQ/CQ doorbells (no CSR; engine-owned).
@@ -136,14 +147,16 @@ class LiteNVMe(LiteXModule):
 
         # Hardware I/O command engine (engine + dword->AXI bridge).
         self.io_engine = io_engine = LiteNVMeIOEngineAXI(
-            qid=qid, qsize=qsize, qd=qd, data_width=data_width, with_csr=True,
+            qid=qid, qsize=qsize, qd=qd, data_width=data_width, with_csr=with_engine_csr,
             hostmem_base=hostmem_base)
 
         # Engine front-ends share one AXI backend; build them before the responder so their
         # masters join the arbiter. Front-ends (request_gen, block streamer, external logic)
         # are mutually exclusive owners of the engine sink/source -- a generated core builds
         # exactly one; a test SoC may build several and mux them externally.
-        extra_axi_masters = [io_engine.axi]
+        hostmem_axi_masters = [io_engine.axi]
+        if extra_axi_masters is not None:
+            hostmem_axi_masters += list(extra_axi_masters)
 
         # Optional LiteSATA-style block-streaming front-end (sector read/write data streams).
         if with_block_streamer:
@@ -155,7 +168,7 @@ class LiteNVMe(LiteXModule):
                 staging_size = staging_size,
                 with_csr     = block_streamer_csr,
             )
-            extra_axi_masters.append(block_streamer.dma.axi)
+            hostmem_axi_masters.append(block_streamer.dma.axi)
 
         # Host-memory responder; the engine + front-ends join the AXI backend as masters.
         def hostmem_decoder(a):
@@ -167,7 +180,7 @@ class LiteNVMe(LiteXModule):
             size              = hostmem_size,
             data_width        = data_width,
             with_csr          = with_hostmem_csr,
-            extra_axi_masters = extra_axi_masters,
+            extra_axi_masters = hostmem_axi_masters,
             backend           = hostmem_backend,
         )
 
@@ -177,7 +190,7 @@ class LiteNVMe(LiteXModule):
         # Optional hardware request generator (benchmark self-driver).
         if with_request_gen:
             from litenvme.request_gen import LiteNVMeRequestGen
-            self.request_gen = request_gen = LiteNVMeRequestGen(with_csr=True)
+            self.request_gen = request_gen = LiteNVMeRequestGen(with_csr=with_request_gen_csr)
 
         # Front-end -> engine connection. When a single front-end is present it owns the
         # engine streams; when several are present (test SoC), the SoC wires the mux and the
@@ -208,12 +221,14 @@ class LiteNVMe(LiteXModule):
             self.nvme = LiteNVMe(self.pcie_endpoint, ...)
             self.nvme.add_csrs(self)
         """
-        soc.add_module(name=f"{name}_cfg",    module=self.cfg)
-        soc.add_module(name=f"{name}_mmio",   module=self.mmio)
-        soc.add_module(name=f"{name}_engine", module=self.io_engine.engine)
+        if self.with_accessor_csr:
+            soc.add_module(name=f"{name}_cfg",    module=self.cfg)
+            soc.add_module(name=f"{name}_mmio",   module=self.mmio)
+        if self.with_engine_csr:
+            soc.add_module(name=f"{name}_engine", module=self.io_engine.engine)
         if hasattr(self.hostmem, "csr"):
             soc.add_module(name=f"{name}_hostmem", module=self.hostmem.csr)
-        if hasattr(self, "request_gen"):
+        if hasattr(self, "request_gen") and self.with_request_gen_csr:
             soc.add_module(name=f"{name}_gen",   module=self.request_gen)
         if hasattr(self, "block_streamer") and hasattr(self.block_streamer, "_ctrl"):
             soc.add_module(name=f"{name}_block", module=self.block_streamer)

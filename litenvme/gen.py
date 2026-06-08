@@ -16,19 +16,19 @@ For some use cases it is however convenient to generate a standalone Verilog fil
 - avoid Migen/LiteX dependencies for the integrator,
 - etc...
 
-The standalone core is a PCIe *RootPort* NVMe host: it embeds the PCIe PHY + RootPort, the
-LiteNVMe datapath (cfg/mmio/host-memory/I-O engine) and a small soft-CPU that runs the NVMe
-bring-up firmware and raises `init_done`. Steady-state block I/O is exposed through a
-LiteSATA-style block-streaming interface (added in litenvme/block.py) plus simple
-control/status pins. The configuration is described by a YAML file, mirroring
-litedram_gen / litepcie_gen.
+The standalone core is a PCIe *RootPort* NVMe host: it embeds the PCIe PHY + RootPort and the
+LiteNVMe datapath (cfg/mmio/host-memory/I-O engine). Bring-up can run from firmware on a small
+soft-CPU or from the pure-RTL init sequencer. Steady-state block I/O is exposed through a
+LiteSATA-style block-streaming interface plus simple control/status pins. The configuration is
+described by a YAML file, mirroring litedram_gen / litepcie_gen.
 
 Current version targets Xilinx Ultrascale+ (USPPCIEPHY, pcie4_uscale_plus).
 """
 
-import os
-import yaml
 import argparse
+import os
+import subprocess
+import yaml
 
 from migen import *
 from migen.genlib.resetsync import AsyncResetSynchronizer
@@ -75,7 +75,7 @@ def get_uart_ios():
 def get_status_ios():
     return [
         ("status", 0,
-            Subsignal("init_done",  Pins(1)),  # 1 once firmware finished NVMe bring-up.
+            Subsignal("init_done",  Pins(1)),  # 1 once NVMe bring-up completed.
             Subsignal("init_error", Pins(1)),  # 1 if bring-up failed.
         ),
     ]
@@ -147,12 +147,15 @@ class LiteNVMeCore(SoCCore):
         platform.add_extension(get_status_ios())
 
         # Parameters -------------------------------------------------------------------------------
+        init_mode    = core_config.get("init_mode", "firmware")
         sys_clk_freq = float(core_config.get("clk_freq", 125e6))
-        cpu_type     = core_config.get("cpu", "vexriscv")
+        cpu_type     = core_config.get("cpu", "vexriscv" if init_mode == "firmware" else None)
         cpu_variant  = core_config.get("cpu_variant", "minimal")
         data_width   = core_config.get("data_width", 256)
-        uart_name    = core_config.get("uart", "serial")
+        uart_name    = core_config.get("uart", "serial" if cpu_type is not None else "stub")
         cpu_firmware = core_config.get("_cpu_firmware", None)  # injected by main() (2-pass build).
+        hostmem_base = core_config.get("hostmem_base", 0x1000_0000)
+        hostmem_size = core_config.get("hostmem_size", 0x8_0000)
 
         if uart_name == "serial":
             platform.add_extension(get_uart_ios())
@@ -216,6 +219,27 @@ class LiteNVMeCore(SoCCore):
             with_configuration   = True,
         )
 
+        # Root-port cfg management (raise our own DevCtl.MPS / open memory window).
+        accessor_csr = init_mode == "firmware"
+        self.pcie_rootcfg = LiteNVMeRootCfgMgmt(self.pcie_phy, with_csr=accessor_csr)
+
+        extra_axi_masters = []
+        if init_mode == "rtl":
+            from litenvme.init import LiteNVMeInitSequencer
+            from litenvme.io_engine import LiteNVMeMemPortToAXI
+            self.nvme_init = init_seq = LiteNVMeInitSequencer(
+                bar0_base       = core_config.get("bar0_base", 0xe000_0000),
+                hostmem_base    = hostmem_base,
+                io_q_entries    = core_config.get("qsize", 64),
+                io_qid          = core_config.get("qid", 1),
+                mem_window_dw   = core_config.get("root_mem_window_dw", 0x20),
+                mem_window_val  = core_config.get("root_mem_window_val", 0xe000_e000),
+                with_csr        = False,
+            )
+            self.nvme_init_bridge = init_bridge = LiteNVMeMemPortToAXI(
+                init_seq.mem, data_width=data_width, address_width=32, base=hostmem_base)
+            extra_axi_masters.append(init_bridge.axi)
+
         # LiteNVMe core ----------------------------------------------------------------------------
         with_request_gen    = core_config.get("with_request_gen", True)
         with_block_streamer = core_config.get("with_block_streamer", False)
@@ -225,8 +249,8 @@ class LiteNVMeCore(SoCCore):
 
         self.nvme = nvme = LiteNVMe(
             pcie_endpoint    = self.pcie_endpoint,
-            hostmem_base     = core_config.get("hostmem_base", 0x1000_0000),
-            hostmem_size     = core_config.get("hostmem_size", 0x8_0000),
+            hostmem_base     = hostmem_base,
+            hostmem_size     = hostmem_size,
             data_width       = data_width,
             qid              = core_config.get("qid",   1),
             qsize            = core_config.get("qsize", 64),
@@ -237,21 +261,62 @@ class LiteNVMeCore(SoCCore):
             block_streamer_csr  = not expose_block_pins,
             # The CSR memory-debug frontend adds a third BRAM port that replicates the whole
             # host-memory window; the pin-driven standalone core does not need it.
-            with_hostmem_csr = core_config.get("with_hostmem_csr", not expose_block_pins),
+            with_hostmem_csr = core_config.get("with_hostmem_csr", (not expose_block_pins) and accessor_csr),
             staging_base     = core_config.get("staging_base", 0x4_0000),
             staging_size     = core_config.get("staging_size", 0x4_0000),
+            with_csr         = accessor_csr,
+            with_accessor_csr = accessor_csr,
+            with_engine_csr  = accessor_csr,
+            with_request_gen_csr = accessor_csr,
+            extra_axi_masters = extra_axi_masters,
         )
-        nvme.add_csrs(self)
-
-        # Root-port cfg management (raise our own DevCtl.MPS) — firmware uses it for auto-MPS.
-        self.pcie_rootcfg = LiteNVMeRootCfgMgmt(self.pcie_phy)
+        if accessor_csr:
+            nvme.add_csrs(self)
 
         # Core control (init_done / init_error) wired to top-level status pins -----------------
-        self.nvme_ctrl = LiteNVMeCoreControl()
         status_pads = platform.request("status")
+        if init_mode == "firmware":
+            self.nvme_ctrl = LiteNVMeCoreControl()
+            init_done = self.nvme_ctrl.init_done.storage
+            init_error = self.nvme_ctrl.init_error.storage
+        else:
+            seq = self.nvme_init
+            init_done = seq.init_done
+            init_error = seq.init_error
+            self.comb += [
+                # Auto-start once the downstream SSD is released from reset.
+                seq.start.eq(self.pcie_rst_timer.done),
+                # CFG accessor.
+                nvme.cfg.start.eq(seq.cfg_start), nvme.cfg.we.eq(seq.cfg_we),
+                nvme.cfg.wdata.eq(seq.cfg_wdata), nvme.cfg.reg.eq(seq.cfg_reg),
+                nvme.cfg.ext_reg.eq(0), nvme.cfg.bus.eq(seq.cfg_bus),
+                nvme.cfg.device.eq(seq.cfg_dev), nvme.cfg.function.eq(seq.cfg_func),
+                seq.cfg_done.eq(nvme.cfg.done), seq.cfg_err.eq(nvme.cfg.err),
+                seq.cfg_rdata.eq(nvme.cfg.rdata),
+                # MMIO accessor.
+                nvme.mmio.start.eq(seq.mmio_start), nvme.mmio.we.eq(seq.mmio_we),
+                nvme.mmio.adr.eq(seq.mmio_adr), nvme.mmio.wdata.eq(seq.mmio_wdata),
+                nvme.mmio.wsel.eq(seq.mmio_wsel), nvme.mmio.len.eq(seq.mmio_len),
+                seq.mmio_done.eq(nvme.mmio.done), seq.mmio_err.eq(nvme.mmio.err),
+                seq.mmio_rdata.eq(nvme.mmio.rdata),
+                # Root cfg-mgmt (memory window).
+                self.pcie_rootcfg.start.eq(seq.root_start),
+                self.pcie_rootcfg.write.eq(seq.root_write),
+                self.pcie_rootcfg.addr.eq(seq.root_addr),
+                self.pcie_rootcfg.wdata.eq(seq.root_wdata),
+                self.pcie_rootcfg.be.eq(0xf), self.pcie_rootcfg.func.eq(0),
+                seq.root_done.eq(self.pcie_rootcfg.done),
+                # Engine config.
+                nvme.io_engine.enable.eq(seq.eng_enable),
+                nvme.io_engine.sq_base.eq(seq.eng_sq_base),
+                nvme.io_engine.cq_base.eq(seq.eng_cq_base),
+                nvme.io_engine.sq_db_adr.eq(seq.eng_sq_db),
+                nvme.io_engine.cq_db_adr.eq(seq.eng_cq_db),
+                nvme.io_engine.prp_list_base.eq(seq.eng_prp_list),
+            ]
         self.comb += [
-            status_pads.init_done.eq(self.nvme_ctrl.init_done.storage),
-            status_pads.init_error.eq(self.nvme_ctrl.init_error.storage),
+            status_pads.init_done.eq(init_done),
+            status_pads.init_error.eq(init_error),
         ]
 
         # Block-streaming interface to the top (when it is the sole front-end) ------------------
@@ -263,7 +328,7 @@ class LiteNVMeCore(SoCCore):
             rd   = platform.request("block_rd_axis")
             self.comb += [
                 # Command (start gated on init_done so no transfer runs before bring-up).
-                bs.start.eq(ctrl.start & self.nvme_ctrl.init_done.storage),
+                bs.start.eq(ctrl.start & init_done),
                 bs.write.eq(ctrl.write),
                 bs.sector.eq(ctrl.sector),
                 bs.count.eq(ctrl.count),
@@ -285,6 +350,105 @@ class LiteNVMeCore(SoCCore):
 
 # Build --------------------------------------------------------------------------------------------
 
+_CONFIG_KEYS = {
+    "phy",
+    "phy_device",
+    "phy_lanes",
+    "phy_speed",
+    "phy_ip_name",
+    "phy_config",
+    "clk_freq",
+    "clk_external",
+    "cpu",
+    "cpu_variant",
+    "uart",
+    "firmware",
+    "init_mode",
+    "integrated_rom_size",
+    "integrated_main_ram_size",
+    "data_width",
+    "ep_max_pending_requests",
+    "ep_address_width",
+    "hostmem_base",
+    "hostmem_size",
+    "qid",
+    "qsize",
+    "qd",
+    "requester_id",
+    "bar0_base",
+    "root_mem_window_dw",
+    "root_mem_window_val",
+    "with_request_gen",
+    "with_block_streamer",
+    "with_hostmem_csr",
+    "staging_base",
+    "staging_size",
+}
+
+def _normalize_config(core_config):
+    if not isinstance(core_config, dict):
+        raise ValueError("LiteNVMe config must be a YAML mapping.")
+
+    normalized = {}
+    replaces = {"False": False, "True": True, "None": None}
+    for k, v in core_config.items():
+        normalized[k] = replaces.get(v, v) if isinstance(v, str) else v
+
+    if "clk_freq" in normalized:
+        normalized["clk_freq"] = float(normalized["clk_freq"])
+
+    normalized.setdefault("init_mode", "firmware")
+    normalized.setdefault("firmware", "none")
+    normalized.setdefault("with_block_streamer", False)
+    if normalized["with_block_streamer"] and "with_request_gen" not in normalized:
+        normalized["with_request_gen"] = False
+    normalized.setdefault("with_request_gen", True)
+
+    # CPU-less RTL init is the standalone default for init_mode="rtl". Users can still set a
+    # CPU explicitly for debug, but the generated core does not require one.
+    if normalized["init_mode"] == "rtl":
+        normalized.setdefault("cpu", None)
+        normalized.setdefault("uart", "stub")
+
+    return normalized
+
+def validate_config(core_config):
+    unknown = sorted(set(core_config) - _CONFIG_KEYS)
+    if unknown:
+        raise ValueError("Unknown LiteNVMe config key(s): " + ", ".join(unknown))
+
+    for key in ("phy", "phy_device"):
+        if key not in core_config:
+            raise ValueError(f"Missing required LiteNVMe config key: {key}")
+
+    init_mode = core_config.get("init_mode", "firmware")
+    if init_mode not in ("firmware", "rtl"):
+        raise ValueError("init_mode must be 'firmware' or 'rtl'.")
+
+    firmware = core_config.get("firmware", "none")
+    if firmware not in ("none", "auto", "minimal"):
+        raise ValueError("firmware must be 'none', 'auto' or 'minimal'.")
+
+    if init_mode == "firmware" and core_config.get("cpu", "vexriscv") is None:
+        raise ValueError("init_mode='firmware' requires a CPU; use init_mode='rtl' for CPU-less bring-up.")
+
+    if init_mode == "rtl" and firmware != "none":
+        raise ValueError("init_mode='rtl' does not use firmware; set firmware='none'.")
+
+    data_width = core_config.get("data_width", 256)
+    if data_width not in (64, 128, 256, 512):
+        raise ValueError("data_width must be one of: 64, 128, 256, 512.")
+
+    if core_config.get("with_request_gen", False) and core_config.get("with_block_streamer", False):
+        raise ValueError("The standalone generator exposes one front-end; enable request_gen or block_streamer, not both.")
+
+def load_config(filename):
+    with open(filename, "r", encoding="utf-8") as f:
+        core_config = yaml.safe_load(f)
+    core_config = _normalize_config(core_config)
+    validate_config(core_config)
+    return core_config
+
 # phy string -> (PHY class, platform factory).
 def _resolve_platform(core_config):
     phy = core_config["phy"]
@@ -303,15 +467,7 @@ def main():
     parser.add_argument("--name",       default="litenvme_core", help="Standalone core/module name.")
     args = parser.parse_args()
 
-    core_config = yaml.load(open(args.config).read(), Loader=yaml.Loader)
-
-    # Normalize YAML scalars (mirror litedram/litepcie).
-    for k, v in core_config.items():
-        replaces = {"False": False, "True": True, "None": None}
-        if isinstance(v, str) and v in replaces:
-            core_config[k] = replaces[v]
-    if "clk_freq" in core_config:
-        core_config["clk_freq"] = float(core_config["clk_freq"])
+    core_config = load_config(args.config)
 
     platform = _resolve_platform(core_config)
     firmware = core_config.get("firmware", "none")
@@ -323,14 +479,14 @@ def main():
         builder.build(build_name=build_name, regular_comb=False)
         return soc, builder
 
-    if core_config.get("cpu") is not None and firmware in ("auto", "minimal"):
+    if core_config.get("cpu", "vexriscv") is not None and firmware in ("auto", "minimal"):
         # Two-pass build: (1) emit software headers, (2) compile firmware, (3) bake into ROM.
         # "minimal" -> code-only firmware (auto-init + idle, no console/prints) via MINIMAL=1.
         soc, builder = build(cpu_firmware=None, build_name=args.name)
         fw_dir   = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "bench", "firmware"))
         build_abs = os.path.abspath(builder.output_dir)
         make_args = "BOOT=rom" + (" MINIMAL=1" if firmware == "minimal" else "")
-        os.system(f"make -C {fw_dir} BUILD_DIR={build_abs} {make_args} clean all")
+        subprocess.check_call(["make", "-C", fw_dir, f"BUILD_DIR={build_abs}", *make_args.split(), "clean", "all"])
         fw_bin = os.path.join(fw_dir, "firmware.bin")
         soc, builder = build(cpu_firmware=fw_bin, build_name=args.name)
     else:

@@ -26,7 +26,11 @@
     "clk_freq"      : 125e6,
     "clk_external"  : False,
 
-    # Embedded CPU (runs NVMe bring-up firmware, raises init_done).
+    # Bring-up mode. "firmware" uses the embedded CPU below; "rtl" uses the CPU-less
+    # LiteNVMeInitSequencer and drives status_init_done/error directly from RTL.
+    "init_mode"     : "firmware",
+
+    # Embedded CPU (used only when init_mode="firmware"; it runs NVMe bring-up firmware).
     "cpu"           : "vexriscv",   # bring-up only (one-time init), so the minimal variant.
     "cpu_variant"   : "minimal",
     "uart"          : "serial",
