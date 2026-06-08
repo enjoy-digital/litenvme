@@ -5,6 +5,7 @@ __pycache__/
 .pytest_cache/
 
 # Build outputs.
+build/
 bench/build/
 bench/csr.csv
 
