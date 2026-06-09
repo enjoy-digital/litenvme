@@ -12,13 +12,15 @@ The core embeds everything needed to talk to the SSD:
                                                               ├ host-memory window (BRAM)
                                                               ├ I/O command engine (QD32)
                                                               └ block streamer  ─── wr_sink / rd_source
-  embedded VexRiscv + firmware (ROM) ── one-time bring-up ── status.init_done
+  firmware or RTL init sequencer ───── one-time bring-up ── status.init_done
 ```
 
-A small soft-CPU runs the NVMe bring-up firmware at boot (BAR0 assign, controller enable,
-create the IO SQ/CQ, program + enable the I/O engine) and raises `init_done`. After that the
-block streaming interface is hardware-driven: you push a `{write, sector, count}` command and
-stream the data — no PRP / host-memory knowledge required, no per-command CPU cost.
+By default, a small soft-CPU runs the NVMe bring-up firmware at boot (BAR0 assign, controller
+enable, create the IO SQ/CQ, program + enable the I/O engine) and raises `init_done`. The
+generator also supports `init_mode: "rtl"` for a CPU-less, pure-RTL bring-up path on known SSDs.
+After bring-up, the block streaming interface is hardware-driven: you push a
+`{write, sector, count}` command and stream the data — no PRP / host-memory knowledge required,
+no per-command CPU cost.
 
 > Scope: the current generator targets **Xilinx Ultrascale+** (USPPCIEPHY, `pcie4_uscale_plus`
 > hard IP, Gen3 x4, 256-bit datapath). Other LitePCIe PHYs can be added to `litenvme/gen.py`.
@@ -44,10 +46,11 @@ Outputs under `--output-dir`:
 | `software/include/generated/csr.h`    | CSR map (for the embedded CPU / optional host access) |
 | `software/include/generated/{soc,mem}.h` | SoC constants / memory-region map |
 
-When `firmware: "auto"`, the generator runs the **two-pass firmware build** automatically
-(emit headers → compile the NVMe firmware → bake it into the CPU ROM), so the produced core is
-self-initializing. With `firmware: "none"` the core boots the LiteX BIOS instead (useful to
-validate generation).
+When `init_mode: "firmware"` and `firmware: "auto"`, the generator runs the **two-pass firmware
+build** automatically (emit headers → compile the NVMe firmware → bake it into the CPU ROM), so
+the produced core is self-initializing. With `firmware: "none"` the core boots the LiteX BIOS
+instead (useful to validate generation). With `init_mode: "rtl"`, the core omits the bring-up CPU
+by default and the RTL sequencer auto-starts after the PCIe reset timer releases the SSD.
 
 ### YAML configuration
 
@@ -66,10 +69,11 @@ validate generation).
     "clk_freq"     : 125e6,             # sys clock (derived from the PCIe user clock).
     "clk_external" : False,            # False: core drives clk/rst out; True: user drives them in.
 
-    "cpu"          : "vexriscv",        # embedded bring-up CPU (None => CPU-less, see below).
+    "init_mode"    : "firmware",        # firmware | rtl.
+    "cpu"          : "vexriscv",        # embedded bring-up CPU for init_mode="firmware".
     "cpu_variant"  : "minimal",
     "uart"         : "serial",          # serial | crossover | stub.
-    "firmware"     : "auto",            # auto: bake NVMe init firmware into ROM; none: LiteX BIOS.
+    "firmware"     : "auto",            # firmware mode: auto/minimal/none; rtl mode: none.
 
     "qid"          : 1, "qsize": 64, "qd": 32,   # I/O queue id / ring size / commands outstanding.
     "hostmem_base" : 0x10000000,        # host-memory window (queues + PRP buffers + staging).
@@ -83,8 +87,10 @@ validate generation).
 
 Key knobs:
 - **`data_width`** — must match the PHY's native width (256 for Gen3 x4 here). 256b @ 125 MHz = 4.0 GB/s.
-- **`firmware`** — `auto` bakes the NVMe bring-up firmware into ROM (self-initializing core);
-  `none` boots the BIOS.
+- **`init_mode`** — `firmware` uses the embedded CPU bring-up path; `rtl` uses the CPU-less init
+  sequencer and drives `status_init_done/error` directly from RTL.
+- **`firmware`** — in firmware mode, `auto` bakes the NVMe bring-up firmware into ROM,
+  `minimal` bakes a code-only auto-init image, and `none` boots the BIOS.
 - **`with_block_streamer` (sole front-end)** — exposes the block interface at the top
   (pin-driven). With `with_request_gen` instead you get a CSR-driven benchmark variant.
 - **`staging_*`** — the host-memory sub-region the streamer stages data through; must not
@@ -123,16 +129,17 @@ The generated `litenvme_core` module exposes named ports (Gen3 x4, `data_width=2
 
 All block ports run in the `clk` (sys) domain.
 
-> **CPU-less variant** (`cpu: None`): the core omits the soft-CPU and instead exposes a control
-> AXI-Lite/Wishbone bus so an external master performs the NVMe bring-up over CSRs (the LiteDRAM
-> "no CPU" pattern). The embedded-CPU variant is the default and the simplest to integrate.
+> **CPU-less variant** (`init_mode: "rtl"`): the core omits the bring-up CPU by default and wires
+> `LiteNVMeInitSequencer` directly to the CFG/MMIO/rootcfg accessors and I/O engine. This path is
+> hardware-validated on the reference SSD but currently assumes the common BAR/DSTRD layout; use
+> firmware mode for the broadest SSD compatibility.
 
 ---
 
 ## 3. Usage protocol
 
 ```
-1. Power-up: the embedded CPU brings up the SSD; wait for status_init_done == 1.
+1. Power-up: firmware or the RTL init sequencer brings up the SSD; wait for status_init_done == 1.
 2. Write N sectors at LBA L:
      block_ctrl_write  = 1
      block_ctrl_sector = L
@@ -194,10 +201,11 @@ The standalone core is a plain Verilog module — instantiate it like any IP:
 5. **Constraints.** Assign the GTY/refclk and lane pins for your board, and the `pcie_refclk`
    period (100 MHz). The PCIe IP supplies its own internal timing constraints.
 
-6. **Firmware.** With `firmware: auto` the bring-up firmware is baked into the core's ROM; keep
+6. **Bring-up.** With `init_mode: firmware` and `firmware: auto` the bring-up firmware is baked
+   into the core's ROM; keep
    the emitted `litenvme_core_rom.init` next to the `.v` (the ROM loads it via `$readmemh`).
-   Nothing to load at runtime — `init_done` rises automatically after link-up + NVMe init. (The
-   `serial` UART is optional, for the debug console.)
+   Nothing to load at runtime — `init_done` rises automatically after link-up + NVMe init. With
+   `init_mode: rtl`, no firmware image is needed and the RTL sequencer drives `init_done`.
 
 7. **Build** with your normal synth/impl flow. The core meets timing at Gen3 x4 / 125 MHz on the
    reference KU3P.
@@ -230,8 +238,8 @@ Design notes that bound throughput (see `doc/NVME_PERFORMANCE.md` for the full s
   with no CPU in the loop (IOPS ≈ qd / latency).
 
 To enlarge the host-memory window / staging beyond the on-FPGA BRAM (for very large transfers),
-provide a DDR-backed `hostmem_backend` (e.g. a LiteDRAM AXI port) — the responder accepts any
-backend exposing a matching `.axi` slave.
+use the Python `LiteNVMe(..., hostmem_backend=...)` hook with a DDR/LiteDRAM AXI backend. Wiring
+that backend through the standalone YAML generator is a planned board-integration step.
 
 ### Resource utilization
 
@@ -258,7 +266,8 @@ Per-block breakdown (Vivado hierarchy):
 Notes (post-synthesis estimate; post-place is slightly lower):
 - **BRAM is the dominant, tunable cost** and is split between the host-memory window (~64 RAMB36
   for 256 KiB) and the CPU ROM/RAM (~34, this config boots the LiteX BIOS: 24 KiB ROM + 64 KiB
-  main_ram). Shrink `hostmem_size`, or point `hostmem_backend` at DDR/LiteDRAM, to cut the window.
+  main_ram). Shrink `hostmem_size`, or use a Python-integrated DDR/LiteDRAM backend, to cut the
+  BRAM-backed window.
 - **CPU footprint** — the bring-up CPU is one-time-only, so it is already the smallest VexRiscv
   (`cpu_variant: minimal`, ~1.7 k LUT) and never needs to be fast. To shrink its ROM/RAM:
   - `firmware: minimal` bakes a **code-only firmware** (auto-init + idle, no console, no prints)
@@ -266,14 +275,12 @@ Notes (post-synthesis estimate; post-place is slightly lower):
     (→ core ≈ 113). *Status:* the minimal/auto firmware builds, but self-init on the **generated**
     core still needs the firmware↔core CSR names aligned (the wrapper nests cfg/mmio as
     `nvme_cfg`/`nvme_mmio` while the firmware uses `cfg_cfg_*`/`mmio_mem_*`) — a tracked follow-up.
-  - `cpu: None` removes the CPU and its ROM/RAM entirely; bring-up then comes from an external
-    host over the control bus.
-  - **RTL init** (`litenvme/init.py`, `--with-rtl-init`) does the whole
-    bring-up *in hardware* — no CPU at all. Measured on the bench SoC, swapping VexRiscv+firmware
+  - `init_mode: "rtl"` removes the bring-up CPU by default and does the whole bring-up *in
+    hardware*. Measured on the bench SoC, swapping VexRiscv+firmware
     for the sequencer saves **−2,560 LUT / −3,116 FF / −25 BRAM** (the CPU's ROM/RAM); the
     sequencer FSM itself is small and uses 0 BRAM. So the RTL-init core is strictly smaller and
-    drops the CPU's ~25 BRAM (a CPU-based 133-tile standalone core → ~108 tiles; the exact figure
-    needs wiring RTL init into the generator + an OOC synth).
+    drops the CPU's ~25 BRAM (a CPU-based 133-tile standalone core → ~108 tiles; refresh the exact
+    standalone figure after the next OOC synth).
 
 **SSD flexibility — firmware vs RTL init.** The firmware bring-up is the flexible one: it *reads*
 the device's actual values (doorbell stride from `CAP.DSTRD`, the BAR0 64/32-bit type, namespace

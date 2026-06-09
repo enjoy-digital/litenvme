@@ -133,27 +133,16 @@ remaining ~20-tile difference is LiteX FIFO generosity, not the NVMe logic — a
 URAM-movable in both. So LiteNVMe is in the **same class**, with a tunable, well-understood
 overhead rather than a hidden one.
 
-### Where LiteNVMe still differs — and a real architectural gap
+### Where LiteNVMe still differs
 
-The remaining BRAM gap to Design Gateway's 66 is almost entirely the **embedded bring-up CPU**
-(≈ 34 BRAM of ROM/RAM + ~1.7 k LUT). But that CPU is not just overhead — it is *how LiteNVMe does
-NVMe initialization*, and this is the one genuine architectural difference:
+The remaining BRAM gap to Design Gateway's 66 is mostly the **embedded bring-up CPU**
+(ROM/RAM + ~1.7 k LUT). LiteNVMe now has two bring-up paths:
 
-- **Design Gateway is truly CPU-less**: it performs the full init sequence (PCIe link, controller
-  enable, Identify, creating the I/O queues) **autonomously in RTL** — no CPU, OS, or software
-  anywhere. The user only issues storage commands.
-- **LiteNVMe does init in software.** The bring-up sequence lives in C firmware on the embedded
-  VexRiscv. The `cpu: None` variant does **not** add an RTL init sequencer — it removes the CPU
-  and instead expects an **external host** to run the init over the control bus. So LiteNVMe today
-  always needs software for bring-up (embedded *or* external); it has **no pure-RTL init**.
-
-So `cpu: None` lowers BRAM to ≈ window (64) + PCIe wrapper (22), but on its own it does not make
-LiteNVMe a drop-in autonomous controller — bring-up has to come from a host. The fully-standalone
-answer is a **pure-RTL init sequencer** that replays the firmware bring-up as a state machine.
-**This is implemented and HW-validated** (`litenvme/init.py`, `--with-rtl-init`):
-`LiteNVMeInitSequencer` drives config BAR0 assign, the root memory window, controller enable, the
-three admin commands (Set Features / Create IO CQ / Create IO SQ) and the engine config entirely
-in hardware, and is **HW-validated on the Alibaba KU3P with no CPU and no firmware** (init_done,
+- **Firmware init**: the broad-compatibility default. A small VexRiscv runs the bring-up sequence
+  in C, which is easier to extend for SSD quirks and admin-command coverage.
+- **RTL init**: the CPU-less path. `LiteNVMeInitSequencer` drives BAR0 assignment, root memory
+  window setup, controller enable, Set Features, Create IO CQ/SQ and engine configuration entirely
+  in hardware. It is HW-validated on the Alibaba KU3P with no CPU and no firmware (init_done,
 then a read completes errors=0). It's opt-in; the firmware bring-up stays the default because
 doing init in C makes it far easier to read, extend (new admin commands, vendor quirks) and debug
 — RTL init is for CPU-less deploy / minimum area, where it brings LiteNVMe to DG's standalone class.

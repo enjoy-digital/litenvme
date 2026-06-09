@@ -234,7 +234,7 @@ counters were added to the hostmem DMA (`wr_present/accept/stall_cycles`, `rd_tl
 settle where the remaining gap to the ~1.5 GB/s Gen2 x4 ceiling lives. NVMe read data arrives
 as MemWr TLPs, so these measure how the device/PCIe feeds us vs whether we backpressure it.
 Two reproduced passes, errors=0, max_inflight=32 (evidence:
-`bench/results/engine_hw_2026-06-01_readgap_pass{1,2}.log`):
+`bench/results/archive/engine_hw_2026-06-01_readgap_pass{1,2}.log`):
 
 - **We never backpressure reads:** `hostmem_rd_stall_cycles` ≈ 0 (tens-to-low-thousands out of
   250k-600k cycle windows). Our datapath keeps up; the earlier write-path pipelining holds.
@@ -309,7 +309,7 @@ completions. Both passes, exactly as printed (MB/s):
 **End-to-end data integrity: VERIFIED (round-trip, 2026-05-31).** A host-driven round-trip
 proves the engine moves bytes correctly through the SSD, not just that commands complete
 (`bench/hw_integrity2.sh` + `bench/hostmem_tool.py`; raw evidence
-`bench/results/engine_hw_2026-05-31_integrity.log`):
+`bench/results/archive/engine_hw_2026-05-31_integrity.log`):
 
 1. Engine writes LBA 0 (`completed=1, errors=0`). The firmware bench fills the host buffer
    with a uniform `0xa5a5a5a5` (it overwrites any host pre-seed), so that is the pattern

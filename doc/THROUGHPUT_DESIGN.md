@@ -2,7 +2,7 @@
 
 Implementation-ready design for the throughput effort. Companion to
 `doc/NVME_ARCHITECTURE.md` (roadmap), `doc/NVME_PERFORMANCE.md` (measured numbers),
-and `doc/PROGRESS.md` (live log).
+and `doc/archive/PROGRESS.md` (archived bring-up log).
 
 ## 0. The governing model
 
