@@ -8,15 +8,16 @@ jobs:
     steps:
       # Checkout Repository
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       # Install Tools
       - name: Install Tools
         run: |
-          sudo apt-get install wget build-essential
+          sudo apt-get update
+          sudo apt-get install -y wget build-essential
 
       - name: Set up Python 3.9
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.9"
           cache: "pip"
@@ -24,7 +25,8 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          python3 -m pip install setuptools requests pexpect meson pytest
+          python3 -m pip install --upgrade pip setuptools wheel
+          python3 -m pip install requests pexpect meson pytest
 
       # Install LiteX Ecosystem
       - name: Install LiteX
@@ -34,8 +36,40 @@ jobs:
 
       # Install Project
       - name: Install Project
-        run: python3 setup.py develop --user
+        run: python3 -m pip install -e ".[develop]"
+
+      # Smoke Tests
+      - name: Package Discovery
+        run: |
+          python3 -c 'from setuptools import find_packages; assert "litenvme" in find_packages(exclude=("test*", "sim*", "doc*", "examples*"))'
+
+      - name: Import Smoke Test
+        run: |
+          python3 -c 'import litenvme.core, litenvme.mem, litenvme.cfg, litenvme.gen'
+
+      - name: Generator Config Check
+        run: |
+          python3 -c 'from litenvme.gen import load_config; assert load_config("examples/alibaba_xcku3p.yml")["init_mode"] == "firmware"'
+
+      - name: Generator Dry Run
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+          from litenvme.gen import load_config
+
+          cfg = load_config("examples/alibaba_xcku3p.yml")
+          cfg["init_mode"] = "rtl"
+          cfg["cpu"] = None
+          cfg["uart"] = "stub"
+          cfg["firmware"] = "none"
+          Path("/tmp/litenvme_gen_ci.yml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+          PY
+          python3 -m litenvme.gen /tmp/litenvme_gen_ci.yml --output-dir /tmp/litenvme_gen --name litenvme_core
+
+      - name: Collect Tests
+        run: python3 -m pytest --collect-only -q
 
       # Test
       - name: Run Tests
-        run: python3 -m pytest -v test
+        run: python3 -m pytest -q test
