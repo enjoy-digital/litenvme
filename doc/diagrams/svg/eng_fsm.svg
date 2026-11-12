@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="350" viewBox="0 0 760 350">
+<defs>
+  <marker id="arrow-ctrl" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+    <path d="M0,0 L8,4 L0,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-ctrl-rev" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="1" refY="4" orient="auto">
+    <path d="M8,0 L0,4 L8,8 Z" fill="#5b5b5b"/></marker>
+  <marker id="arrow-stream" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#606060"/></marker>
+  <marker id="arrow-accent" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="9" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-accent-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#2eaadc"/></marker>
+  <marker id="arrow-stream-rev" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="0" refY="4.5" orient="auto">
+    <path d="M9,0 L0,4.5 L9,9 Z" fill="#606060"/></marker>
+</defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<polyline points="175,46 400,46" fill="none" stroke="#606060" stroke-width="2.0" marker-end="url(#arrow-stream)"/>
+<text x="287" y="35" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="287" dy="0">1. request, room, CID free</tspan></text>
+<polyline points="175,121 400,121" fill="none" stroke="#606060" stroke-width="2.0" marker-end="url(#arrow-stream)"/>
+<text x="287" y="110" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="287" dy="0">2. SQ tail moved</tspan></text>
+<polyline points="175,196 400,196" fill="none" stroke="#606060" stroke-width="2.0" marker-end="url(#arrow-stream)"/>
+<text x="287" y="185" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="287" dy="0">3. commands in flight</tspan></text>
+<polyline points="175,271 400,271" fill="none" stroke="#606060" stroke-width="2.0" marker-end="url(#arrow-stream)"/>
+<text x="287" y="260" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="287" dy="0">4. CQ head moved</tspan></text>
+<polyline points="140,170 175,170" fill="none" stroke="#606060" stroke-width="2.0"/>
+<polyline points="175,46 175,271" fill="none" stroke="#606060" stroke-width="2.0"/>
+<polyline points="700,46 730,46" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="1,3"/>
+<polyline points="700,121 730,121" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="1,3"/>
+<polyline points="700,196 730,196" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="1,3"/>
+<polyline points="700,271 730,271" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="1,3"/>
+<polyline points="730,46 730,325" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="1,3"/>
+<polyline points="730,325 85,325 85,200" fill="none" stroke="#5b5b5b" stroke-width="1.0" stroke-dasharray="1,3" marker-end="url(#arrow-ctrl)"/>
+<text x="560" y="313" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="12" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="560" dy="0">back to IDLE</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M31.2,142 L129.2,142 L141.2,154 L141.2,202 Q141.2,202 141.2,202 L43.2,202 L31.2,190 L31.2,142 Q31.2,142 31.2,142 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M31.2,142 L129.2,142 L141.2,154 L141.2,202 Q141.2,202 141.2,202 L43.2,202 L31.2,190 L31.2,142 Q31.2,142 31.2,142 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M31,141.5 L129,141.5 L141,153.5 L141,201.5 Q141,201.5 141,201.5 L43,201.5 L31,189.5 L31,141.5 Q31,141.5 31,141.5 Z"/>
+</g>
+<g fill="#bfe6f5" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M30,140 L128,140 L140,152 L140,200 Q140,200 140,200 L42,200 L30,188 L30,140 Q30,140 30,140 Z"/>
+</g>
+<text x="85" y="170" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="15" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="85" dy="0">IDLE</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,22 L689.2,22 L701.2,34 L701.2,74 Q701.2,74 701.2,74 L413.2,74 L401.2,62 L401.2,22 Q401.2,22 401.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,22 L689.2,22 L701.2,34 L701.2,74 Q701.2,74 701.2,74 L413.2,74 L401.2,62 L401.2,22 Q401.2,22 401.2,22 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M401,21.5 L689,21.5 L701,33.5 L701,73.5 Q701,73.5 701,73.5 L413,73.5 L401,61.5 L401,21.5 Q401,21.5 401,21.5 Z"/>
+</g>
+<g fill="#e6f5fb" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M400,20 L688,20 L700,32 L700,72 Q700,72 700,72 L412,72 L400,60 L400,20 Q400,20 400,20 Z"/>
+</g>
+<text x="550" y="37.6" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="550" dy="0">Write one SQE</tspan><tspan x="550" dy="16.8">LATCH-REQ to SUBMIT-ADVANCE</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,97 L689.2,97 L701.2,109 L701.2,149 Q701.2,149 701.2,149 L413.2,149 L401.2,137 L401.2,97 Q401.2,97 401.2,97 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,97 L689.2,97 L701.2,109 L701.2,149 Q701.2,149 701.2,149 L413.2,149 L401.2,137 L401.2,97 Q401.2,97 401.2,97 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M401,96.5 L689,96.5 L701,108.5 L701,148.5 Q701,148.5 701,148.5 L413,148.5 L401,136.5 L401,96.5 Q401,96.5 401,96.5 Z"/>
+</g>
+<g fill="#fafafa" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M400,95 L688,95 L700,107 L700,147 Q700,147 700,147 L412,147 L400,135 L400,95 Q400,95 400,95 Z"/>
+</g>
+<text x="550" y="112.6" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="550" dy="0">Ring SQ doorbell</tspan><tspan x="550" dy="16.8">SUBMIT-DOORBELL(-WAIT)</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,172 L689.2,172 L701.2,184 L701.2,224 Q701.2,224 701.2,224 L413.2,224 L401.2,212 L401.2,172 Q401.2,172 401.2,172 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,172 L689.2,172 L701.2,184 L701.2,224 Q701.2,224 701.2,224 L413.2,224 L401.2,212 L401.2,172 Q401.2,172 401.2,172 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M401,171.5 L689,171.5 L701,183.5 L701,223.5 Q701,223.5 701,223.5 L413,223.5 L401,211.5 L401,171.5 Q401,171.5 401,171.5 Z"/>
+</g>
+<g fill="#e6f5fb" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M400,170 L688,170 L700,182 L700,222 Q700,222 700,222 L412,222 L400,210 L400,170 Q400,170 400,170 Z"/>
+</g>
+<text x="550" y="187.6" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="550" dy="0">Reap a CQE batch</tspan><tspan x="550" dy="16.8">REAP-READ to REAP-EMIT</tspan></text>
+<g fill="#000000" stroke="#000000" stroke-width="3.0" opacity="0.05" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,247 L689.2,247 L701.2,259 L701.2,299 Q701.2,299 701.2,299 L413.2,299 L401.2,287 L401.2,247 Q401.2,247 401.2,247 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="1.5" opacity="0.08" stroke-linejoin="round" aria-hidden="true">
+<path d="M401.2,247 L689.2,247 L701.2,259 L701.2,299 Q701.2,299 701.2,299 L413.2,299 L401.2,287 L401.2,247 Q401.2,247 401.2,247 Z"/>
+</g>
+<g fill="#000000" stroke="#000000" stroke-width="0" opacity="0.12" stroke-linejoin="round" aria-hidden="true">
+<path d="M401,246.5 L689,246.5 L701,258.5 L701,298.5 Q701,298.5 701,298.5 L413,298.5 L401,286.5 L401,246.5 Q401,246.5 401,246.5 Z"/>
+</g>
+<g fill="#fafafa" stroke="#5b5b5b" stroke-width="0.9" stroke-linejoin="round">
+<path d="M400,245 L688,245 L700,257 L700,297 Q700,297 700,297 L412,297 L400,285 L400,245 Q400,245 400,245 Z"/>
+</g>
+<text x="550" y="262.6" font-family="Carlito, Calibri, &#x27;Liberation Sans&#x27;, Arial, sans-serif" font-size="14" fill="#000000" text-anchor="middle" dominant-baseline="central"><tspan x="550" dy="0">Ring CQ doorbell</tspan><tspan x="550" dy="16.8">REAP-DOORBELL(-WAIT)</tspan></text>
+</svg>
