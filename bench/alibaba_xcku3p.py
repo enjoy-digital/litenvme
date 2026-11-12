@@ -511,12 +511,10 @@ def main():
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
+            # Without force_run, the Builder runs the toolchain unless --no-compile or
+            # --no-compile-gateware is given; with force_run, both still disable it.
             if force_run is not None:
-                toolchain_kwargs["run"] = force_run
-            elif getattr(args, "no_compile_gateware", False):
-                toolchain_kwargs["run"] = False
-            else:
-                toolchain_kwargs.setdefault("run", True)
+                toolchain_kwargs["run"] = force_run and builder.compile_gateware
             builder.build(**toolchain_kwargs)
         return soc, builder
 
