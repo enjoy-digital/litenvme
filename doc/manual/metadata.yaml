@@ -1,0 +1,16 @@
+---
+# Project metadata of the manual (title page, headers, document properties). The theme (colours,
+# fonts, LaTeX options) is in theme.yaml; build.py merges both and replaces @DATE@.
+title: "NVMe Host Core"
+project: "LiteNVMe"
+subtitle: "Reference manual of the LiteX NVMe host core over LitePCIe: queues, I/O engine, block streamer, bring-up and integration"
+author: [Enjoy-Digital]
+date: "@DATE@"
+license: "Copyright © 2025-2026 Enjoy-Digital. Licensed under the BSD-2-Clause license."
+license-short: "BSD-2-Clause"
+contact: "hello@enjoy-digital.fr"
+website: "enjoy-digital.fr"
+subject: "LiteNVMe"
+lang: en-US
+header-right: "NVMe Host Core · BSD-2-Clause · \\href{mailto:hello@enjoy-digital.fr}{hello@enjoy-digital.fr}"
+---

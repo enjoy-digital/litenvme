@@ -1,0 +1,24 @@
+# Manual of this project: output name and chapters, in order (read by build.py; the pandoc defaults
+# files and the theme are generic, from the manual kit).
+name: litenvme_manual
+chapters:
+  - 00_front.md
+  - 01_introduction.md
+  - 02_nvme_primer.md
+  - 03_architecture.md
+  - 04_pcie_access.md
+  - 05_host_memory.md
+  - 06_io_engine.md
+  - 07_frontends.md
+  - 08_bringup.md
+  - 09_getting_started.md
+  - 10_integration.md
+  - 11_examples.md
+  - 12_simulation.md
+  - 13_debugging.md
+  - Z_appendix.md
+  - A_registers.md
+  - B_build_options.md
+  - C_glossary.md
+  - D_performance.md
+  - E_maintenance.md
