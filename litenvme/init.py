@@ -38,13 +38,17 @@ class LiteNVMeInitSequencer(LiteXModule):
     def __init__(self, bar0_base=0xe000_0000, hostmem_base=0x1000_0000,
                  admin_q_entries=2, io_q_entries=64, io_qid=1,
                  mem_window_dw=0x20, mem_window_val=0xe000_e000, mem_adr_width=32,
-                 poll_timeout=2**22, with_csr=False):
+                 poll_timeout=2**22, prp_list_base=None, with_csr=False):
         # Host-memory layout (must match the engine + the hostmem responder window).
+        # prp_list_base: absolute address of the engine's PRP-list region (io_q_entries 4 KiB
+        # pages); None keeps the legacy placement after the per-slot buffers.
+        if prp_list_base is None:
+            prp_list_base = hostmem_base + 0x10000 + io_q_entries * 0x1000
         ASQ   = hostmem_base + 0x0000
         ACQ   = hostmem_base + 0x1000
         IO_CQ = hostmem_base + 0x3000
         IO_SQ = hostmem_base + 0x4000
-        PRP   = hostmem_base + 0x10000 + io_q_entries * 0x1000
+        PRP   = prp_list_base
 
         # BAR0 register byte offsets + doorbells (DSTRD=0 -> 4-byte stride).
         CAP, CC, CSTS, AQA, ASQ_R, ACQ_R = 0x00, 0x14, 0x1c, 0x24, 0x28, 0x30

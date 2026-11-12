@@ -234,6 +234,7 @@ class LiteNVMeCore(SoCCore):
                 io_qid          = core_config.get("qid", 1),
                 mem_window_dw   = core_config.get("root_mem_window_dw", 0x20),
                 mem_window_val  = core_config.get("root_mem_window_val", 0xe000_e000),
+                prp_list_base   = hostmem_base + prp_list_offset(core_config),
                 with_csr        = False,
             )
             self.nvme_init_bridge = init_bridge = LiteNVMeMemPortToAXI(
@@ -260,8 +261,9 @@ class LiteNVMeCore(SoCCore):
             with_block_streamer = with_block_streamer,
             block_streamer_csr  = not expose_block_pins,
             # The CSR memory-debug frontend adds a third BRAM port that replicates the whole
-            # host-memory window; the pin-driven standalone core does not need it.
-            with_hostmem_csr = core_config.get("with_hostmem_csr", (not expose_block_pins) and accessor_csr),
+            # host-memory window. The bring-up firmware writes the admin SQEs and reads the CQEs
+            # through it, so firmware mode needs it; RTL init (the small core) does not.
+            with_hostmem_csr = core_config.get("with_hostmem_csr", accessor_csr),
             staging_base     = core_config.get("staging_base", 0x4_0000),
             staging_size     = core_config.get("staging_size", 0x4_0000),
             with_csr         = accessor_csr,
@@ -277,6 +279,10 @@ class LiteNVMeCore(SoCCore):
         status_pads = platform.request("status")
         if init_mode == "firmware":
             self.nvme_ctrl = LiteNVMeCoreControl()
+            # Host-memory layout for the bring-up firmware (generated/soc.h).
+            self.add_constant("LITENVME_HOSTMEM_BASE",  hostmem_base)
+            self.add_constant("LITENVME_IO_Q_ENTRIES",  core_config.get("qsize", 64))
+            self.add_constant("LITENVME_PRP_LIST_BASE", hostmem_base + prp_list_offset(core_config))
             init_done = self.nvme_ctrl.init_done.storage
             init_error = self.nvme_ctrl.init_error.storage
         else:
@@ -383,7 +389,45 @@ _CONFIG_KEYS = {
     "with_hostmem_csr",
     "staging_base",
     "staging_size",
+    "prp_list_offset",
 }
+
+# Host-memory layout -------------------------------------------------------------------------------
+
+# Admin/I/O queues and the firmware's Identify/read/write buffers sit below this offset of the
+# window (ASQ +0x0000, ACQ +0x1000, ID +0x2000, IO CQ +0x3000, IO SQ +0x4000, RD +0x5000, WR
+# +0x6000).
+_QUEUES_END = 0x7000
+
+def _prp_list_fits(core_config, offset):
+    qsize = core_config.get("qsize", 64)
+    start = offset
+    end   = offset + qsize*0x1000
+    if (start < _QUEUES_END) or (end > core_config.get("hostmem_size", 0x8_0000)):
+        return False
+    if core_config.get("with_block_streamer", False):
+        staging_start = core_config.get("staging_base", 0x4_0000)
+        staging_end   = staging_start + core_config.get("staging_size", 0x4_0000)
+        if (start < staging_end) and (end > staging_start):
+            return False
+    return True
+
+def prp_list_offset(core_config):
+    """Window offset of the I/O engine's PRP-list region (qsize 4 KiB pages, one per SQ slot).
+
+    Uses `prp_list_offset` when set, else the first free place among: after the per-slot buffers
+    (legacy, 0x10000 + qsize*4 KiB), right after the queues, after the block-streamer staging.
+    """
+    if "prp_list_offset" in core_config:
+        return core_config["prp_list_offset"]
+    qsize      = core_config.get("qsize", 64)
+    candidates = [0x1_0000 + qsize*0x1000, _QUEUES_END]
+    if core_config.get("with_block_streamer", False):
+        candidates.append(core_config.get("staging_base", 0x4_0000) + core_config.get("staging_size", 0x4_0000))
+    for offset in candidates:
+        if _prp_list_fits(core_config, offset):
+            return offset
+    return candidates[0]
 
 def _normalize_config(core_config):
     if not isinstance(core_config, dict):
@@ -442,6 +486,26 @@ def validate_config(core_config):
     if core_config.get("with_request_gen", False) and core_config.get("with_block_streamer", False):
         raise ValueError("The standalone generator exposes one front-end; enable request_gen or block_streamer, not both.")
 
+    # Host-memory layout: the I/O SQ is one 4 KiB page (64 entries of 64 bytes).
+    qsize = core_config.get("qsize", 64)
+    if not (2 <= qsize <= 64):
+        raise ValueError("qsize must be 2..64 (the I/O SQ is one 4 KiB page of the host-memory window).")
+
+    # PRP-list region (used by transfers of more than two pages): inside the window, clear of the
+    # queues and of the block-streamer staging buffer.
+    offset = prp_list_offset(core_config)
+    if not _prp_list_fits(core_config, offset):
+        raise ValueError(f"PRP-list region (offset 0x{offset:x}, qsize*4 KiB = 0x{qsize*0x1000:x}) "
+            "must lie inside hostmem_size, above the queues (0x7000) and clear of the staging "
+            "buffer; set prp_list_offset or adjust hostmem_size/staging_base/staging_size/qsize.")
+
+    if init_mode == "firmware":
+        # The bring-up firmware creates I/O queue 1 and accesses host memory through the CSR.
+        if core_config.get("qid", 1) != 1:
+            raise ValueError("init_mode='firmware' uses I/O queue 1; set qid=1 (or use init_mode='rtl').")
+        if not core_config.get("with_hostmem_csr", True):
+            raise ValueError("init_mode='firmware' needs with_hostmem_csr (the firmware writes SQEs/reads CQEs through it).")
+
 def load_config(filename):
     with open(filename, "r", encoding="utf-8") as f:
         core_config = yaml.safe_load(f)
@@ -469,12 +533,13 @@ def main():
 
     core_config = load_config(args.config)
 
-    platform = _resolve_platform(core_config)
     firmware = core_config.get("firmware", "none")
 
     def build(cpu_firmware, build_name):
-        cfg = dict(core_config, _cpu_firmware=cpu_firmware)
-        soc     = LiteNVMeCore(platform, cfg)
+        # A platform is finalized by its build: use a new one for each pass of the two-pass build.
+        cfg      = dict(core_config, _cpu_firmware=cpu_firmware)
+        platform = _resolve_platform(cfg)
+        soc      = LiteNVMeCore(platform, cfg)
         builder = Builder(soc, output_dir=args.output_dir, compile_gateware=False)
         builder.build(build_name=build_name)
         return soc, builder

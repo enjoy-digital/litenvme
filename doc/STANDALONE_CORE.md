@@ -46,10 +46,13 @@ Outputs under `--output-dir`:
 | `software/include/generated/csr.h`    | CSR map (for the embedded CPU / optional host access) |
 | `software/include/generated/{soc,mem}.h` | SoC constants / memory-region map |
 
-When `init_mode: "firmware"` and `firmware: "auto"`, the generator runs the **two-pass firmware
-build** automatically (emit headers → compile the NVMe firmware → bake it into the CPU ROM), so
-the produced core is self-initializing. With `firmware: "none"` the core boots the LiteX BIOS
-instead (useful to validate generation). With `init_mode: "rtl"`, the core omits the bring-up CPU
+When `init_mode: "firmware"` and `firmware: "minimal"` or `"auto"`, the generator runs the
+**two-pass firmware build** automatically (emit headers → compile the NVMe firmware → bake it into
+the CPU ROM; needs a RISC-V toolchain). With `"minimal"` the produced core is self-initializing
+(auto-init, then `status_init_done`); `"auto"` bakes the console firmware (bring-up with
+`nvme_setup` on the UART). With `firmware: "none"` the core boots the LiteX BIOS instead (useful to
+validate generation): nothing initializes the SSD and `status_init_done` stays 0 until a firmware
+is loaded and runs `nvme_setup`. With `init_mode: "rtl"`, the core omits the bring-up CPU
 by default and the RTL sequencer auto-starts after the PCIe reset timer releases the SSD.
 
 ### YAML configuration
@@ -73,15 +76,16 @@ by default and the RTL sequencer auto-starts after the PCIe reset timer releases
     "cpu"          : "vexriscv",        # embedded bring-up CPU for init_mode="firmware".
     "cpu_variant"  : "minimal",
     "uart"         : "serial",          # serial | crossover | stub.
-    "firmware"     : "auto",            # firmware mode: auto/minimal/none; rtl mode: none.
+    "firmware"     : "minimal",         # firmware mode: minimal/auto/none; rtl mode: none.
 
-    "qid"          : 1, "qsize": 64, "qd": 32,   # I/O queue id / ring size / commands outstanding.
-    "hostmem_base" : 0x10000000,        # host-memory window (queues + PRP buffers + staging).
-    "hostmem_size" : 0x80000,           # 512 KiB on-FPGA BRAM.
+    "qid"          : 1, "qsize": 8, "qd": 4,     # I/O queue id / ring size / commands outstanding.
+    "prp_list_offset" : 0x7000,         # PRP-list region (qsize 4 KiB pages) in the window.
+    "hostmem_base" : 0x10000000,        # host-memory window (queues + PRP list + staging).
+    "hostmem_size" : 0x40000,           # 256 KiB on-FPGA BRAM.
 
     "with_request_gen"    : False,      # CSR benchmark generator (mutually exclusive front-end).
     "with_block_streamer" : True,       # the block read/write data interface (the product front-end).
-    "staging_base" : 0x40000, "staging_size": 0x40000,   # streamer staging region in the window.
+    "staging_base" : 0x10000, "staging_size": 0x30000,   # streamer staging region in the window.
 }
 ```
 
@@ -89,8 +93,17 @@ Key knobs:
 - **`data_width`** — must match the PHY's native width (256 for Gen3 x4 here). 256b @ 125 MHz = 4.0 GB/s.
 - **`init_mode`** — `firmware` uses the embedded CPU bring-up path; `rtl` uses the CPU-less init
   sequencer and drives `status_init_done/error` directly from RTL.
-- **`firmware`** — in firmware mode, `auto` bakes the NVMe bring-up firmware into ROM,
-  `minimal` bakes a code-only auto-init image, and `none` boots the BIOS.
+- **`firmware`** — in firmware mode, `minimal` bakes a code-only auto-init image into ROM (the
+  self-initializing core), `auto` bakes the console firmware, and `none` boots the BIOS. Firmware
+  mode keeps the host-memory CSR (`with_hostmem_csr`): the firmware writes the admin SQEs and
+  reads the CQEs through it. The firmware takes the window base, `qsize` and the PRP-list address
+  from `generated/soc.h` (`LITENVME_*` constants).
+- **`qsize`** — 2..64 (the I/O SQ is one 4 KiB page at window offset 0x4000).
+- **`prp_list_offset`** — window offset of the engine's PRP-list region (`qsize` 4 KiB pages,
+  used by transfers of more than two pages). It must lie inside the window, above the queues
+  (0x7000) and clear of the staging region; when not set, the generator picks the first place
+  that fits (after the per-slot buffers, after the queues, after the staging region) and rejects
+  the configuration if none does.
 - **`with_block_streamer` (sole front-end)** — exposes the block interface at the top
   (pin-driven). With `with_request_gen` instead you get a CSR-driven benchmark variant.
 - **`staging_*`** — the host-memory sub-region the streamer stages data through; must not
@@ -201,7 +214,7 @@ The standalone core is a plain Verilog module — instantiate it like any IP:
 5. **Constraints.** Assign the GTY/refclk and lane pins for your board, and the `pcie_refclk`
    period (100 MHz). The PCIe IP supplies its own internal timing constraints.
 
-6. **Bring-up.** With `init_mode: firmware` and `firmware: auto` the bring-up firmware is baked
+6. **Bring-up.** With `init_mode: firmware` and `firmware: minimal` the bring-up firmware is baked
    into the core's ROM; keep
    the emitted `litenvme_core_rom.init` next to the `.v` (the ROM loads it via `$readmemh`).
    Nothing to load at runtime — `init_done` rises automatically after link-up + NVMe init. With
@@ -272,9 +285,10 @@ Notes (post-synthesis estimate; post-place is slightly lower):
   (`cpu_variant: minimal`, ~1.7 k LUT) and never needs to be fast. To shrink its ROM/RAM:
   - `firmware: minimal` bakes a **code-only firmware** (auto-init + idle, no console, no prints)
     into a small ROM with **no main_ram** — ~8.6 KiB vs the 24 KiB BIOS, saving ~20 BRAM tiles
-    (→ core ≈ 113). *Status:* the minimal/auto firmware builds, but self-init on the **generated**
-    core still needs the firmware↔core CSR names aligned (the wrapper nests cfg/mmio as
-    `nvme_cfg`/`nvme_mmio` while the firmware uses `cfg_cfg_*`/`mmio_mem_*`) — a tracked follow-up.
+    (→ core ≈ 113). *Status:* the firmware maps the generated core's CSR names (`nvme_cfg_*`,
+    `nvme_mmio_*`, `nvme_io_engine_*`, `nvme_hostmem_*`) to the bench names it uses; self-init on
+    the **generated** core builds but needs a hardware check. Firmware mode keeps the host-memory
+    CSR, whose debug read port replicates the window BRAM.
   - `init_mode: "rtl"` removes the bring-up CPU by default and does the whole bring-up *in
     hardware*. Measured on the bench SoC, swapping VexRiscv+firmware
     for the sequencer saves **−2,560 LUT / −3,116 FF / −25 BRAM** (the CPU's ROM/RAM); the
