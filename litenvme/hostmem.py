@@ -177,7 +177,8 @@ class LiteNVMeHostMemCSR(LiteXModule):
     Exposes a DWORD view on the beat-wide backend:
       - _csr_adr is a DWORD index inside the HostMem window.
       - Readback always tracks the selected DWORD.
-      - Writes are done with a RMW on the enclosing beat.
+      - Writes are single-beat AXI writes with byte strobes on the selected DWORD lane (no
+        read-modify-write).
 
     Uses an internal AXI-MMAP master port (single-beat transactions).
     """
@@ -191,8 +192,9 @@ class LiteNVMeHostMemCSR(LiteXModule):
         self._csr_wdata = CSRStorage(32, description="HostMem write data (DWORD).")
 
         # csr_we:
-        # - Pulse to perform the write (RMW on beat-wide backend).
-        self._csr_we = CSRStorage(1, description="HostMem write strobe (pulse).")
+        # - Write request (level): a write is issued when csr_we is 1 and no write is pending, so
+        #   software writes 1 then 0 (a 1 left in it repeats the write after each completion).
+        self._csr_we = CSRStorage(1, description="HostMem write request (level: write 1 then 0).")
 
         # csr_rdata:
         # - DWORD readback (debug).
@@ -254,7 +256,7 @@ class LiteNVMeHostMemCSR(LiteXModule):
         })
         self.comb += self._csr_rdata.status.eq(csr_lane_val)
 
-        # RMW write (beat-wide update of selected lane).
+        # Lane write (byte strobes on the selected DWORD; `updated` refreshes the read view).
         self.fsm = fsm = FSM(reset_state="IDLE")
         updated          = Signal(data_width)
         aw_sent          = Signal()
