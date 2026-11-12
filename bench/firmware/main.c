@@ -229,8 +229,8 @@ static void reboot_cmd(void)
 
 static void status_cmd(void)
 {
-#ifdef CSR_PCIE_PHY_PHY_LINK_STATUS_ADDR
-	printf("pcie_link: %08" PRIx32 "\n", (uint32_t)pcie_phy_phy_link_status_read());
+#ifdef CSR_PCIE_PHY_LINK_STATUS_ADDR
+	printf("pcie_link: %08" PRIx32 "\n", (uint32_t)pcie_phy_link_status_read());
 #else
 	printf("pcie_link: (no CSR)\n");
 #endif

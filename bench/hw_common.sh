@@ -47,12 +47,12 @@ hw_link_decode() {
 import sys
 from litex import RemoteClient
 b = RemoteClient(csr_csv=sys.argv[1]); b.open()
-ls = b.regs.pcie_phy_phy_link_status.read()
+ls = b.regs.pcie_phy_link_status.read()
 rate  = {0:"Gen1",1:"Gen2",2:"Gen3"}.get((ls>>4)&3, "?")
 width = {0:"x1",1:"x2",2:"x4",3:"x8",4:"x16"}.get((ls>>6)&7, "?")
 print("  link_status=0x%04x  up=%d  rate=%s  width=%s  ltssm=0x%02x" % (ls, ls&1, rate, width, (ls>>9)&0x3f))
-print("  RC MPS=%dB MRRS=%dB" % (b.regs.pcie_phy_phy_max_payload_size.read(),
-                                 b.regs.pcie_phy_phy_max_request_size.read()))
+print("  RC MPS=%dB MRRS=%dB" % (b.regs.pcie_phy_max_payload_size.read(),
+                                 b.regs.pcie_phy_max_request_size.read()))
 b.close()
 PY
 }

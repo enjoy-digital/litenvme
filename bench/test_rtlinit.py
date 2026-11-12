@@ -31,7 +31,7 @@ def main():
 
     bus = RemoteClient(csr_csv=args.csr_csv); bus.open(); r = bus.regs
 
-    ls = r.pcie_phy_phy_link_status.read()
+    ls = r.pcie_phy_link_status.read()
     print(f"link_status=0x{ls:04x} up={ls & 1}")
     if not (ls & 1):
         print("ERROR: PCIe link down."); bus.close(); return 1
