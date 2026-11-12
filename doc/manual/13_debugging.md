@@ -38,7 +38,7 @@ the firmware commands and the harness scripts are described in
 |------------------------|----------------------------|----------------------------------|
 | `link_status` register | Link up, rate, width, LTSSM state | Any build |
 | Firmware console | Each bring-up step, CQE decode, errors | `--with-cpu` |
-| `status` command | `link_status` (see [Known issues](#intro-issues)) and the window beat counters | `--with-cpu` |
+| `status` command | `link_status` and the window beat counters | `--with-cpu` |
 | Window debug registers | Any dword of the host-memory window | `with_hostmem_csr` (bench: on) |
 | Init sequencer registers | Fail code, last CQE, last reads | `--with-rtl-init` |
 | LiteScope | PCIe ports, window port, counters | `--litescope-probe pcie` |
@@ -47,8 +47,7 @@ the firmware commands and the harness scripts are described in
 The register names are those of the `csr.csv` of the build. The bench SoC names its blocks
 differently from the `LiteNVMe` class, for example `cfg_cfg_*` on the bench SoC and
 `nvme_cfg_cfg_*` with `LiteNVMe` ([Register reference](#registers)). The link register is
-`pcie_phy_link_status` in both; the bench scripts and the firmware still use the older
-`pcie_phy_phy_link_status` ([Known issues](#intro-issues)).
+`pcie_phy_link_status` in both, and the bench scripts and the firmware use that name.
 
 ## Link status {#debug-link}
 

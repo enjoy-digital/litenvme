@@ -137,8 +137,7 @@ names follow the hierarchy of the core: `nvme_cfg_cfg_*` for the configuration a
 
 `add_csrs(soc)` registers each block of the core again as a bank of its own (`nvme_cfg`,
 `nvme_mmio`, `nvme_engine`, `nvme_hostmem`, `nvme_block`, `nvme_gen`). The same registers then exist
-under two names, so the snippet does not call it; the generator does ([Known
-issues](#intro-issues)).
+under two names, so the snippet does not call it, and neither does the generator.
 
 `with_csr=False` removes the registers of the accessors, of the engine and of the request generator,
 for a design that drives them from logic, as the init sequencer does.
@@ -349,8 +348,8 @@ lower address of its completions, which every LitePCIe PHY sends as given.
 
 The generator is limited to `USPPCIEPHY`: `_resolve_platform()` in `litenvme/gen.py` maps the
 `phy` key to a PHY class and a platform. A new PHY needs an entry there, with its platform and its
-configuration keys. The generator also accepts a data width of 512 bits, which the host-memory
-window then refuses at elaboration ([Known issues](#intro-issues)).
+configuration keys. The generator rejects a data width other than 64, 128 or 256 bits when it
+checks the configuration.
 
 ## Where to go next {#integ-next}
 

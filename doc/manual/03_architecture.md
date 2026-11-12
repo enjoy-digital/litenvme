@@ -178,8 +178,9 @@ driving the engine.
 
 A LiteX SoC also collects the registers of a module assigned as an attribute, such as
 `self.nvme`, under the attribute name. A core assigned as an attribute and passed to `add_csrs`
-therefore has some banks twice, under two names; the generator does this
-([Known issues](#intro-issues)). The register list is in [Register reference](#registers).
+therefore has some banks twice, under two names. The generator assigns its core as `nvme` and
+does not call `add_csrs`, so a generated core has each register once, in the `nvme` bank. The
+register list is in [Register reference](#registers).
 
 ## A block write, end to end {#arch-write}
 

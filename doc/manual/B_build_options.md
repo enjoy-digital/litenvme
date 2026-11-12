@@ -72,8 +72,8 @@ Python values, and `clk_freq` to a float.
 | `ep_max_pending_requests` | `8` | Outstanding read buffers of the root port |
 | `ep_address_width` | `64` | Address width of the root port |
 
-A `data_width` of 512 passes the check of the generator, but the host-memory window accepts 64,
-128 and 256 only, so the elaboration then fails ([Known issues](#intro-issues)).
+The host-memory window accepts 64, 128 and 256 bits only; the generator rejects any other
+`data_width` when it checks the configuration, before the elaboration.
 
 ### Bring-up {#opt-gen-bringup}
 

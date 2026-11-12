@@ -7,8 +7,9 @@ shows a first run of the suite.
 
 ## At a glance {#sim-glance}
 
-The suite is in `test/`: 13 files, 46 test cases, all Migen simulations run with
-`run_simulation`, plus the configuration checks of the generator. There is no Verilator
+The suite is in `test/`: 15 files, 50 test cases, all Migen simulations run with
+`run_simulation`, plus the configuration checks of the generator and an elaboration of the
+generated core. There is no Verilator
 simulation and no SSD model beyond small Python processes.
 
 | Test file | Block under test | Cases | Around it |
@@ -25,6 +26,8 @@ simulation and no SSD model beyond small Python processes.
 | `test_block_streamer.py` | Block streamer | 4 | Write, read, error status, `done` timing |
 | `test_init_sequencer.py` | Init sequencer | 1 | Configuration, MMIO, root and memory models, admin CQEs |
 | `test_gen_config.py` | Generator configuration | 6 | YAML loading and checks, no elaboration |
+| `test_gen_validate.py` | Generator configuration | 2 | Data widths 64, 128 and 256 accepted, 512 rejected |
+| `test_gen_csr.py` | Generated core | 2 | Elaboration of the example configuration: registers once in the `nvme` bank (`firmware`), no `nvme` bank (`rtl`) |
 | `models.py` | Shared models | none | Dword memory port, doorbell accessor |
 
 `test/conftest.py` puts `test/` on the Python path so that the test files share `models.py`.
@@ -80,11 +83,10 @@ on the bench that the suite had passed, and the code carries the fix.
   uses a `Case` of constant shifts instead ([The host-memory window](#host-memory)).
 - **No PCIe link and no root port.** The accessors are tested on a port model, not on the
   LitePCIe crossbar; MPS, ordering and completion timeouts of a real link are not modelled.
-- **No elaboration of the integrated core.** No test builds the `LiteNVMe` class or the generator
-  SoC, so register naming and the wiring of `add_csrs()` are not checked by the suite. The
-  generator is elaborated only by the dry run of the continuous integration
-  ([Continuous integration](#sim-ci)) and by the register appendix
-  ([Register reference](#registers)).
+- **Little elaboration of the integrated core.** `test_gen_csr.py` elaborates the generator SoC
+  and checks its register banks, without simulating it. No test builds the bench SoC or calls
+  `add_csrs()`. The dry run of the continuous integration ([Continuous integration](#sim-ci))
+  and the register appendix ([Register reference](#registers)) also elaborate the generator.
 
 Hardware runs remain the reference for these points: the [status table](#intro-status) says which
 features have run on a board.
