@@ -87,63 +87,27 @@ litex_server --udp
   --slba 0 \
   --nlb 1
 
-## 6) First performance measurements
-Use the current firmware-driven CSR request path as the baseline.
+## 6) Throughput measurements
+Throughput is measured with the hardware I/O engine driven by the hardware request generator
+(no CPU in the steady-state loop). Build with the engine and the console firmware:
 
-What this measures well:
-- end-to-end request latency
-- effective throughput for small `PRP1` transfers
-- firmware/setup overhead vs host memory DMA activity
-
-Current limits:
-- single outstanding request
-- polling completion path
-- `PRP1` only
-- `nlb <= 8`
-
-Recommended sweep:
 ```sh
-./test_req.py --op read  --nsid 1 --lba 0    --nlb 1 --buf 0x10005000 --bar0 0xe0000000
-./test_req.py --op read  --nsid 1 --lba 0    --nlb 2 --buf 0x10005000 --bar0 0xe0000000
-./test_req.py --op read  --nsid 1 --lba 0    --nlb 4 --buf 0x10005000 --bar0 0xe0000000
-./test_req.py --op read  --nsid 1 --lba 0    --nlb 8 --buf 0x10005000 --bar0 0xe0000000
-./test_req.py --op write --nsid 1 --lba 1024 --nlb 1 --buf 0x10006000 --bar0 0xe0000000
-./test_req.py --op write --nsid 1 --lba 1024 --nlb 2 --buf 0x10006000 --bar0 0xe0000000
-./test_req.py --op write --nsid 1 --lba 1024 --nlb 4 --buf 0x10006000 --bar0 0xe0000000
-./test_req.py --op write --nsid 1 --lba 1024 --nlb 8 --buf 0x10006000 --bar0 0xe0000000
+./alibaba_xcku3p.py --with-etherbone --with-cpu --with-io-engine --build --load
 ```
 
-Recommended procedure:
-1. Use `status` at the firmware console before and after a batch to capture `hostmem_wr_count` and `hostmem_rd_count`.
-2. Separate cold measurements from steady-state measurements.
-3. Run each point many times and time the whole batch from the host side.
-4. Compute average latency per request and effective MB/s.
-
-Next improvements for performance work:
-- use the new `req_cycles` and `req_bytes_done` CSRs
-- automate repeated runs with `bench_req.py`
-- add a small request FIFO before moving queue management into RTL
-
-Example batch run:
+Firmware-side benchmark (from the `litenvme>` prompt):
 ```sh
-./bench_req.py --op read  --nsid 1 --lba 0    --nlb 1 --buf 0x10005000 --bar0 0xe0000000 --count 100
-./bench_req.py --op read  --nsid 1 --lba 0    --nlb 8 --buf 0x10005000 --bar0 0xe0000000 --count 100
-./bench_req.py --op write --nsid 1 --lba 1024 --nlb 1 --buf 0x10006000 --bar0 0xe0000000 --count 100
-./bench_req.py --op write --nsid 1 --lba 1024 --nlb 8 --buf 0x10006000 --bar0 0xe0000000 --count 100
+nvme_engine_bench <read|write> [bar0] [nsid] [slba] [nlb] [count] [step]
+nvme_engine_bench read  0xe0000000 1 1000000 16 1000 16
+nvme_engine_bench write 0xe0000000 1 3000000 16 1000 16
 ```
 
-Firmware-side benchmark:
-```sh
-nvme_bench read  0xe0000000 1 0    8 100 0 1
-nvme_bench write 0xe0000000 1 1024 8 100 8 1
-```
+- `nlb` is 1..16 (16 = 8 KiB transfers, the default); `count` is the number of requests;
+  `step` is the LBA increment between requests.
+- It reports the I/O engine and request generator counters, the cycle count and the
+  throughput in MB/s, plus the hostmem DMA counters when present.
 
-This reports:
-- average latency in microseconds
-- throughput in MB/s
-- IOPS
-- setup vs I/O timer ticks
-- MMIO read/write counts and MMIO timing ticks
-- admin/I/O CQ polling loop counts
-- payload bytes
-- hostmem DMA beat deltas
+`hw_gen3.sh` runs the recorded sequence (8 KiB and 4 KiB reads, 8 KiB writes) and keeps the
+board-printed output. Recorded runs are in `bench/results/` (see `doc/VALIDATION.md`).
+`qd_sweep.py` and `qd_sweep_result.txt` come from an earlier firmware with a CPU-driven
+`nvme_bench` command that the current firmware no longer has.
