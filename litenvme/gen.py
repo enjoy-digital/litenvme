@@ -270,8 +270,8 @@ class LiteNVMeCore(SoCCore):
             with_request_gen_csr = accessor_csr,
             extra_axi_masters = extra_axi_masters,
         )
-        if accessor_csr:
-            nvme.add_csrs(self)
+        # The core is a SoC submodule: its sub-blocks' CSRs are collected once, under "nvme"
+        # (nvme_cfg_*, nvme_mmio_*, nvme_io_engine_*); add_csrs() would map them twice.
 
         # Core control (init_done / init_error) wired to top-level status pins -----------------
         status_pads = platform.request("status")

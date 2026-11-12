@@ -217,9 +217,10 @@ class LiteNVMe(LiteXModule):
     def add_csrs(self, soc, name="nvme"):
         """Register the core's sub-blocks as CSR modules on `soc` with a common prefix.
 
-        Convenience for SoC integration. Call after instantiating the core, e.g.:
-            self.nvme = LiteNVMe(self.pcie_endpoint, ...)
-            self.nvme.add_csrs(self)
+        Adds `{name}_cfg`, `{name}_mmio`, `{name}_engine`, ... banks. Note that when the core is
+        itself a SoC submodule (`self.nvme = LiteNVMe(...)`), LiteX already collects the
+        sub-blocks' CSRs under the core's name (nvme_cfg_*, nvme_mmio_*, nvme_io_engine_*):
+        calling add_csrs() then maps the same registers a second time, in extra banks.
         """
         if self.with_accessor_csr:
             soc.add_module(name=f"{name}_cfg",    module=self.cfg)
