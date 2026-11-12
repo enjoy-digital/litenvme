@@ -65,8 +65,9 @@ LiteNVMe has been validated end-to-end on real hardware:
 - Alibaba Cloud KU3P FPGA card with a commercial NVMe SSD.
 - PCIe Gen3 x4 RootPort link-up, BAR0 discovery and controller enable.
 - Admin Identify, I/O queue creation and DMA read/write transfers.
-- Firmware bring-up and pure-RTL init bring-up.
-- 8 KiB QD32 transfers at around 2.7 GB/s reads and writes on the validated setup.
+- Firmware bring-up (pure-RTL init bring-up reported, no log recorded yet).
+- 8 KiB QD32 reads at about 2.69 GB/s and writes from 1.56 to 2.62 GB/s on the validated setup
+  (`bench/results/gen3_256b_2026-06-01/throughput_8kib_default.log`).
 - Write/read-back data integrity checks.
 
 Detailed validation, resource and performance information is available in:

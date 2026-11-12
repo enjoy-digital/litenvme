@@ -59,12 +59,12 @@ Curated result files:
 | `bench/results/gen3_256b_2026-06-01/integrity.log` | Write/read-back integrity proof. |
 | `bench/results/gen3_256b_2026-06-01/nvme_init.log` | NVMe initialization log. |
 
-Current headline numbers:
+Current headline numbers (from `throughput_8kib_default.log`, two runs per direction):
 
 | Workload | Result |
 |----------|--------|
-| 8 KiB reads, QD32 | ~2.69 GB/s, errors = 0 |
-| 8 KiB writes, QD32 | ~2.74 GB/s, errors = 0 |
+| 8 KiB reads, QD32 | 2.686 / 2.686 GB/s, errors = 0 |
+| 8 KiB writes, QD32 | 2.624 / 1.561 GB/s, errors = 0 (write throughput varies run to run, SSD side) |
 | Integrity | write -> read-back exact |
 
 ## Archive Policy

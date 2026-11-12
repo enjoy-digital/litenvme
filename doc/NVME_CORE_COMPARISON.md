@@ -27,7 +27,7 @@ Only **host-side** cores are directly comparable to LiteNVMe.
 
 | Core | Side | Open source | PCIe (as tested) | Read | Write | Data interface / CPU | Source |
 |------|------|-------------|------------------|-----:|------:|----------------------|--------|
-| **LiteNVMe** | Host | **Yes** (BSD, LiteX/Migen) | Gen3 x4, 256-bit | **~2.69 GB/s** | **~2.74 GB/s** | block streamer (sector/count + AXI-Stream); embedded soft-CPU for bring-up only | measured (this repo) |
+| **LiteNVMe** | Host | **Yes** (BSD, LiteX/Migen) | Gen3 x4, 256-bit | **~2.69 GB/s** | **1.56 to 2.62 GB/s** | block streamer (sector/count + AXI-Stream); embedded soft-CPU for bring-up only | measured (this repo) |
 | IntelliProp IPC-NV164-HI | Host | No | Gen3 (KCU105) | 2.0 GB/s | 1.0 GB/s | RTL state-machine *or* processor reg; user buffer (BRAM/DDR); CPU-less | FPGA Developer demo |
 | IntelliProp IPC-NV164-HI | Host | No | Gen3 (faster platform) | ~3.2 GB/s | ~2.3 GB/s | same | IntelliProp |
 | Design Gateway NVMe-IP | Host | No | **Gen5** (Versal HBM) | >11 GB/s | n/p | control + FIFO data port, 256 KB internal RAM, **no CPU, no DDR** | dgway.com |
@@ -41,14 +41,15 @@ Only **host-side** cores are directly comparable to LiteNVMe.
 **For Gen3 x4 against a single commercial SSD: yes, it is close to the practical ceiling.**
 
 - The Gen3 x4 link delivers ~3.9 GB/s raw and **~3.4 GB/s usable** after TLP overhead. LiteNVMe's
-  ~2.69 GB/s read / ~2.74 GB/s write is **~79–81 % of usable link bandwidth**.
+  ~2.69 GB/s read is **~79 % of usable link bandwidth**; recorded 8 KiB writes reach 2.62 GB/s
+  (~77 %) and vary run to run on the SSD side (1.56 GB/s on the second run).
 - The remaining gap is **not** the core: this SSD caps **MaxPayloadSize at 512 B**, so read data
   arrives as 512-byte TLPs, and the host-memory responder runs at ~90 % duty during reads —
   i.e. the design is **device/link-bound, not core-bound** (see `doc/NVME_PERFORMANCE.md`). Any
   host core attached to the same SSD hits the same wall.
 - Against the most comparable core (IntelliProp's CPU-less host accelerator on a Gen3 board),
   LiteNVMe's read (2.69) sits between IntelliProp's KCU105 result (2.0) and its best-platform
-  result (3.2), and its **write (2.74) is markedly higher** than IntelliProp's 1.0–2.3 GB/s.
+  result (3.2), and its best recorded **write (2.62) is higher** than IntelliProp's 1.0–2.3 GB/s.
 
 **Where the real headroom is: PCIe generation, not the core.** The 7–11 GB/s figures (Design
 Gateway Gen5, iWave Gen4/x8) come from **faster/ wider PCIe**, not a fundamentally different
