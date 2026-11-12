@@ -9,6 +9,7 @@
 # ./alibaba_xcku3p.py --with-cpu --cpu-boot=bios --csr-csv=csr.csv --with-etherbone  --build --load
 
 import os
+import subprocess
 
 from migen import *
 
@@ -526,7 +527,7 @@ def main():
         # make runs with `-C firmware`, so a relative output_dir would resolve under firmware/.
         fw_dir = os.path.join(os.path.dirname(__file__), "firmware")
         build_dir = os.path.abspath(builder.output_dir)
-        os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} BOOT={args.cpu_boot} clean all")
+        subprocess.check_call(["make", "-C", fw_dir, f"BUILD_DIR={build_dir}", f"BOOT={args.cpu_boot}", "clean", "all"])
 
         # Second build:
         # - ROM boot: integrate firmware.bin into ROM init.
