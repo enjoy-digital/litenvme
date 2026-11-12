@@ -131,7 +131,7 @@ def discover_bar0(bus, b, d, f, timeout_ms=100):
 def wait_link_up(bus, timeout_s=5.0):
     deadline = time.time() + timeout_s
     while True:
-        v = bus.regs.pcie_phy_phy_link_status.read()
+        v = bus.regs.pcie_phy_link_status.read()
         link = (v >> LINK_STATUS_UP) & 1
         if link:
             return True
