@@ -97,12 +97,14 @@ class TestInitSequencer(unittest.TestCase):
                 else:
                     yield
 
-        # ROOT cfg-mgmt: ack the window write.
+        # ROOT cfg-mgmt: record and ack the window write.
+        root_writes = []
         @passive
         def root_model():
             yield s.root_done.eq(0)
             while True:
                 if (yield s.root_start):
+                    root_writes.append(((yield s.root_write), (yield s.root_addr), (yield s.root_wdata)))
                     yield s.root_done.eq(0)
                     yield; yield
                     yield s.root_done.eq(1)
@@ -176,6 +178,9 @@ class TestInitSequencer(unittest.TestCase):
         # The 3 admin SQEs, in order, are Set Features (0x09), Create IO CQ (0x05), Create IO SQ
         # (0x01). Captured at submission time (the 2-entry admin ring overwrites slot 0).
         self.assertEqual(served_ops, [0x09, 0x05, 0x01], f"wrong admin opcodes: {[hex(o) for o in served_ops]}")
+        # Root port Memory Base/Limit: type-1 header byte 0x20, i.e. cfg_mgmt DWORD address 0x08
+        # (where the firmware writes it: rootcfg_wr32(0x20, ...)).
+        self.assertEqual(root_writes, [(1, 0x20 >> 2, 0xe000e000)], f"wrong root window write: {root_writes}")
         return result
 
 
