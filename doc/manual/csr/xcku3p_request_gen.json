@@ -1,0 +1,1002 @@
+{
+ "argv": [
+  "alibaba_xcku3p.yml",
+  "with_block_streamer=False",
+  "with_request_gen=True"
+ ],
+ "banks": {
+  "nvme_cfg": [
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Write 1: send the configuration request (pulse).",
+      "name": "start",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": [
+       [
+        "``1``",
+        "Start a new CFG transaction."
+       ]
+      ]
+     },
+     {
+      "description": "0: CfgRd0, 1: CfgWr0.",
+      "name": "we",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": [
+       [
+        "``0``",
+        "CFG Read."
+       ],
+       [
+        "``1``",
+        "CFG Write."
+       ]
+      ]
+     }
+    ],
+    "name": "cfg_ctrl",
+    "offset": 0,
+    "reset": 0,
+    "size": 2
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Bus number.",
+      "name": "bus",
+      "offset": 0,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     },
+     {
+      "description": "Device number.",
+      "name": "dev",
+      "offset": 8,
+      "reset": 0,
+      "size": 5,
+      "values": []
+     },
+     {
+      "description": "Function number.",
+      "name": "fn",
+      "offset": 13,
+      "reset": 0,
+      "size": 3,
+      "values": []
+     },
+     {
+      "description": "DWORD register number (offset/4).",
+      "name": "reg",
+      "offset": 16,
+      "reset": 0,
+      "size": 6,
+      "values": []
+     },
+     {
+      "description": "Extended register number.",
+      "name": "ext",
+      "offset": 22,
+      "reset": 0,
+      "size": 3,
+      "values": []
+     }
+    ],
+    "name": "cfg_bdf",
+    "offset": 4,
+    "reset": 0,
+    "size": 25
+   },
+   {
+    "access": "rw",
+    "description": "CFG write data (DWORD).",
+    "fields": [],
+    "name": "cfg_wdata",
+    "offset": 8,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Transaction done.",
+      "name": "done",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Transaction error (completion error/timeout).",
+      "name": "err",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "cfg_stat",
+    "offset": 12,
+    "reset": null,
+    "size": 2
+   },
+   {
+    "access": "ro",
+    "description": "CFG read data (DWORD).",
+    "fields": [],
+    "name": "cfg_rdata",
+    "offset": 16,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "nvme_ctrl": [
+   {
+    "access": "rw",
+    "description": "Written to 1 by the bring-up firmware when the controller and the I/O queue are ready; drives `status_init_done` of the standalone core.",
+    "fields": [],
+    "name": "init_done",
+    "offset": 0,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "Written to 1 by the bring-up firmware when the bring-up failed; drives `status_init_error`.",
+    "fields": [],
+    "name": "init_error",
+    "offset": 4,
+    "reset": 0,
+    "size": 1
+   }
+  ],
+  "nvme_hostmem": [
+   {
+    "access": "rw",
+    "description": "HostMem dword address (index).",
+    "fields": [],
+    "name": "csr_csr_adr",
+    "offset": 100,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "HostMem write data (DWORD).",
+    "fields": [],
+    "name": "csr_csr_wdata",
+    "offset": 104,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "HostMem write strobe (pulse).",
+    "fields": [],
+    "name": "csr_csr_we",
+    "offset": 108,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "HostMem read data (DWORD).",
+    "fields": [],
+    "name": "csr_csr_rdata",
+    "offset": 112,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Count of DMA beats stored.",
+    "fields": [],
+    "name": "csr_dma_wr_count",
+    "offset": 116,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Count of DMA beats served.",
+    "fields": [],
+    "name": "csr_dma_rd_count",
+    "offset": 120,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Cycles a MemWr beat is offered at the port.",
+    "fields": [],
+    "name": "csr_wr_present_cycles",
+    "offset": 124,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Cycles a MemWr beat is accepted.",
+    "fields": [],
+    "name": "csr_wr_accept_cycles",
+    "offset": 128,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Cycles a MemWr beat is offered but backpressured.",
+    "fields": [],
+    "name": "csr_wr_stall_cycles",
+    "offset": 132,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Number of read-completion (MemWr) TLPs accepted.",
+    "fields": [],
+    "name": "csr_rd_tlp_count",
+    "offset": 136,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Longest idle run (cycles) between offered MemWr beats.",
+    "fields": [],
+    "name": "csr_rd_gap_max",
+    "offset": 140,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "nvme_io_engine": [
+   {
+    "access": "rw",
+    "description": "Enable the hardware I/O engine.",
+    "fields": [],
+    "name": "engine_enable",
+    "offset": 44,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "IO SQ base (host byte addr) low.",
+    "fields": [],
+    "name": "engine_sq_base_lo",
+    "offset": 48,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "IO SQ base (host byte addr) high.",
+    "fields": [],
+    "name": "engine_sq_base_hi",
+    "offset": 52,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "IO CQ base (host byte addr) low.",
+    "fields": [],
+    "name": "engine_cq_base_lo",
+    "offset": 56,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "IO CQ base (host byte addr) high.",
+    "fields": [],
+    "name": "engine_cq_base_hi",
+    "offset": 60,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "SQ doorbell (BAR0 byte addr) low.",
+    "fields": [],
+    "name": "engine_sq_db_lo",
+    "offset": 64,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "SQ doorbell (BAR0 byte addr) high.",
+    "fields": [],
+    "name": "engine_sq_db_hi",
+    "offset": 68,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "CQ doorbell (BAR0 byte addr) low.",
+    "fields": [],
+    "name": "engine_cq_db_lo",
+    "offset": 72,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "CQ doorbell (BAR0 byte addr) high.",
+    "fields": [],
+    "name": "engine_cq_db_hi",
+    "offset": 76,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "PRP-list region (host byte addr) low.",
+    "fields": [],
+    "name": "engine_prp_list_lo",
+    "offset": 80,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "PRP-list region (host byte addr) high.",
+    "fields": [],
+    "name": "engine_prp_list_hi",
+    "offset": 84,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "1: the engine FSM is not idle.",
+      "name": "busy",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Commands submitted and not yet reaped.",
+      "name": "inflight",
+      "offset": 8,
+      "reset": 0,
+      "size": 8,
+      "values": []
+     }
+    ],
+    "name": "engine_status",
+    "offset": 88,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Total commands submitted.",
+    "fields": [],
+    "name": "engine_submitted",
+    "offset": 92,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Total completions reaped.",
+    "fields": [],
+    "name": "engine_completed",
+    "offset": 96,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "nvme_mmio": [
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Write 1: send the memory request (pulse).",
+      "name": "start",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": [
+       [
+        "``1``",
+        "Start a new MEM transaction."
+       ]
+      ]
+     },
+     {
+      "description": "0: MemRd, 1: MemWr (posted).",
+      "name": "we",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": [
+       [
+        "``0``",
+        "MEM Read."
+       ],
+       [
+        "``1``",
+        "MEM Write."
+       ]
+      ]
+     },
+     {
+      "description": "Byte enables of a write; only `0xf` is accepted, another value ends the request with `err`.",
+      "name": "wsel",
+      "offset": 4,
+      "reset": 0,
+      "size": 4,
+      "values": [
+       [
+        "``0xf``",
+        "Full DWORD write (only supported mode)."
+       ]
+      ]
+     },
+     {
+      "description": "DWORD count (start with 1).",
+      "name": "len",
+      "offset": 8,
+      "reset": 0,
+      "size": 10,
+      "values": []
+     }
+    ],
+    "name": "mem_ctrl",
+    "offset": 20,
+    "reset": 0,
+    "size": 18
+   },
+   {
+    "access": "rw",
+    "description": "MEM address low (bytes).",
+    "fields": [],
+    "name": "mem_adr_l",
+    "offset": 24,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "MEM address high (bytes).",
+    "fields": [],
+    "name": "mem_adr_h",
+    "offset": 28,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "MEM write data (DWORD).",
+    "fields": [],
+    "name": "mem_wdata",
+    "offset": 32,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Transaction done.",
+      "name": "done",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Transaction error (completion error/timeout/invalid wsel).",
+      "name": "err",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "mem_stat",
+    "offset": 36,
+    "reset": null,
+    "size": 2
+   },
+   {
+    "access": "ro",
+    "description": "MEM read data (DWORD).",
+    "fields": [],
+    "name": "mem_rdata",
+    "offset": 40,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "nvme_request_gen": [
+   {
+    "access": "rw",
+    "description": "0=read, 1=write.",
+    "fields": [],
+    "name": "op",
+    "offset": 144,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "rw",
+    "description": "Namespace ID.",
+    "fields": [],
+    "name": "nsid",
+    "offset": 148,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Base LBA low.",
+    "fields": [],
+    "name": "base_lba_lo",
+    "offset": 152,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Base LBA high.",
+    "fields": [],
+    "name": "base_lba_hi",
+    "offset": 156,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Blocks per command (1-based).",
+    "fields": [],
+    "name": "nlb",
+    "offset": 160,
+    "reset": 1,
+    "size": 16
+   },
+   {
+    "access": "rw",
+    "description": "LBA increment between commands.",
+    "fields": [],
+    "name": "lba_step",
+    "offset": 164,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Number of commands to issue.",
+    "fields": [],
+    "name": "count",
+    "offset": 168,
+    "reset": 1,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "PRP1 buffer base (host byte addr) low.",
+    "fields": [],
+    "name": "buf_base_lo",
+    "offset": 172,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "PRP1 buffer base (host byte addr) high.",
+    "fields": [],
+    "name": "buf_base_hi",
+    "offset": 176,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Per-slot buffer stride (bytes).",
+    "fields": [],
+    "name": "buf_stride",
+    "offset": 180,
+    "reset": 4096,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Buffer-key modulus (== engine qsize).",
+    "fields": [],
+    "name": "qmod",
+    "offset": 184,
+    "reset": 64,
+    "size": 16
+   },
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Start the run.",
+      "name": "start",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "ctrl",
+    "offset": 188,
+    "reset": 0,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Run complete / idle.",
+      "name": "done",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "status",
+    "offset": 192,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "Completions counted.",
+    "fields": [],
+    "name": "completed",
+    "offset": 196,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Completions with error status.",
+    "fields": [],
+    "name": "errors",
+    "offset": 200,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Cycles from start to last completion.",
+    "fields": [],
+    "name": "cycles",
+    "offset": 204,
+    "reset": null,
+    "size": 32
+   },
+   {
+    "access": "ro",
+    "description": "Last CQE status field.",
+    "fields": [],
+    "name": "last_status",
+    "offset": 208,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Status of the first erroring CQE.",
+    "fields": [],
+    "name": "first_err_status",
+    "offset": 212,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "CID of the first erroring CQE.",
+    "fields": [],
+    "name": "first_err_cid",
+    "offset": 216,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Completion index of the first error.",
+    "fields": [],
+    "name": "first_err_idx",
+    "offset": 220,
+    "reset": null,
+    "size": 32
+   }
+  ],
+  "pcie_phy": [
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "1: link up.",
+      "name": "status",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": [
+       [
+        "``0b0``",
+        "Link Down."
+       ],
+       [
+        "``0b1``",
+        "Link Up."
+       ]
+      ]
+     },
+     {
+      "description": "1: PHY link down.",
+      "name": "phy_down",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": [
+       [
+        "``0b0``",
+        "PHY Link Up."
+       ],
+       [
+        "``0b1``",
+        "PHY Link Down."
+       ]
+      ]
+     },
+     {
+      "description": "0: no receiver detected, 1: training, 2: link up and data link initialization in progress, 3: link up, data link initialized.",
+      "name": "phy_status",
+      "offset": 2,
+      "reset": 0,
+      "size": 2,
+      "values": [
+       [
+        "``00b``",
+        "No receivers detected."
+       ],
+       [
+        "``01b``",
+        "Link training in progress."
+       ],
+       [
+        "``10b``",
+        "Link up, DL initialization in progress."
+       ],
+       [
+        "``11b``",
+        "Link up, DL initialization completed."
+       ]
+      ]
+     },
+     {
+      "description": "0: 2.5 GT/s (Gen1), 1: 5.0 GT/s (Gen2), 2: 8.0 GT/s (Gen3).",
+      "name": "rate",
+      "offset": 4,
+      "reset": 0,
+      "size": 2,
+      "values": [
+       [
+        "``0b00``",
+        "2.5 GT/s."
+       ],
+       [
+        "``0b01``",
+        "5.0 GT/s."
+       ],
+       [
+        "``0b10``",
+        "8.0 GT/s."
+       ]
+      ]
+     },
+     {
+      "description": "0: x1, 1: x2, 2: x4, 3: x8, 4: x16.",
+      "name": "width",
+      "offset": 6,
+      "reset": 0,
+      "size": 3,
+      "values": [
+       [
+        "``0b000``",
+        "1-Lane link."
+       ],
+       [
+        "``0b001``",
+        "2-Lane link."
+       ],
+       [
+        "``0b010``",
+        "4-Lane link."
+       ],
+       [
+        "``0b011``",
+        "8-Lane link."
+       ],
+       [
+        "``0b100``",
+        "16-Lane link."
+       ]
+      ]
+     },
+     {
+      "description": "LTSSM State",
+      "name": "ltssm",
+      "offset": 9,
+      "reset": 0,
+      "size": 6,
+      "values": []
+     }
+    ],
+    "name": "link_status",
+    "offset": 0,
+    "reset": null,
+    "size": 15
+   },
+   {
+    "access": "ro",
+    "description": "MSI Enable Status. ``1``: MSI is enabled.",
+    "fields": [],
+    "name": "msi_enable",
+    "offset": 4,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "Bus Mastering Status. ``1``: Bus Mastering enabled.",
+    "fields": [],
+    "name": "bus_master_enable",
+    "offset": 8,
+    "reset": null,
+    "size": 1
+   },
+   {
+    "access": "ro",
+    "description": "Negiotiated Max Request Size (in bytes).",
+    "fields": [],
+    "name": "max_request_size",
+    "offset": 12,
+    "reset": null,
+    "size": 16
+   },
+   {
+    "access": "ro",
+    "description": "Negiotiated Max Payload Size (in bytes).",
+    "fields": [],
+    "name": "max_payload_size",
+    "offset": 16,
+    "reset": null,
+    "size": 16
+   }
+  ],
+  "pcie_rootcfg": [
+   {
+    "access": "rw",
+    "description": "",
+    "fields": [
+     {
+      "description": "Start a cfg_mgmt transaction.",
+      "name": "start",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "0=Read, 1=Write.",
+      "name": "write",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "ctrl",
+    "offset": 0,
+    "reset": 0,
+    "size": 2
+   },
+   {
+    "access": "rw",
+    "description": "DWORD address into Root Port config space.",
+    "fields": [],
+    "name": "addr",
+    "offset": 4,
+    "reset": 0,
+    "size": 10
+   },
+   {
+    "access": "rw",
+    "description": "Function number (0 for PF0).",
+    "fields": [],
+    "name": "func",
+    "offset": 8,
+    "reset": 0,
+    "size": 8
+   },
+   {
+    "access": "rw",
+    "description": "Write data (DWORD).",
+    "fields": [],
+    "name": "wdata",
+    "offset": 12,
+    "reset": 0,
+    "size": 32
+   },
+   {
+    "access": "rw",
+    "description": "Byte enables.",
+    "fields": [],
+    "name": "be",
+    "offset": 16,
+    "reset": 15,
+    "size": 4
+   },
+   {
+    "access": "ro",
+    "description": "",
+    "fields": [
+     {
+      "description": "Last transaction complete.",
+      "name": "done",
+      "offset": 0,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     },
+     {
+      "description": "Transaction in progress.",
+      "name": "busy",
+      "offset": 1,
+      "reset": 0,
+      "size": 1,
+      "values": []
+     }
+    ],
+    "name": "stat",
+    "offset": 20,
+    "reset": null,
+    "size": 2
+   },
+   {
+    "access": "ro",
+    "description": "Read data (valid when done=1).",
+    "fields": [],
+    "name": "rdata",
+    "offset": 24,
+    "reset": null,
+    "size": 32
+   }
+  ]
+ },
+ "config": "xcku3p_request_gen",
+ "target": "litenvme_gen"
+}
