@@ -46,8 +46,8 @@ a word more:
 
 - With `--with-cpu` and `--cpu-firmware auto`, the target elaborates the SoC twice and runs `make`
   on `bench/firmware` in between, even for `--load` alone; with `--build`, the second pass runs
-  Vivado. The status of `make` is not checked, and `--build --no-compile` still runs Vivado
-  ([Known issues](#intro-issues)).
+  Vivado. A failed `make` stops the target, and `--no-compile` (or `--no-compile-gateware`)
+  skips Vivado in both passes.
 - `--with-block-streamer` adds a test block on the streamer data ports, `_BlockBIST`. It writes a
   counter, one value per beat, and checks it on the read path. A register (`nvme_block_bist_sel`)
   selects the front-end of the I/O engine: 0 for the request generator, 1 for the block streamer.
@@ -78,10 +78,10 @@ the I/O engine for benchmarks. Its console is the crossover UART, reached from t
 | `cmd_enable` | Set MEM and BME of the SSD |
 | `cmd_disable` | Clear MEM and BME |
 | `nvme_reset` | Clear the cached state, disable the controller |
-| `nvme_fill` | Set the fill pattern used by `nvme_verify` and the benchmark |
+| `nvme_fill` | Set the fill pattern used by `nvme_write`, `nvme_verify` and the benchmark |
 | `nvme_identify` | Assign BAR0, set MEM and BME, send Identify Controller |
 | `nvme_read` | Read sectors into the window and print the first dwords |
-| `nvme_write` | Write sectors from the window (pattern `0xa5a5a5a5`) |
+| `nvme_write` | Write sectors from the window, with the fill pattern |
 | `nvme_verify` | Write the fill pattern to sectors, read them back and compare |
 | `nvme_engine_bench` | Benchmark the I/O engine with the request generator |
 | `nvme_setup` | Bring-up, engine enabled, `init_done` set |
@@ -245,8 +245,8 @@ litenvme>
 
 `hw_integrity.sh` runs `nvme_fill` then `nvme_verify`: the verify command writes the pattern to
 each sector, one Write command per sector, then reads the sectors back and compares the first
-`dwords` of each. `nvme_write` ignores the pattern and writes `0xa5a5a5a5`
-([Known issues](#intro-issues)), the data that the read of `nvme_init.log` at sector 0 returns.
+`dwords` of each. `nvme_write` writes the fill pattern too; its default, `0xa5a5a5a5`, is the
+data that the read of `nvme_init.log` at sector 0 returns.
 
 ### Earlier runs {#ex-archive}
 

@@ -60,8 +60,8 @@ this manual describes it.
 21 passed in 4.11s
 ```
 
-`python3 -m pytest -q test` runs the whole suite of 46 tests in one process. Its run for this
-manual ended with `46 passed in 758.32s (0:12:38)`, most of it in the I/O engine and block
+`python3 -m pytest -q test` runs the whole suite of 50 tests in one process. Its run for this
+manual ended with `50 passed in 530.21s (0:08:50)`, most of it in the I/O engine and block
 streamer simulations; [Simulation and
 verification](#simulation) describes each test file.
 
@@ -146,12 +146,9 @@ cd bench
 **What you should see.** The target builds in two passes. The first writes the software headers,
 then runs `make` on the firmware of `bench/firmware`; the second pass runs Vivado. The bitstream
 is `build/alibaba_xcku3p/gateware/alibaba_xcku3p.bit`, and `csr.csv` lists the registers that
-the bench PC tools use.
-
-With current LiteX, the firmware does not link: `make` ends with
-`undefined reference to '__init_array_start'`. The target does not check the status of `make`,
-so it builds the bitstream anyway, without `firmware/firmware.bin`, which step 5 needs
-([Known issues](#intro-issues)).
+the bench PC tools use. `make` compiles the firmware of `bench/firmware` into
+`firmware/firmware.bin`, which step 5 uploads; if it fails, the target stops before the second
+pass.
 
 **If not.** A firmware compilation error comes from the RISC-V toolchain or from register names
 missing in the generated headers. Vivado reports its own errors in the logs of
@@ -180,9 +177,7 @@ litex_cli --csr-csv csr.csv --regs --filter link_status
 ```
 
 The harness decodes the same register from the bench PC (`hw_link_decode` in
-`bench/hw_common.sh`), under the name `pcie_phy_phy_link_status` of an earlier LitePCIe; with
-current LitePCIe the function stops with an error ([Known issues](#intro-issues)). The lines
-below are its output in a recorded run of the repository,
+`bench/hw_common.sh`). The lines below are its output in a recorded run of the repository,
 `bench/results/gen3_256b_2026-06-01/throughput_8kib_default.log`.
 
 ```console
@@ -209,9 +204,7 @@ gives its console, with the `litenvme>` prompt.
 litex_term crossover --csr-csv csr.csv --kernel firmware/firmware.bin
 ```
 
-This step needs `firmware/firmware.bin`, which the build of step 3 does not produce with current
-LiteX ([Known issues](#intro-issues)). The captures below come from a recorded run of the
-repository.
+The captures below come from a recorded run of the repository.
 
 At the prompt, `nvme_identify` assigns BAR0, sets the MEM and BME bits of the SSD, and sends the
 Identify Controller command. It prints the vendor ID, the model, the firmware revision, the

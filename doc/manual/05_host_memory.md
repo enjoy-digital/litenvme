@@ -196,8 +196,7 @@ to read their completions and to fill or check data buffers.
 | `rd_tlp_count` | MemWr requests accepted |
 | `rd_gap_max` | Longest run of cycles without a MemWr beat offered |
 
-The write enable is a plain register, not a pulse, although its description in the gateware
-says so ([Known issues](#intro-issues)). The port takes a new write each time it sees it at 1
+The write enable is a level, not a pulse. The port takes a new write each time it sees it at 1
 and has finished the previous one, so software writes 1 then 0.
 
 The read data follows the address through the debug memory port with a short delay, so the

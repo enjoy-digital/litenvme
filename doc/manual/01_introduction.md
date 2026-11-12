@@ -63,7 +63,7 @@ LiteX library and the generated Verilog core.
 | Bring-up | Firmware on a soft CPU (`bench/firmware`), or the RTL init sequencer for a CPU-less design |
 | Integration | `LiteNVMe` class for LiteX SoCs; standalone Verilog core from `litenvme_gen` (UltraScale+ PHY) |
 | Bench | Alibaba XCKU3P target, firmware console, Etherbone host tools, harness scripts, LiteScope probes |
-| Verification | Python models and 46 pytest cases from the accessors to the engine, the front-ends, the init sequencer and the generator configuration |
+| Verification | Python models and 50 pytest cases from the accessors to the engine, the front-ends, the init sequencer and the generator configuration |
 
 ## Status {#intro-status}
 
@@ -111,22 +111,14 @@ the manual follows the code.
 
 | Issue | Effect |
 |----------------------|----------------------------------------------------------------|
-| Firmware linker scripts | `bench/firmware/linker.ld` and `linker_rom.ld` lack the `.preinit_array` and `.init_array` sections that the startup code of current LiteX walks: the firmware does not link (`undefined reference to '__init_array_start'`). The bench target ignores the status of `make`, so it still builds a bitstream, without `firmware/firmware.bin`. See [Getting started](#gs-build). |
-| PHY register names | Current LitePCIe names the registers of the PHY `pcie_phy_*` (`pcie_phy_link_status`). The firmware (`status` prints `pcie_link: (no CSR)`), `hw_link_decode` of `bench/hw_common.sh` and the bench PC scripts use `pcie_phy_phy_*`, and the scripts stop with an error. The recorded logs predate the rename. See [Getting started](#gs-load). |
-| `--no-compile` of the bench target | `--build --no-compile` still runs Vivado: the bench SoC cannot be elaborated without vendor tools from the command line. See [Bench SoC](#ex-soc). |
-| Duplicate register banks | `add_csrs()` registers the blocks of a `LiteNVMe` again, next to the bank that LiteX collects from the attribute; the generator calls it, so a generated core has each register twice. See [Registers](#arch-registers). |
-| Generator firmware modes | The firmware uses the register names of the bench SoC. With `firmware: auto` or `minimal` its compilation fails and the generator stops; with `firmware: none` no firmware initializes the generated core. See [Bring-up modes](#integ-modes). |
-| Root window of the init sequencer | The sequencer writes the window value at cfg_mgmt dword `0x20` (byte `0x80`, inside the PCI Express capability of the root port) instead of dword `0x08` (Memory Base and Limit, byte `0x20`): the memory window of the root port is not programmed. No hardware log shows the effect. See [Init sequencer](#boot-rtl). |
+| Generator firmware modes | The firmware uses the register names of the bench SoC. With `firmware: auto` or `minimal` its compilation fails and the generator stops; with `firmware: none` no firmware initializes the generated core. See [Bring-up modes](#integ-modes). Fix pending (PR #8). |
+| Root window of the init sequencer | The sequencer writes the window value at cfg_mgmt dword `0x20` (byte `0x80`, inside the PCI Express capability of the root port) instead of dword `0x08` (Memory Base and Limit, byte `0x20`): the memory window of the root port is not programmed. No hardware log shows the effect. See [Init sequencer](#boot-rtl). Fix pending (PR #9). |
 | Read completions not split | The window answers a MemRd with one CplD of `len` dwords, whatever the MPS of the link. Neither bring-up path programs the MRRS of the SSD (512 bytes at reset), so with the init sequencer (MPS 128 bytes) a read above 128 bytes gets an oversized completion. Confirmed in simulation; the bench SSD runs at MPS 512 with the firmware. See [The responder](#mem-responder). |
-| Firmware CQE read order | The firmware reads CQE dwords 0 to 2 before dword 3, which holds the phase bit, so SQ head and SQ ID may be read before the SSD wrote them (`SQ ID : 0` in `nvme_init.log`). See [Firmware](#ex-firmware). |
-| `nvme_write` pattern | `nvme_write` fills 4 KiB of its buffer with `0xa5a5a5a5` and ignores the pattern of `nvme_fill`; `nvme_verify` is not affected. See [Data integrity](#ex-integrity). |
+| Firmware CQE read order | The firmware reads CQE dwords 0 to 2 before dword 3, which holds the phase bit, so SQ head and SQ ID may be read before the SSD wrote them (`SQ ID : 0` in `nvme_init.log`). See [Firmware](#ex-firmware). Fix pending (PR #10). |
 | `qd_sweep.py` | Sends the `nvme_bench` command, which the firmware no longer has. See [Bench PC tools](#ex-host). |
-| Generator data width | `data_width: 512` passes the checks of the generator, then the window refuses it at elaboration. See [Build options](#opt-gen). |
-| False path with `clk_external` | The generator declares no false path between an external `sys` clock and the PCIe user clock, which the root configuration accessor relies on. See [Ports](#integ-ports). |
+| False path with `clk_external` | The generator declares no false path between an external `sys` clock and the PCIe user clock, which the root configuration accessor relies on. See [Ports](#integ-ports). Fix pending (PR #16). |
 | PERST# timer of the generator | The timer runs in `sys`, whose reset is the user reset of the hard IP, and it drives the reset of the hard IP: if the hard IP holds its user reset while its own reset is asserted, PERST# is never released. Seen in a model of this loop, not on hardware. See [PERST#](#boot-perst). |
 | Lost completion | A timeout frees the accessor but not the TLP controller of the crossbar: the later reads of the three master ports wait behind the lost one and time out too, until the core is reset. See [The shared accessor](#acc-shared). |
-| `csr_we` description | The window debug register `csr_we` is described as a pulse in the gateware; it is a level, and the write repeats while it stays at 1. See [Register debug port](#mem-debug). |
-| Repository notes | `bench/NOTES.md` and `bench/firmware/README.md` describe commands that the firmware no longer has; `README.md` and the notes of `doc/` quote throughputs that no log records. This manual uses the code and the logs only. See [Performance](#performance). |
 
 ## What it is not {#intro-limits}
 

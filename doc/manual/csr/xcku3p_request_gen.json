@@ -182,7 +182,7 @@
    },
    {
     "access": "rw",
-    "description": "HostMem write strobe (pulse).",
+    "description": "HostMem write request (level: write 1 then 0).",
     "fields": [],
     "name": "csr_csr_we",
     "offset": 108,

@@ -37,12 +37,6 @@ sub-block, keeping the offsets from the base of `nvme` (full names such as
 (`nvme_cfg`, `nvme_mmio`, `nvme_io_engine`, `nvme_hostmem`, `nvme_request_gen`) are
 labels of these groups, not banks of `csr.csv`: add the offsets to the base of `nvme`.
 
-On the default branch, `add_csrs()` also registers the accessors, the I/O engine, the
-host-memory debug registers and the request generator again as separate banks
-(`nvme_cfg`, `nvme_mmio`, `nvme_engine`, `nvme_hostmem`, `nvme_gen`), each from offset
-0, with the same registers under longer names (such as `nvme_cfg_cfg_cfg_ctrl`;
-[Known issues](#intro-issues)). This appendix documents the `nvme` bank only.
-
 Software sets `cfg_bdf` and, for a write, `cfg_wdata`, then writes `start` and polls
 `cfg_stat` until `done` or `err` is set ([Configuration and register access](#pcie-access)).
 The register reached is at byte `(ext << 6 | reg) * 4`, within the first 2 KiB of the
@@ -164,9 +158,9 @@ Registers of bank `nvme`, offsets from its base (`nvme_hostmem_csr_*`).
 
 Present with `with_hostmem_csr`, which the generator turns off when the block streamer
 is the sole front-end. `csr_adr` is a dword index from the base of the window; the
-read path uses a third port of the window memory. `csr_we` is a level, not the pulse
-its description says: the firmware writes 1 then 0, and the write repeats while it
-stays at 1 (one dword written with byte enables each time).
+read path uses a third port of the window memory. `csr_we` is a level: the firmware
+writes 1 then 0, and the write repeats while it stays at 1 (one dword written with
+byte enables each time).
 
 The counters observe the PCIe side
 of the window. `rd_gap_max` counts from reset, so it is meaningful only after the
@@ -178,7 +172,7 @@ Bank `nvme_hostmem`.
 |----------------------------|-------------|--------|---------|----------------------------------------|
 | `csr_csr_adr` | `0x0064` | 32 | rw | HostMem dword address (index). Reset `0x0`. |
 | `csr_csr_wdata` | `0x0068` | 32 | rw | HostMem write data (DWORD). Reset `0x0`. |
-| `csr_csr_we` | `0x006c` | 1 | rw | HostMem write strobe (pulse). Reset `0x0`. |
+| `csr_csr_we` | `0x006c` | 1 | rw | HostMem write request (level: write 1 then 0). Reset `0x0`. |
 | `csr_csr_rdata` | `0x0070` | 32 | ro | HostMem read data (DWORD). |
 | `csr_dma_wr_` `count` | `0x0074` | 32 | ro | Count of DMA beats stored. |
 | `csr_dma_rd_` `count` | `0x0078` | 32 | ro | Count of DMA beats served. |
