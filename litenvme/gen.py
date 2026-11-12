@@ -435,9 +435,10 @@ def validate_config(core_config):
     if init_mode == "rtl" and firmware != "none":
         raise ValueError("init_mode='rtl' does not use firmware; set firmware='none'.")
 
+    # The host-memory responder supports 64/128/256-bit datapaths (hostmem.py).
     data_width = core_config.get("data_width", 256)
-    if data_width not in (64, 128, 256, 512):
-        raise ValueError("data_width must be one of: 64, 128, 256, 512.")
+    if data_width not in (64, 128, 256):
+        raise ValueError("data_width must be one of: 64, 128, 256.")
 
     if core_config.get("with_request_gen", False) and core_config.get("with_block_streamer", False):
         raise ValueError("The standalone generator exposes one front-end; enable request_gen or block_streamer, not both.")
