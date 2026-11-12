@@ -23,15 +23,25 @@ ADM_CQ_DB = BAR0 + 0x1004
 
 
 class _DUT(Module):
-    def __init__(self):
+    def __init__(self, io_q_entries=64, prp_list_base=None):
         self.submodules.seq = LiteNVMeInitSequencer(
-            bar0_base=BAR0, hostmem_base=HOSTMEM, admin_q_entries=2, io_q_entries=64,
-            poll_timeout=4096)
+            bar0_base=BAR0, hostmem_base=HOSTMEM, admin_q_entries=2, io_q_entries=io_q_entries,
+            prp_list_base=prp_list_base, poll_timeout=4096)
 
 
 class TestInitSequencer(unittest.TestCase):
     def test_bringup(self):
-        dut = _DUT()
+        result = self.run_bringup()
+        # Legacy PRP-list placement: after the per-slot buffers.
+        self.assertEqual(result["eng_prp_list"], HOSTMEM + 0x10000 + 64*0x1000, "wrong PRP list")
+
+    def test_bringup_prp_list_base(self):
+        # Standalone example layout: 8-entry ring, PRP list after the queues (below staging).
+        result = self.run_bringup(io_q_entries=8, prp_list_base=HOSTMEM + 0x7000)
+        self.assertEqual(result["eng_prp_list"], HOSTMEM + 0x7000, "wrong PRP list")
+
+    def run_bringup(self, **kwargs):
+        dut = _DUT(**kwargs)
         s = dut.seq
         mem = {}                 # host memory (dword-addressed).
         sq_doorbells = []        # admin SQ doorbell values rung.
@@ -151,6 +161,7 @@ class TestInitSequencer(unittest.TestCase):
             result["eng_enable"]  = (yield s.eng_enable)
             result["eng_sq_base"] = (yield s.eng_sq_base)
             result["eng_cq_base"] = (yield s.eng_cq_base)
+            result["eng_prp_list"] = (yield s.eng_prp_list)
 
         run_simulation(dut, [main(), cfg_model(), mmio_model(), root_model(), mem_model(), ssd_model()])
 
@@ -165,6 +176,7 @@ class TestInitSequencer(unittest.TestCase):
         # The 3 admin SQEs, in order, are Set Features (0x09), Create IO CQ (0x05), Create IO SQ
         # (0x01). Captured at submission time (the 2-entry admin ring overwrites slot 0).
         self.assertEqual(served_ops, [0x09, 0x05, 0x01], f"wrong admin opcodes: {[hex(o) for o in served_ops]}")
+        return result
 
 
 if __name__ == "__main__":
