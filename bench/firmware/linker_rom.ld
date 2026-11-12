@@ -30,6 +30,26 @@ SECTIONS
 		_erodata = .;
 	} > rom
 
+	.preinit_array :
+	{
+		. = ALIGN(8);
+		PROVIDE_HIDDEN (__preinit_array_start = .);
+		KEEP(*(SORT(.preinit_array.*)))
+		KEEP(*(.preinit_array))
+		PROVIDE_HIDDEN (__preinit_array_end = .);
+	} > rom
+
+	.init_array :
+	{
+		. = ALIGN(8);
+		PROVIDE_HIDDEN (__init_array_start = .);
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+		KEEP(*(SORT(.ctors.*)))
+		KEEP(*(.ctors))
+		PROVIDE_HIDDEN (__init_array_end = .);
+	} > rom
+
 	.data :
 	{
 		. = ALIGN(8);
