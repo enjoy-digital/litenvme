@@ -1101,11 +1101,13 @@ static int nvme_admin_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	timeout_start = bench_timer_get();
 	for (uint32_t loops = 0;; loops++) {
 		bench_admin_poll_loops++;
-		d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
-		d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
-		d2 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 8);
+		/* Read dword 3 (phase) first and the other dwords only once the phase flips: reading
+		 * them before could sample them before the SSD wrote the entry (torn CQE). */
 		d3 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 12);
 		if (((d3 >> 16) & 0x1u) == admin_cq_phase) {
+			d0 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 0);
+			d1 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 4);
+			d2 = hostmem_rd32(ACQ_ADDR + admin_cq_head * 16 + 8);
 			got_cqe = 1;
 			break;
 		}
@@ -1164,11 +1166,13 @@ static int nvme_io_submit(uint64_t cap, const uint32_t *cmd, uint32_t *cqe)
 	timeout_start = bench_timer_get();
 	for (uint32_t loops = 0;; loops++) {
 		bench_io_poll_loops++;
-		d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
-		d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
-		d2 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 8);
+		/* Read dword 3 (phase) first and the other dwords only once the phase flips: reading
+		 * them before could sample them before the SSD wrote the entry (torn CQE). */
 		d3 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 12);
 		if (((d3 >> 16) & 0x1u) == io_cq_phase) {
+			d0 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 0);
+			d1 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 4);
+			d2 = hostmem_rd32(IO_CQ_ADDR + io_cq_head * 16 + 8);
 			got_cqe = 1;
 			break;
 		}
