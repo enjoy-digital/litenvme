@@ -232,7 +232,7 @@ class LiteNVMeCore(SoCCore):
                 hostmem_base    = hostmem_base,
                 io_q_entries    = core_config.get("qsize", 64),
                 io_qid          = core_config.get("qid", 1),
-                mem_window_dw   = core_config.get("root_mem_window_dw", 0x20),
+                mem_window_dw   = core_config.get("root_mem_window_dw", 0x08),  # DWORD addr (byte 0x20).
                 mem_window_val  = core_config.get("root_mem_window_val", 0xe000_e000),
                 prp_list_base   = hostmem_base + prp_list_offset(core_config),
                 with_csr        = False,

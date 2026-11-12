@@ -37,8 +37,10 @@ from litenvme.io_engine import LiteNVMeMemPort
 class LiteNVMeInitSequencer(LiteXModule):
     def __init__(self, bar0_base=0xe000_0000, hostmem_base=0x1000_0000,
                  admin_q_entries=2, io_q_entries=64, io_qid=1,
-                 mem_window_dw=0x20, mem_window_val=0xe000_e000, mem_adr_width=32,
+                 mem_window_dw=0x08, mem_window_val=0xe000_e000, mem_adr_width=32,
                  poll_timeout=2**22, prp_list_base=None, with_csr=False):
+        # mem_window_dw: DWORD address (cfg_mgmt) of the root port's Memory Base/Limit register
+        # (type-1 header byte 0x20 = DWORD 0x08), written with mem_window_val.
         # Host-memory layout (must match the engine + the hostmem responder window).
         # prp_list_base: absolute address of the engine's PRP-list region (io_q_entries 4 KiB
         # pages); None keeps the legacy placement after the per-slot buffers.
