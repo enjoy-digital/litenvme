@@ -9,6 +9,7 @@
 # ./alibaba_xcku3p.py --with-cpu --cpu-boot=bios --csr-csv=csr.csv --with-etherbone  --build --load
 
 import os
+import subprocess
 
 from migen import *
 
@@ -511,12 +512,10 @@ def main():
         builder = Builder(soc, **parser.builder_argdict)
         if args.build:
             toolchain_kwargs = dict(parser.toolchain_argdict)
+            # Without force_run, the Builder runs the toolchain unless --no-compile or
+            # --no-compile-gateware is given; with force_run, both still disable it.
             if force_run is not None:
-                toolchain_kwargs["run"] = force_run
-            elif getattr(args, "no_compile_gateware", False):
-                toolchain_kwargs["run"] = False
-            else:
-                toolchain_kwargs.setdefault("run", True)
+                toolchain_kwargs["run"] = force_run and builder.compile_gateware
             builder.build(**toolchain_kwargs)
         return soc, builder
 
@@ -528,7 +527,7 @@ def main():
         # make runs with `-C firmware`, so a relative output_dir would resolve under firmware/.
         fw_dir = os.path.join(os.path.dirname(__file__), "firmware")
         build_dir = os.path.abspath(builder.output_dir)
-        os.system(f"make -C {fw_dir} BUILD_DIR={build_dir} BOOT={args.cpu_boot} clean all")
+        subprocess.check_call(["make", "-C", fw_dir, f"BUILD_DIR={build_dir}", f"BOOT={args.cpu_boot}", "clean", "all"])
 
         # Second build:
         # - ROM boot: integrate firmware.bin into ROM init.
