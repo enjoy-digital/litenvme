@@ -131,7 +131,7 @@ All block ports run in the `clk` (sys) domain.
 
 > **CPU-less variant** (`init_mode: "rtl"`): the core omits the bring-up CPU by default and wires
 > `LiteNVMeInitSequencer` directly to the CFG/MMIO/rootcfg accessors and I/O engine. This path is
-> hardware-validated on the reference SSD but currently assumes the common BAR/DSTRD layout; use
+> reported working on the reference SSD (no log recorded in `bench/results/` yet) but currently assumes the common BAR/DSTRD layout; use
 > firmware mode for the broadest SSD compatibility.
 
 ---
@@ -216,13 +216,15 @@ The standalone core is a plain Verilog module — instantiate it like any IP:
 
 ### Throughput
 
-Measured on an Alibaba KU3P (XCKU3P) with a Crucial CT500P310SSD8, Gen3 x4, 256-bit @ 125 MHz:
+Measured on an Alibaba KU3P (XCKU3P) with a Crucial CT500P310SSD8, Gen3 x4, 256-bit @ 125 MHz
+(board-printed logs in `bench/results/gen3_256b_2026-06-01/`: `throughput_8kib_default.log`,
+`throughput.log`, `integrity.log`):
 
 | Workload | Result |
 |----------|--------|
 | 8 KiB reads (QD32)  | **~2.69 GB/s**, errors = 0 |
-| 8 KiB writes (QD32) | **~2.74 GB/s**, errors = 0 |
-| 4 KiB reads         | ~1.9–2.0 GB/s |
+| 8 KiB writes (QD32) | **1.56 to 2.62 GB/s**, errors = 0 (varies run to run, SSD side) |
+| 4 KiB reads (QD32)  | 1.17 to 2.20 GB/s |
 | Data integrity      | write → read-back bit-exact (BIST + isolated scrub) |
 
 Design notes that bound throughput (see `doc/NVME_PERFORMANCE.md` for the full study):
@@ -301,8 +303,8 @@ controlled, CPU-less deployment** where minimum area matters.
 For reference, the **bench test SoC** (`--with-etherbone --with-block-streamer`, which adds the
 Ethernet/Etherbone bridge + request-generator/BIST harness + the 512 KiB window with CSR debug)
 is larger end-to-end (post-place: 14,667 LUT / 18,733 FF / 325 BRAM / 0 URAM / 2 DSP, timing met
-@125 MHz; HW-revalidated: Gen3 x4, ~2.69 GB/s reads errors=0, block-streamer correctness PASS,
-nvme_verify OK).
+@125 MHz; HW-revalidated: Gen3 x4, ~2.69 GB/s reads errors=0, nvme_verify OK; block-streamer correctness
+reported PASS, no log recorded in `bench/results/` yet).
 
 For how these numbers and the throughput compare to other publicly available NVMe cores
 (IntelliProp, Design Gateway, iWave, OpenExpress) and whether LiteNVMe is near-optimal, see
