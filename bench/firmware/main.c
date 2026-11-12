@@ -1745,7 +1745,7 @@ static void nvme_write_cmd(char *str)
 	if (nvme_io_setup(cap))
 		return;
 
-	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, 0xA5A5A5A5);
+	hostmem_fill(IO_WR_BUF_ADDR, 0x1000, nvme_fill_pattern);
 	if (nvme_debug) {
 		uint32_t w0 = hostmem_rd32(IO_WR_BUF_ADDR + 0);
 		uint32_t w1 = hostmem_rd32(IO_WR_BUF_ADDR + 4);
