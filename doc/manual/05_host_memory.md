@@ -147,34 +147,37 @@ layout of the figure below for the queues, at fixed offsets from the window base
 
 ![Layout of the host-memory window used by the firmware and the init sequencer. Read the offsets
 on the left: the queues sit in the first 20 KiB, the data region starts at `+0x10000`, and the
-PRP-list region follows the data region, one 4 KiB page per I/O queue entry.](mem_map.svg)
+PRP-list region, one 4 KiB page per I/O queue entry, follows the data region unless the design
+places it elsewhere.](mem_map.svg)
 
-The table below gives the variable regions of the three reference configurations. The data
+The table below gives the variable regions of the two reference configurations. The data
 region holds the per-slot buffers of the firmware benchmarks or the staging region of the block
 streamer.
 
 | Configuration | Window | Entries | Staging region | PRP-list region |
 |---------------------------|---------|----------|--------------------------|--------------------------|
 | Bench SoC, either bring-up | 512 KiB | 64 | `+0x40000` to `+0x80000` | `+0x50000` to `+0x90000` |
-| Generator example, sequencer | 256 KiB | 8 | `+0x10000` to `+0x40000` | `+0x18000` to `+0x20000` |
-| Generator example, firmware | 256 KiB | 64 | `+0x10000` to `+0x40000` | `+0x50000` to `+0x90000` |
+| Generator example, either bring-up | 256 KiB | 8 | `+0x10000` to `+0x40000` | `+0x7000` to `+0xf000` |
 
 In the bench SoC, the firmware also places 64 slot buffers of 4 KiB from `+0x10000` to `+0x50000`
-for its benchmarks. The PRP-list region starts at `+0x10000` plus one page per queue entry, as the
-firmware and the init sequencer compute it, and the I/O engine only uses it for transfers of more
-than two pages.
+for its benchmarks. By default, the PRP-list region starts at `+0x10000` plus one page per queue
+entry, as the firmware and the init sequencer compute it; the I/O engine only uses it for
+transfers of more than two pages.
 
-In the last row, the firmware creates queues of 64 entries while the I/O engine of the core is
-built with 8; [Bring-up](#bringup) comes back to this.
+The generator places the region itself and gives its address, with the base of the window and the
+queue size, to the init sequencer or to the firmware. The example sets it with `prp_list_offset`,
+between the queues and the staging region. Without this key, the generator takes the first place
+that fits among the default one, `+0x7000` and the end of the staging region. It refuses a
+configuration whose PRP-list region leaves the window, starts below `+0x7000` or overlaps the
+staging region ([Build options](#opt-gen-core)).
 
-These values overlap in two ways. When the PRP-list region lies inside the staging region, a
-block streamer transfer long enough to reach the list page of its slot (32 KiB in the generator
-example, 64 KiB in the bench SoC) has that page written over its data.
+The values of the bench SoC overlap in two ways. Its PRP-list region lies inside the staging
+region: a block streamer transfer long enough to reach the list page of its slot, 64 KiB, has
+that page written over its data.
 
-When the PRP-list region
-ends past the window, some list pages are outside it: slots 48 to 63 in the bench SoC, all of
-them with the firmware on the generator example. The firmware benchmarks stay clear of both by
-limiting transfers to two pages; [The I/O engine](#io-engine) gives the PRP rules.
+The region also ends past the window, so the list pages of slots 48 to 63 are outside it. The
+firmware benchmarks stay clear of both by limiting transfers to two pages;
+[The I/O engine](#io-engine) gives the PRP rules.
 
 ## Register debug port {#mem-debug}
 

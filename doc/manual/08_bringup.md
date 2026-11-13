@@ -86,11 +86,15 @@ The firmware treats a CSTS.RDY that never rises as a warning and goes on to the 
 Identify Controller is a separate console command, `nvme_identify`, not part of `nvme_setup`.
 [Examples](#examples) lists the other console commands.
 
-The firmware layout puts the I/O queues at fixed offsets and creates them with 64 entries; the
-engine of the SoC must be built with the same queue size.
+The firmware layout puts the I/O queues at fixed offsets. On the bench SoC it creates them with
+64 entries, in a window at `0x10000000`, and the engine of the SoC must be built with the same
+queue size. A generated core gives the base of the window, the queue size and the address of the
+PRP-list region to the firmware, as the constants `LITENVME_HOSTMEM_BASE`,
+`LITENVME_IO_Q_ENTRIES` and `LITENVME_PRP_LIST_BASE` of `generated/soc.h`.
 
-The firmware uses the register names of the bench SoC, which differ from those of a generated
-core, so it does not initialize a generated core ([Known issues](#intro-issues)).
+The firmware is written with the register names of the bench SoC. When they are absent, it maps
+them to the names of the `nvme` bank of a generated core (`nvme_cfg_*`, `nvme_mmio_*`,
+`nvme_io_engine_*`, `nvme_hostmem_*`, `nvme_request_gen_*`), so the same source initializes both.
 [Integration](#integration) gives the details.
 
 The firmware has two build options in `bench/firmware/Makefile`. `BOOT=rom` links it to run from
@@ -116,9 +120,10 @@ one step, and the dotted lines show the steps that can fail, with the failure co
 | `admin_q_entries` | 2 | Entries of the admin SQ and CQ |
 | `io_q_entries` | 64 | Entries of the I/O queues; the generator passes `qsize` |
 | `io_qid` | 1 | I/O queue identifier |
-| `mem_window_dw` | `0x20` | Dword address, on the cfg_mgmt port, of the root port register written with the window value; Memory Base and Limit is dword `0x08` ([Known issues](#intro-issues)) |
+| `mem_window_dw` | `0x08` | Dword address, on the cfg_mgmt port, of the Memory Base and Limit register of the root port (byte `0x20`) |
 | `mem_window_val` | `0xe000e000` | Value of the memory window |
 | `poll_timeout` | 2^22 | Polls before a timeout |
+| `prp_list_base` | `None` | Bus address of the PRP-list region; `None` places it at `+0x10000` plus one page per I/O queue entry |
 
 The sequencer relies on the reference set-up and checks none of it:
 
@@ -134,9 +139,8 @@ bytes, which the window does not support for reads above 128 bytes (see
 [The responder](#mem-responder)).
 
 It writes the memory window value at the cfg_mgmt dword address `mem_window_dw`. The default,
-`0x20`, is byte offset `0x80` of the root port, while the Memory Base and Limit register that the
-firmware writes is at byte `0x20`, dword `0x08`: this is a defect of the default, listed in
-[Known issues](#intro-issues).
+`0x08`, is the Memory Base and Limit register at byte `0x20` of the root port, the register that
+the firmware writes too.
 
 ### Timeouts and failure codes {#boot-fail}
 

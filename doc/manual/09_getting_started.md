@@ -35,7 +35,7 @@ table below shows.
 |------------------------------------|------------------------------------------------------------|
 | Unit tests | Python 3, pytest |
 | Standalone core, `init_mode: rtl` | LiteX, LitePCIe, PyYAML |
-| Standalone core with a CPU | The above, plus the RISC-V GCC toolchain for the BIOS |
+| Standalone core with a CPU | The above, plus the RISC-V GCC toolchain for the BIOS and the firmware |
 | Bench SoC | LiteX-Boards, LiteEth, LiteScope, RISC-V GCC, Vivado |
 | Loading the board | openFPGALoader and a Digilent HS2 JTAG cable |
 | Bench PC tools | `litex_server`, `litex_term`, a 1000BASE-X link to the SFP cage |
@@ -56,14 +56,16 @@ python3 -m pytest -q test/test_cfg_accessor.py test/test_mem_accessor.py \
 this manual describes it.
 
 ```console
-.....................                                                    [100%]
-21 passed in 4.11s
+.............................                                            [100%]
+29 passed in 16.11s
 ```
 
-`python3 -m pytest -q test` runs the whole suite of 50 tests in one process. Its run for this
-manual ended with `50 passed in 530.21s (0:08:50)`, most of it in the I/O engine and block
-streamer simulations; [Simulation and
-verification](#simulation) describes each test file.
+One case of `test_gen_config.py` builds the firmware of the example core; it is skipped, and
+reported as such, without a RISC-V toolchain.
+
+`python3 -m pytest -q test` runs the whole suite of 61 tests in one process, in 9 to 17 minutes
+on the machines used for this manual, most of it in the I/O engine and block streamer
+simulations; [Simulation and verification](#simulation) describes each test file.
 
 **If not.** An import error names the missing package: `litex` or `litepcie` for the LiteX
 installation, `yaml` for PyYAML. The suite turns off the assertion rewriting of pytest in
@@ -122,7 +124,8 @@ reset, two status pins and the block interface. The hard IP is a black box named
 
 **If not.** `Unknown LiteNVMe config key` or `init_mode='rtl' does not use firmware` come from
 the checks of the generator on the YAML file. The example configuration itself, in firmware mode,
-also compiles the LiteX BIOS and fails without the RISC-V GCC toolchain.
+also compiles the LiteX software and the firmware of `bench/firmware`, and fails without the
+RISC-V GCC toolchain.
 
 ## Step 3: build the bench SoC {#gs-build}
 

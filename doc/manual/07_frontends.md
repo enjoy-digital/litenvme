@@ -74,7 +74,7 @@ word.
   `last` on `wr_sink`.
 - The staging region must start on a 4 KiB boundary, for the PRP rules of the engine. A transfer
   of more than 8 KiB uses the PRP-list page of its slot, which must not lie inside the staging
-  region; see [Window layouts](#mem-layout).
+  region; the generator checks it, the bench SoC does not. See [Window layouts](#mem-layout).
 
 ### Registers {#fe-streamer-registers}
 

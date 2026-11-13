@@ -83,20 +83,20 @@ The host-memory window accepts 64, 128 and 256 bits only; the generator rejects 
 | `cpu` | `vexriscv`, `None` with `rtl` | Soft CPU; `firmware` needs one |
 | `cpu_variant` | `minimal` | Variant of the CPU |
 | `uart` | `serial` with a CPU, else `stub` | UART of the CPU |
-| `firmware` | `none` | `none`: LiteX BIOS; `auto` or `minimal`: firmware in ROM; `rtl` needs `none` |
+| `firmware` | `none` | `none`: LiteX BIOS; `auto`: firmware with its console in ROM; `minimal`: firmware in ROM, bring-up at boot; `rtl` needs `none` |
 | `integrated_rom_size` | `0x20000`, `0x10000` with `none` | ROM of the CPU |
 | `integrated_main_ram_size` | `0x10000` | RAM of the BIOS (`firmware` `none` only) |
 | `bar0_base` | `0xe0000000` | Bus address the init sequencer gives BAR0 (`rtl`) |
-| `root_mem_window_dw` | `0x20` | Dword address, on the cfg_mgmt port, of the root port register that receives the memory window (`rtl`); Memory Base and Limit is dword `0x08` ([Known issues](#intro-issues)) |
+| `root_mem_window_dw` | `0x08` | Dword address, on the cfg_mgmt port, of the root port register that receives the memory window (`rtl`): Memory Base and Limit, byte `0x20` |
 | `root_mem_window_val` | `0xe000e000` | Value written to it (`rtl`) |
 
 With `firmware` set to `auto` or `minimal`, the generator builds the SoC once for the software
 headers, runs `make -C bench/firmware BOOT=rom` (with `MINIMAL=1` for `minimal`), then builds again
-with the firmware in ROM; this needs a RISC-V toolchain.
+with the firmware in ROM; this needs a RISC-V toolchain. The example uses `minimal`
+([Bring-up modes](#integ-modes)).
 
-The firmware uses the register names of the bench SoC, which the generated core does not have: its
-compilation fails and the generator stops, so these two modes cannot be generated ([Known
-issues](#intro-issues)).
+`firmware` mode needs `qid` at 1 and the debug registers of the window (`with_hostmem_csr`); the
+generator refuses the configuration otherwise.
 
 ### Core {#opt-gen-core}
 
@@ -105,7 +105,8 @@ issues](#intro-issues)).
 | `hostmem_base` | `0x10000000` | Bus address of the host-memory window |
 | `hostmem_size` | `0x80000` | Size of the window in bytes |
 | `qid` | `1` | Identifier of the I/O queue |
-| `qsize` | `64` | Entries of the I/O rings, also used by the init sequencer |
+| `qsize` | `64` | Entries of the I/O rings, 2 to 64, also given to the init sequencer and to the firmware |
+| `prp_list_offset` | see below | Offset of the PRP-list region in the window, `qsize` pages of 4 KiB |
 | `qd` | `32` | Commands in flight at most |
 | `requester_id` | `0x0000` | Requester ID of the configuration accessor |
 | `with_request_gen` | `True`, `False` with the block streamer | Request generator, driven by registers |
@@ -116,8 +117,14 @@ issues](#intro-issues)).
 
 `with_request_gen` and `with_block_streamer` exclude each other. With the block streamer, its
 command, status and data streams become ports of the core, and its start input is gated by
-`status_init_done`. `with_hostmem_csr` defaults to on in `firmware` mode without the block
-streamer, off otherwise.
+`status_init_done`. `with_hostmem_csr` defaults to on in `firmware` mode, which needs it, and to
+off in `rtl` mode.
+
+The PRP-list region must lie inside the window, at `0x7000` or above (the queues and the buffers
+of the firmware are below) and clear of the staging region of the block streamer. Without
+`prp_list_offset`, the generator takes the first place that fits among `0x10000` plus `qsize`
+pages, `0x7000` and the end of the staging region. It refuses a configuration with no such place
+or with a `prp_list_offset` that breaks these rules ([Window layouts](#mem-layout)).
 
 ## Bench target {#opt-bench}
 

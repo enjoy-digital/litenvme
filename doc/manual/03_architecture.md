@@ -111,8 +111,7 @@ On the reference design, an Alibaba XCKU3P running PCIe Gen3 x4, the datapath is
 
 The bench SoC declares the `sys` and `pcie` clocks as a false path. A standalone core in
 internal-clock mode runs `sys` on the PCIe user clock and needs none; with `clk_external`, the
-integrator must add it, since the root configuration accessor relies on it
-([Known issues](#intro-issues)).
+generator declares the same false path, since the root configuration accessor relies on it.
 
 ## The four traffic classes {#arch-traffic}
 

@@ -169,8 +169,9 @@ The host starts with an expected phase of 1 on zeroed memory and flips it each t
 A host that reads an entry dword by dword must read the phase dword first, then the others: dwords
 read before it may hold the entry of the previous pass.
 
-In LiteNVMe, the I/O engine reads the phase dword of an entry first and the other fields after
-it, and enforces queue depth at most queue size minus one ([The I/O engine](#io-engine)).
+In LiteNVMe, the I/O engine and the firmware read the phase dword of an entry first and the other
+fields after it. The I/O engine enforces queue depth at most queue size minus one
+([The I/O engine](#io-engine)).
 
 ## The submission queue entry {#primer-sqe}
 
