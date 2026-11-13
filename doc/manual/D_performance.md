@@ -147,8 +147,10 @@ are not in the repository. They are reported here as recorded, for the XCKU3P
 | Standalone core, example YAML | 11,577 | 14,408 | 133 | 0 | Out-of-context synthesis |
 | Bench SoC, Etherbone and block streamer | 14,667 | 18,733 | 325 | 2 | Post-place |
 
-The standalone figure is the example of `examples/alibaba_xcku3p.yml`: firmware mode with the
-BIOS, block streamer, 256 KiB window. The document breaks it down as 2,960 LUT, 6,303 FF and
+The standalone figure was recorded on `examples/alibaba_xcku3p.yml` when it booted the BIOS
+(`firmware: none`) without the debug registers of the window: firmware mode, block streamer,
+256 KiB window. The example now uses `firmware: minimal` and keeps the debug registers; no figure
+is recorded for it. The document breaks it down as 2,960 LUT, 6,303 FF and
 22 block RAM tiles for the hard IP wrapper, and 1,695 LUT and 749 FF for the CPU.
 
 It also records that the init sequencer instead of the CPU saves 2,560 LUT, 3,116 FF and 25 block

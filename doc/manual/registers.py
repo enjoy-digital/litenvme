@@ -90,8 +90,8 @@ NOTES = {
     "nvme_hostmem": [
         "Registers of bank `nvme`, offsets from its base (`nvme_hostmem_csr_*`).",
         "",
-        "Present with `with_hostmem_csr`, which the generator turns off when the block streamer",
-        "is the sole front-end. `csr_adr` is a dword index from the base of the window; the",
+        "Present with `with_hostmem_csr`, which the generator turns on in `firmware` mode and off",
+        "in `rtl` mode. `csr_adr` is a dword index from the base of the window; the",
         "read path uses a third port of the window memory. `csr_we` is a level: the firmware",
         "writes 1 then 0, and the write repeats while it stays at 1 (one dword written with",
         "byte enables each time).",

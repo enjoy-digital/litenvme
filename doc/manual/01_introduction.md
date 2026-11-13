@@ -63,7 +63,7 @@ LiteX library and the generated Verilog core.
 | Bring-up | Firmware on a soft CPU (`bench/firmware`), or the RTL init sequencer for a CPU-less design |
 | Integration | `LiteNVMe` class for LiteX SoCs; standalone Verilog core from `litenvme_gen` (UltraScale+ PHY) |
 | Bench | Alibaba XCKU3P target, firmware console, Etherbone host tools, harness scripts, LiteScope probes |
-| Verification | Python models and 50 pytest cases from the accessors to the engine, the front-ends, the init sequencer and the generator configuration |
+| Verification | Python models and 61 pytest cases from the accessors to the engine, the front-ends, the init sequencer and the generator configuration |
 
 ## Status {#intro-status}
 
@@ -80,7 +80,7 @@ other chapters link here.
 | Block streamer | In development | `doc/STANDALONE_CORE.md`, no log; `test/test_block_streamer.py` |
 | PRP lists (transfers of three pages or more) | In development | `test/test_io_engine_prp.py` |
 | Standalone generator, `rtl` init mode | In development | Generator run, CI dry run |
-| Standalone generator, `firmware` init mode | In development | The generated core does not initialize itself ([Known issues](#intro-issues)) |
+| Standalone generator, `firmware` init mode | In development | Generator run with the firmware in ROM (`test/test_gen_config.py`); not run on a board |
 | External host-memory backend (LiteDRAM) | In development | Code hook, never run |
 
 The status words mean:
@@ -111,12 +111,8 @@ the manual follows the code.
 
 | Issue | Effect |
 |----------------------|----------------------------------------------------------------|
-| Generator firmware modes | The firmware uses the register names of the bench SoC. With `firmware: auto` or `minimal` its compilation fails and the generator stops; with `firmware: none` no firmware initializes the generated core. See [Bring-up modes](#integ-modes). Fix pending (PR #8). |
-| Root window of the init sequencer | The sequencer writes the window value at cfg_mgmt dword `0x20` (byte `0x80`, inside the PCI Express capability of the root port) instead of dword `0x08` (Memory Base and Limit, byte `0x20`): the memory window of the root port is not programmed. No hardware log shows the effect. See [Init sequencer](#boot-rtl). Fix pending (PR #9). |
 | Read completions not split | The window answers a MemRd with one CplD of `len` dwords, whatever the MPS of the link. Neither bring-up path programs the MRRS of the SSD (512 bytes at reset), so with the init sequencer (MPS 128 bytes) a read above 128 bytes gets an oversized completion. Confirmed in simulation; the bench SSD runs at MPS 512 with the firmware. See [The responder](#mem-responder). |
-| Firmware CQE read order | The firmware reads CQE dwords 0 to 2 before dword 3, which holds the phase bit, so SQ head and SQ ID may be read before the SSD wrote them (`SQ ID : 0` in `nvme_init.log`). See [Firmware](#ex-firmware). Fix pending (PR #10). |
 | `qd_sweep.py` | Sends the `nvme_bench` command, which the firmware no longer has. See [Bench PC tools](#ex-host). |
-| False path with `clk_external` | The generator declares no false path between an external `sys` clock and the PCIe user clock, which the root configuration accessor relies on. See [Ports](#integ-ports). Fix pending (PR #16). |
 | PERST# timer of the generator | The timer runs in `sys`, whose reset is the user reset of the hard IP, and it drives the reset of the hard IP: if the hard IP holds its user reset while its own reset is asserted, PERST# is never released. Seen in a model of this loop, not on hardware. See [PERST#](#boot-perst). |
 | Lost completion | A timeout frees the accessor but not the TLP controller of the crossbar: the later reads of the three master ports wait behind the lost one and time out too, until the core is reset. See [The shared accessor](#acc-shared). |
 

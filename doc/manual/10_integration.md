@@ -179,12 +179,13 @@ Three rules follow from these layouts:
 - A transfer of the block streamer must fit in the staging region: `count * 512` bytes at most.
   The streamer does not check this.
 
-With the example configuration, the init sequencer places the PRP-list region at `0x18000`, inside
-the staging region from `0x10000`. Transfers of more than two pages (8 KiB) then build their PRP
-list over staging data.
+The generator checks the second rule. The example configuration places the PRP-list region at
+`0x7000` with `prp_list_offset`, between the queues and the staging region from `0x10000`, for
+both bring-up modes. A configuration whose PRP-list region cannot be placed inside the window,
+above the queues and clear of the staging region is refused.
 
-The firmware places it at `0x50000`, beyond a 256 KiB window. With this layout, keep transfers of
-the block streamer to 8 KiB, or move the staging region above the PRP-list region.
+A SoC that builds the core itself, as the bench SoC does, has no such check: there, keep transfers
+of the block streamer to 8 KiB, or place the PRP-list region clear of the staging region.
 
 `hostmem_backend` replaces the block RAM by another AXI memory, such as a LiteDRAM port, for a
 larger window. It is not used on hardware in the repository.
@@ -197,12 +198,12 @@ queues created; [Bring-up](#bringup) describes the sequence. Two implementations
 - **Firmware** (`bench/firmware`). It raises the MPS of both ends, reads the doorbell stride
   from CAP and programs the I/O engine; Identify is a command of its own. It is written for the
   register names of the bench SoC, which builds the blocks one by one (`cfg_cfg_*`,
-  `mmio_mem_*`, `nvme_engine_engine_*`). It does not build against the `nvme_*` names of a SoC
-  that uses the `LiteNVMe` class.
+  `mmio_mem_*`, `nvme_engine_engine_*`), and maps them to the `nvme_*` names of a SoC that names
+  its `LiteNVMe` instance `nvme`, as the generator does. It needs the debug registers of the
+  window (`with_hostmem_csr`).
 - **Init sequencer** (`LiteNVMeInitSequencer`, `litenvme/init.py`). It needs no CPU and drives
   the accessors and the engine directly, as `litenvme/gen.py` and the bench SoC show. It assumes
-  the SSD at bus 0, device 1, function 0, a 64-bit BAR0 and a doorbell stride of 4 bytes. Its
-  default address of the root port memory window is wrong ([Known issues](#intro-issues)).
+  the SSD at bus 0, device 1, function 0, a 64-bit BAR0 and a doorbell stride of 4 bytes.
 
 The PCIe MPS of the link stays at 128 bytes until both ends are programmed. The firmware raises it
 to the largest size both ends support, 512 bytes on the bench. The init sequencer does not, so a
@@ -276,8 +277,8 @@ All the block ports are synchronous to `clk`.
 
 With `clk_external: False`, the default, the core drives `clk` and `rst` out from the PCIe user
 clock, and user logic runs on them. With `clk_external: True`, user logic drives them in. The
-generator then adds no false path between this clock and the PCIe user clock: declare it in the
-constraints of your design ([Known issues](#intro-issues)).
+generator then declares a false path between this clock and the PCIe user clock in the
+constraints of the core, as the bench SoC does.
 
 ### Using the block interface {#integ-protocol}
 
@@ -310,21 +311,26 @@ supported.
 | `rtl` | `none` | Init sequencer, started when PERST# is released; no CPU |
 | `firmware` | `none` | CPU boots the LiteX BIOS; firmware loaded by hand |
 | `firmware` | `auto` | Firmware of `bench/firmware` in the ROM of the CPU |
-| `firmware` | `minimal` | Same firmware without a console, in a smaller ROM |
+| `firmware` | `minimal` | Same firmware without a console, in a smaller ROM: bring-up at boot |
 
 With `auto` and `minimal`, the generator builds twice: once for the headers, once with the
-firmware compiled by `make -C bench/firmware BOOT=rom`. The firmware uses the register names of
-the bench SoC, which the generated core does not have: its compilation fails and the generator
-stops, so these two modes cannot be generated ([Known issues](#intro-issues)).
+firmware compiled by `make -C bench/firmware BOOT=rom`, which needs a RISC-V toolchain. The
+firmware takes the register names of the generated core and the layout of its window from these
+headers ([Firmware](#boot-firmware)).
 
-The example configuration uses `firmware: none`: nothing sets `init_done` then, and
-`block_ctrl_start` stays ignored until a firmware loaded through the UART does. The
-`init_mode: rtl` core needs no firmware: the init sequencer starts when PERST# is released
+The example configuration uses `firmware: minimal`: the core runs the bring-up at boot and
+raises `status_init_done` by itself. With `auto`, the bring-up waits for the `nvme_setup` command
+on the UART. With `none`, nothing sets `init_done`, and `block_ctrl_start` stays ignored until a
+firmware loaded through the UART does. The `init_mode: rtl` core needs no firmware: the init
+sequencer starts when PERST# is released. None of these modes has a recorded run on a board
 ([status](#intro-status)).
 
+In firmware mode the generator keeps the debug registers of the window, which the firmware uses
+to write the admin commands and read their completions, and accepts I/O queue 1 only.
+
 [Build options](#build-options) lists the keys of the YAML file. The required keys are `phy` and
-`phy_device`; the generator refuses unknown keys, a CPU-less firmware mode, and both front-ends
-at once.
+`phy_device`; the generator refuses unknown keys, a CPU-less firmware mode, both front-ends
+at once, a `qsize` outside 2 to 64 and a PRP-list region that does not fit.
 
 ### In a non-LiteX flow {#integ-flow}
 

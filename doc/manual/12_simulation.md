@@ -7,7 +7,7 @@ shows a first run of the suite.
 
 ## At a glance {#sim-glance}
 
-The suite is in `test/`: 15 files, 50 test cases, all Migen simulations run with
+The suite is in `test/`: 16 files, 61 test cases, all Migen simulations run with
 `run_simulation`, plus the configuration checks of the generator and an elaboration of the
 generated core. There is no Verilator
 simulation and no SSD model beyond small Python processes.
@@ -24,10 +24,11 @@ simulation and no SSD model beyond small Python processes.
 | `test_io_engine_` `integration.py` | Engine, bridge, arbiter | 3 | Block RAM backend, SSD model on a second AXI master |
 | `test_request_gen.py` | Request generator | 3 | Same path as above, driven by the generator |
 | `test_block_streamer.py` | Block streamer | 4 | Write, read, error status, `done` timing |
-| `test_init_sequencer.py` | Init sequencer | 1 | Configuration, MMIO, root and memory models, admin CQEs |
-| `test_gen_config.py` | Generator configuration | 6 | YAML loading and checks, no elaboration |
+| `test_init_sequencer.py` | Init sequencer | 2 | Configuration, MMIO, root and memory models, admin CQEs; root window write, PRP-list address |
+| `test_gen_config.py` | Generator configuration | 14 | YAML loading and checks, window layout, elaboration of the example, build of its firmware (skipped without a RISC-V toolchain) |
 | `test_gen_validate.py` | Generator configuration | 2 | Data widths 64, 128 and 256 accepted, 512 rejected |
 | `test_gen_csr.py` | Generated core | 2 | Elaboration of the example configuration: registers once in the `nvme` bank (`firmware`), no `nvme` bank (`rtl`) |
+| `test_gen_crg.py` | Generated core | 2 | False path between `sys` and `pcie` with `clk_external` only |
 | `models.py` | Shared models | none | Dword memory port, doorbell accessor |
 
 `test/conftest.py` puts `test/` on the Python path so that the test files share `models.py`.
@@ -83,8 +84,9 @@ on the bench that the suite had passed, and the code carries the fix.
   uses a `Case` of constant shifts instead ([The host-memory window](#host-memory)).
 - **No PCIe link and no root port.** The accessors are tested on a port model, not on the
   LitePCIe crossbar; MPS, ordering and completion timeouts of a real link are not modelled.
-- **Little elaboration of the integrated core.** `test_gen_csr.py` elaborates the generator SoC
-  and checks its register banks, without simulating it. No test builds the bench SoC or calls
+- **Little elaboration of the integrated core.** `test_gen_csr.py`, `test_gen_crg.py` and
+  `test_gen_config.py` elaborate the generator SoC and check its register banks, its constraints
+  and its firmware constants, without simulating it. No test builds the bench SoC or calls
   `add_csrs()`. The dry run of the continuous integration ([Continuous integration](#sim-ci))
   and the register appendix ([Register reference](#registers)) also elaborate the generator.
 

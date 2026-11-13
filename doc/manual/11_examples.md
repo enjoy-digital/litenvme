@@ -103,8 +103,8 @@ nvme_setup [bar0]
 leaves them out of a SoC without them. `nvme_engine_bench` accepts 1 to 16 sectors per command,
 so each command fits two PRP entries.
 
-The single commands poll their CQE in the firmware, which reads the phase dword last
-([Known issues](#intro-issues)); the I/O engine reads it first.
+The single commands poll their CQE in the firmware, which reads the phase dword first and the
+other dwords once the phase matches, as the I/O engine does.
 
 The Makefile takes the build directory of the SoC (`BUILD_DIR`), the boot mode (`BOOT=bios` or
 `BOOT=rom`) and `MINIMAL=1`. A minimal build removes the console and every print: it runs the
