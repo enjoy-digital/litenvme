@@ -7,7 +7,7 @@ shows a first run of the suite.
 
 ## At a glance {#sim-glance}
 
-The suite is in `test/`: 16 files, 66 test cases, all Migen simulations run with
+The suite is in `test/`: 16 files, 70 test cases, all Migen simulations run with
 `run_simulation`, plus the configuration checks of the generator and an elaboration of the
 generated core. There is no Verilator
 simulation and no SSD model beyond small Python processes.
@@ -22,8 +22,8 @@ simulation and no SSD model beyond small Python processes.
 | `test_io_engine_prp.py` | I/O engine, PRP | 5 | One, two, three and many pages, mixed sizes |
 | `test_io_engine_axi.py` | Engine AXI bridge | 3 | Block RAM backend, 64, 128 and 256 bits |
 | `test_io_engine_` `integration.py` | Engine, bridge, arbiter | 3 | Block RAM backend, SSD model on a second AXI master |
-| `test_request_gen.py` | Request generator | 3 | Same path as above, driven by the generator |
-| `test_block_streamer.py` | Block streamer | 4 | Write, read, error status, `done` timing |
+| `test_request_gen.py` | Request generator | 4 | Same path as above, driven by the generator; requests of 0 blocks refused |
+| `test_block_streamer.py` | Block streamer | 7 | Write, read, error status, `done` timing, refused counts |
 | `test_init_sequencer.py` | Init sequencer | 2 | Configuration, MMIO, root and memory models, admin CQEs; root window write, PRP-list address |
 | `test_gen_config.py` | Generator configuration | 14 | YAML loading and checks, window layout, elaboration of the example, build of its firmware (skipped without a RISC-V toolchain) |
 | `test_gen_validate.py` | Generator configuration | 2 | Data widths 64, 128 and 256 accepted, 512 rejected |

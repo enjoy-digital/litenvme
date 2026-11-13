@@ -63,7 +63,7 @@ this manual describes it.
 One case of `test_gen_config.py` builds the firmware of the example core; it is skipped, and
 reported as such, without a RISC-V toolchain.
 
-`python3 -m pytest -q test` runs the whole suite of 66 tests in one process, in 9 to 17 minutes
+`python3 -m pytest -q test` runs the whole suite of 70 tests in one process, in 9 to 17 minutes
 on the machines used for this manual, most of it in the I/O engine and block streamer
 simulations; [Simulation and verification](#simulation) describes each test file.
 

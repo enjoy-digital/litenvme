@@ -215,8 +215,9 @@ pointers; they return to 0 only with a reset of the core. The full register list
 
 - One I/O queue, Read and Write only: no Flush, Dataset Management or other I/O command.
 - Data buffers contiguous in the window and starting on a 4 KiB boundary; sectors of 512 bytes.
-- `nlb` from 1: a request with `nlb` of 0 writes `0xffff` in the SQE, a request for 65 536
-  sectors.
+- `nlb` from 1. A request with `nlb` of 0 is refused: the engine consumes it without writing an
+  SQE and returns a completion with the status Invalid Field in Command (`0x8004`) and the CID
+  of the slot it would have used.
 - At most 513 pages per command (one PRP-list page per slot).
 - The error flag of the doorbell accessor is not checked.
 
