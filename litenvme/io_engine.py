@@ -97,9 +97,13 @@ def request_layout():
         ("op",   1),    # 0 = read, 1 = write.
         ("nsid", 32),
         ("lba",  64),
-        ("nlb",  16),   # number of blocks (1-based; engine writes nlb-1 on the wire).
+        ("nlb",  16),   # number of blocks (1-based; engine writes nlb-1 on the wire); 0 is refused.
         ("buf",  64),   # PRP1 host-memory buffer address.
     ]
+
+# Status of the completion the engine returns for a request it refuses (nlb of 0): Invalid Field in
+# Command (SC 0x02, generic status) with Do Not Retry, in the layout of the CQE status field.
+REJECT_STATUS = (1 << 15) | (0x02 << 1)
 
 def completion_layout():
     return [
@@ -361,10 +365,25 @@ class LiteNVMeIOEngine(LiteXModule):
             NextValue(req_list_slot, s_list_slot),
             NextValue(dw_idx,   0),
             NextValue(list_dw,  0),
-            If(s_need_list,
+            If(self.sink.nlb == 0,
+                NextState("REJECT"),
+            ).Elif(s_need_list,
                 NextState("PRP-LIST-WRITE"),
             ).Else(
                 NextState("SUBMIT-WRITE"),
+            )
+        )
+
+        # A request of 0 blocks is not a command: NLB is 0-based on the wire, so it would be sent
+        # as 65536 blocks. Refuse it: no SQE, no doorbell; consume it and return a completion with
+        # REJECT_STATUS and the CID it would have used.
+        fsm.act("REJECT",
+            self.source.valid.eq(1),
+            self.source.cid.eq(req_cid),
+            self.source.status.eq(REJECT_STATUS),
+            If(self.source.ready,
+                self.sink.ready.eq(1),
+                NextState("IDLE"),
             )
         )
 
