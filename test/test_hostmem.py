@@ -338,5 +338,67 @@ class TestHostMemSubBeatWrite(unittest.TestCase):
         self._run(data_width=128, off_bytes=16)
 
 
+class TestHostMemCSRWrite(unittest.TestCase):
+    """csr_we issues one write per rising edge: software writes 1 then 0, and a 1 left in it (a
+    slow bridge between the two register writes) must not repeat the write."""
+
+    def _run(self, hold_cycles):
+        base = 0x1000_0000
+        size = 0x4000
+        port = _PortNoBE(data_width=128)
+        dut  = LiteNVMeHostMemResponder(port=port, base=base, size=size, data_width=128, with_csr=True)
+        result = {"aw": 0}
+
+        @passive
+        def aw_monitor():
+            while True:
+                if (yield dut.csr.axi.aw.valid) and (yield dut.csr.axi.aw.ready):
+                    result["aw"] += 1
+                yield
+
+        def stimulus():
+            yield port.sink.valid.eq(0)
+            yield
+            # First write, csr_we held at 1 for hold_cycles.
+            yield dut.csr._csr_adr.storage.eq(0x10)
+            yield dut.csr._csr_wdata.storage.eq(0x1234_5678)
+            yield dut.csr._csr_we.storage.eq(1)
+            for _ in range(hold_cycles):
+                yield
+            # The address and data change before csr_we goes back to 0: nothing must be written.
+            yield dut.csr._csr_adr.storage.eq(0x11)
+            yield dut.csr._csr_wdata.storage.eq(0xdead_beef)
+            for _ in range(hold_cycles):
+                yield
+            yield dut.csr._csr_we.storage.eq(0)
+            for _ in range(8):
+                yield
+            result["dw_0x11"] = (yield dut.csr._csr_rdata.status)
+            # Second write, to the same dword: a new rising edge writes again.
+            yield dut.csr._csr_wdata.storage.eq(0xcafe_f00d)
+            yield dut.csr._csr_we.storage.eq(1)
+            yield
+            yield dut.csr._csr_we.storage.eq(0)
+            for _ in range(8):
+                yield
+            result["dw_0x11_new"] = (yield dut.csr._csr_rdata.status)
+            yield dut.csr._csr_adr.storage.eq(0x10)
+            for _ in range(8):
+                yield
+            result["dw_0x10"] = (yield dut.csr._csr_rdata.status)
+
+        run_simulation(dut, [stimulus(), aw_monitor()], vcd_name=None)
+        self.assertEqual(result["dw_0x10"],     0x1234_5678)
+        self.assertEqual(result["dw_0x11"],     0x0000_0000, "write repeated while csr_we stayed at 1")
+        self.assertEqual(result["dw_0x11_new"], 0xcafe_f00d)
+        self.assertEqual(result["aw"], 2, "one AXI write per rising edge of csr_we expected")
+
+    def test_csr_we_pulse(self):
+        self._run(hold_cycles=1)
+
+    def test_csr_we_held(self):
+        self._run(hold_cycles=40)
+
+
 if __name__ == "__main__":
     unittest.main()
