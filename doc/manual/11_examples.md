@@ -128,15 +128,15 @@ Etherbone. Most of them take the register map from `--csr-csv`; their defaults a
 | `test_block.py` | Request generator throughput, then block streamer BIST |
 | `test_rtlinit.py` | Start the init sequencer, then read through the request generator |
 | `test_ltssm_tracer.py` | History of LTSSM states, for PHYs with an LTSSM tracer |
-| `qd_sweep.py` | Queue-depth sweep over a console command |
 
 `engine_console.py` exists because of the crossover UART. `litex_term crossover` keeps reading
 the receive FIFO of the UART for as long as it runs. A second reader, such as a script, then gets
 only part of the bytes. The harness therefore uploads the firmware with `litex_term`, stops it,
 and leaves `engine_console.py` as the only reader.
 
-`qd_sweep.py` sends the `nvme_bench` command, which the firmware no longer has; its recorded
-results come from an earlier firmware ([Known issues](#intro-issues)).
+The queue-depth sweep of an earlier firmware is kept in `doc/archive/`: `qd_sweep.py` and its
+recorded results. The script sends the `nvme_bench` command, which the firmware no longer has,
+so it does not run on the current bench.
 
 ## Harness scripts {#ex-harness}
 
@@ -251,7 +251,7 @@ data that the read of `nvme_init.log` at sector 0 returns.
 ### Earlier runs {#ex-archive}
 
 `bench/results/archive/` holds the runs of the Gen2 x4, 128-bit design and the steps that led to
-the I/O engine. `bench/qd_sweep_result.txt` is a firmware queue-depth sweep at 4 KiB on that
+the I/O engine. `doc/archive/qd_sweep_result.txt` is a firmware queue-depth sweep at 4 KiB on that
 design. [Performance](#performance) summarizes them.
 
 ## LiteScope probe {#ex-litescope}

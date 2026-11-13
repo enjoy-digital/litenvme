@@ -109,5 +109,6 @@ nvme_engine_bench write 0xe0000000 1 3000000 16 1000 16
 
 `hw_gen3.sh` runs the recorded sequence (8 KiB and 4 KiB reads, 8 KiB writes) and keeps the
 board-printed output. Recorded runs are in `bench/results/` (see `doc/VALIDATION.md`).
-`qd_sweep.py` and `qd_sweep_result.txt` come from an earlier firmware with a CPU-driven
-`nvme_bench` command that the current firmware no longer has.
+`doc/archive/qd_sweep.py` and its results (`qd_sweep_result.txt`, `qd_sweep_detail.txt`) come
+from an earlier firmware with a CPU-driven `nvme_bench` command that the current firmware no
+longer has; they are archived there.

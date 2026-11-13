@@ -74,7 +74,7 @@ other chapters link here.
 |---------------------------------|-------------------|-------------------------------------------------------|
 | UltraScale+ Gen3 x4, 256-bit, firmware bring-up, I/O engine at queue depth 32 | Validated on hardware | Board logs in `bench/results/` |
 | UltraScale+ Gen2 x4, 128-bit, firmware bring-up, I/O engine, same board | Validated on hardware | Archived engine logs, `bench/results/archive/` (link); `doc/NVME_PERFORMANCE.md` (width) |
-| Firmware I/O path (queue-depth sweep), Gen2 x4 | In development | `bench/qd_sweep_result.txt`, without board or link; `doc/NVME_PERFORMANCE.md` |
+| Firmware I/O path (queue-depth sweep), Gen2 x4 | In development | `qd_sweep_result.txt` in `doc/archive/`, without board or link; `doc/NVME_PERFORMANCE.md` |
 | 7-Series root port (`S7PCIEPHY`), Gen2 x4 | In development | A commit message of the repository; no target, no log |
 | RTL init sequencer | In development | `doc/STANDALONE_CORE.md`, no log; unit test |
 | Block streamer | In development | `doc/STANDALONE_CORE.md`, no log; `test/test_block_streamer.py` |
@@ -112,7 +112,6 @@ the manual follows the code.
 | Issue | Effect |
 |----------------------|----------------------------------------------------------------|
 | Read completions not split | The window answers a MemRd with one CplD of `len` dwords, whatever the MPS of the link. Neither bring-up path programs the MRRS of the SSD (512 bytes at reset), so with the init sequencer (MPS 128 bytes) a read above 128 bytes gets an oversized completion. Confirmed in simulation; the bench SSD runs at MPS 512 with the firmware. See [The responder](#mem-responder). |
-| `qd_sweep.py` | Sends the `nvme_bench` command, which the firmware no longer has. See [Bench PC tools](#ex-host). |
 | PERST# timer of the generator | The timer runs in `sys`, whose reset is the user reset of the hard IP, and it drives the reset of the hard IP: if the hard IP holds its user reset while its own reset is asserted, PERST# is never released. Seen in a model of this loop, not on hardware. See [PERST#](#boot-perst). |
 | Lost completion | A timeout frees the accessor but not the TLP controller of the crossbar: the later reads of the three master ports wait behind the lost one and time out too, until the core is reset. See [The shared accessor](#acc-shared). |
 

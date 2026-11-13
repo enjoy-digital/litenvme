@@ -101,8 +101,8 @@ requests.
 The earlier runs on the same board used a Gen2 x4 link and a 128-bit datapath. They are kept for
 comparison; the bench SoC of the default branch builds the Gen3 configuration only.
 
-The firmware queue-depth sweep of `bench/qd_sweep_result.txt` (run with `bench/qd_sweep.py` and
-an earlier firmware) drives 4 KiB sequential commands from the soft CPU, without the I/O engine,
+The firmware queue-depth sweep of `doc/archive/qd_sweep_result.txt` (run with `qd_sweep.py`, in
+the same directory, and an earlier firmware) drives 4 KiB sequential commands from the soft CPU, without the I/O engine,
 1000 commands per point, `err=0` on every point.
 
 The file records neither the board nor the link; `doc/NVME_PERFORMANCE.md` states that it was

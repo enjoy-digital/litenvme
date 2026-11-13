@@ -7,6 +7,12 @@
 
 """Self-contained queue-depth sweep over the firmware nvme_bench console command.
 
+Archived: nvme_bench was the CPU-driven benchmark command of an earlier firmware; the current
+firmware (bench/firmware) no longer has it, so this script no longer runs as is. It is kept with
+its recorded results (qd_sweep_result.txt, qd_sweep_detail.txt) as the record of that sweep. The
+I/O engine benchmark is the nvme_engine_bench command; its queue depth is a gateware parameter
+(--io-engine-qd of the bench target).
+
 Runs entirely in one process with a single Etherbone RemoteClient (via the crossover
 UART CSRs), so it does not depend on cwd/console.py imports or many short-lived shell
 calls. Writes a parsed result table to stdout and to qd_sweep_result.txt.
