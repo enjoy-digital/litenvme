@@ -31,7 +31,7 @@ from litex.soc.interconnect import axi
 from litenvme.request_gen import LiteNVMeRequestGen
 from litenvme.io_engine import (
     LiteNVMeIOEngineAXI, LiteNVMeMemPortToAXI, LiteNVMeMemPort,
-    NVME_OP_READ, NVME_OP_WRITE, SQE_DWORDS, CQE_DWORDS,
+    NVME_OP_READ, NVME_OP_WRITE, SQE_DWORDS, CQE_DWORDS, REJECT_STATUS,
 )
 from litenvme.hostmem import LiteNVMeHostMemAXIRAM
 
@@ -63,6 +63,7 @@ class TestRequestGen(unittest.TestCase):
         data_width = kw.get("data_width", 128)
         qsize = kw.get("qsize", 8); qd = kw.get("qd", 4)
         count = kw.get("count", 20); op = kw.get("op", "read")
+        nlb   = kw.get("nlb", 1)
         size      = 0x8000
         sq_base, cq_base = 0x4000, 0x3000
         sq_db_adr, cq_db_adr = 0xe000_1008, 0xe000_100c
@@ -121,7 +122,7 @@ class TestRequestGen(unittest.TestCase):
             yield eng.sq_db_adr.eq(sq_db_adr); yield eng.cq_db_adr.eq(cq_db_adr)
             yield eng.enable.eq(1)
             yield gen.op.eq(NVME_OP_WRITE if do_write else NVME_OP_READ)
-            yield gen.nsid.eq(1); yield gen.base_lba.eq(1000); yield gen.nlb.eq(1)
+            yield gen.nsid.eq(1); yield gen.base_lba.eq(1000); yield gen.nlb.eq(nlb)
             yield gen.lba_step.eq(1); yield gen.count.eq(count)
             yield gen.buf_base.eq(buf_base); yield gen.buf_stride.eq(buf_strd)
             yield gen.qmod.eq(qsize)
@@ -136,8 +137,13 @@ class TestRequestGen(unittest.TestCase):
             result["errors"]    = (yield gen.errors)
             result["cycles"]    = (yield gen.cycles)
             result["doorbells"] = len(sq_doorbells)
+            result["submitted"]       = (yield eng.submitted)
+            result["first_err_status"] = (yield gen.first_err_status)
 
         run_simulation(dut, [drv(), mmio_model(), ssd_model()])
+
+        if kw.get("check", True) is False:
+            return result
 
         if result.get("completed") != count:
             raise AssertionError(f"completed {result.get('completed')} != count {count}")
@@ -156,6 +162,17 @@ class TestRequestGen(unittest.TestCase):
 
     def test_write_qd4_128b(self):
         self._run_and_check(data_width=128, qsize=8, qd=4, count=20, op="write")
+
+    def test_nlb_zero_refused(self):
+        # A request of 0 blocks is refused by the engine: an error completion for each request,
+        # no SQE submitted, no doorbell.
+        for op in ["read", "write"]:
+            result = self._run_and_check(data_width=128, qsize=8, qd=4, count=5, op=op, nlb=0, check=False)
+            self.assertEqual(result["completed"], 5)
+            self.assertEqual(result["errors"],    5)
+            self.assertEqual(result["submitted"], 0)
+            self.assertEqual(result["doorbells"], 0)
+            self.assertEqual(result["first_err_status"], REJECT_STATUS)
 
     def test_read_qd7_64b(self):
         self._run_and_check(data_width=64, qsize=8, qd=7, count=30, op="read")

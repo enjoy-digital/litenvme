@@ -37,7 +37,7 @@ the staging region of the window.](fe_streamer.svg)
 | `nsid` | 32 | Namespace, 1 at reset |
 | `done` | 1 | 1 when idle or finished, 0 during a transfer |
 | `busy` | 1 | 1 during a transfer |
-| `error` | 1 | The completion of the last transfer reported an error |
+| `error` | 1 | The completion of the last transfer reported an error, or its `count` was refused |
 | `wr_sink` | data | Data of a write, one PCIe beat per word |
 | `rd_source` | data, last | Data of a read, `last` on the final word |
 
@@ -66,10 +66,11 @@ word.
 
 ### Limits {#fe-limits}
 
-- One NVMe command per transfer: the transfer must fit in the staging region. The hardware does
-  not check that `count * 512` is at most `staging_size`.
-- `count` from 1 to 65 535. The request to the engine carries the count in 16 bits, so a larger
-  count is truncated; a count of 0 makes the staging DMA run through 2^32 words.
+- One NVMe command per transfer: the transfer must fit in the staging region, `count * 512`
+  bytes at most `staging_size`.
+- `count` from 1 to 65 535: the request to the engine carries the count in 16 bits.
+- A transfer whose `count` is 0 or breaks one of these two limits is refused: no data moves, no
+  command is sent, and `done` rises at once with `error` set.
 - `wr_sink` must deliver exactly `count` sectors of data. The streamer counts words and ignores
   `last` on `wr_sink`.
 - The staging region must start on a 4 KiB boundary, for the PRP rules of the engine. A transfer

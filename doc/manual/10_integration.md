@@ -177,7 +177,7 @@ Three rules follow from these layouts:
 - The staging region of the block streamer must not overlap them, nor the PRP-list region of the
   I/O engine. The PRP-list region takes one 4 KiB page per I/O queue entry.
 - A transfer of the block streamer must fit in the staging region: `count * 512` bytes at most.
-  The streamer does not check this.
+  The streamer refuses a larger one, with `error` set.
 
 The generator checks the second rule. The example configuration places the PRP-list region at
 `0x7000` with `prp_list_offset`, between the queues and the staging region from `0x10000`, for
@@ -269,7 +269,7 @@ status pins and the block interface go to user logic. `serial_tx/rx` exist only 
 | `block_ctrl_nsid` | in | 32 | Namespace, 1 on usual SSDs |
 | `block_ctrl_done` | out | 1 | 1 when idle, 0 during a transfer |
 | `block_ctrl_busy` | out | 1 | Transfer in progress |
-| `block_ctrl_error` | out | 1 | The last CQE had an error status |
+| `block_ctrl_error` | out | 1 | The last CQE had an error status, or the count was refused |
 | `block_wr_axis_t*` | in | data | Write data: `valid`, `ready`, `last`, `data` |
 | `block_rd_axis_t*` | out | data | Read data: `valid`, `ready`, `last`, `data` |
 
@@ -298,9 +298,9 @@ the completion (write) or after the last read beat (read).](integ_protocol.svg)
 5. Wait for `block_ctrl_done`, then check `block_ctrl_error`.
 
 `done` is registered: it falls in the cycle after `start` and rises when the transfer ends, so it
-is safe to poll. One transfer runs at a time, as one NVMe command. The core does not check `count`
-against the staging region and passes only its 16 low bits to the command; a count of 0 is not
-supported.
+is safe to poll. One transfer runs at a time, as one NVMe command. A `count` of 0, above 65 535 or
+larger than the staging region is refused: `done` rises at once with `block_ctrl_error` set, and
+no command is sent.
 
 ### Bring-up modes {#integ-modes}
 
