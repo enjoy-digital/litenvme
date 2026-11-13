@@ -162,7 +162,8 @@ The firmware `nvme_bench` was extended with a sliding-window queue-depth path
 (`nvme_io_bench_window`): submit up to `qd` commands with distinct per-slot 4 KiB PRP1
 buffers, ring the SQ doorbell once per batch (coalesced), then drain all phase-matching
 CQEs and ring the CQ doorbell once per batch; refill as slots free. Driven from the host
-with `bench/qd_sweep.py` (single Etherbone process over the crossover UART).
+with `qd_sweep.py` (single Etherbone process over the crossover UART; now in `doc/archive/`
+with its results, since the current firmware no longer has `nvme_bench`).
 
 Measured on the Alibaba KU3P board (PCIe Gen2 x4), 4 KiB sequential, `count=1000`, all
 runs `errors=0`:
@@ -221,7 +222,9 @@ through the hostmem AXI backend and reaps CQEs in a tight FSM. A secondary lever
 larger transfers per command (PRP2 / PRP list, >4 KiB) to amortize the fixed
 per-command construction cost.
 
-Reproduce (board up, `litex_server --udp` running, firmware booted), from `bench/`:
+The sweep was run with the firmware of that time (board up, `litex_server --udp` running,
+firmware booted), from `bench/`. The script and its results are kept in `doc/archive/`; it does
+not run against the current firmware, which no longer has `nvme_bench`:
 
 ```sh
 python3 qd_sweep.py            # full read+write sweep over qd in {1,2,4,8,16,32,63}
