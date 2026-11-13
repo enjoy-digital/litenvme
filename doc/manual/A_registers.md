@@ -18,7 +18,7 @@ each block.
 
 | Configuration | Target and options |
 |------------------------|--------------------------------------------------------|
-| `xcku3p_request_gen` | `litenvme_gen` `alibaba_xcku3p.yml` `with_block_streamer=False` `with_request_gen=True` |
+| `xcku3p_request_gen` | `litenvme_gen` `alibaba_xcku3p.yml` `with_block_streamer=False` `with_request_gen=True` `firmware=none` |
 
 Access is `rw` for a register written by software (`CSRStorage`, or a `CSRStatus` that
 software also writes, such as event pending bits cleared by writing 1), `ro` for a status

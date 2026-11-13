@@ -22,7 +22,8 @@ import tempfile
 # no software is compiled, so no RISC-V toolchain is needed.
 CONFIGS = {
     "xcku3p_request_gen" : ("litenvme/gen.py", ["examples/alibaba_xcku3p.yml"],
-        {"with_block_streamer": False, "with_request_gen": True}),
+        # No firmware: the registers do not depend on it, and its build needs the LiteX software.
+        {"with_block_streamer": False, "with_request_gen": True, "firmware": "none"}),
 }
 
 # Banks documented in the appendix (prefix match on the bank name), in order, with their title and

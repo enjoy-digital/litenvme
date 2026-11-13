@@ -2,7 +2,8 @@
  "argv": [
   "alibaba_xcku3p.yml",
   "with_block_streamer=False",
-  "with_request_gen=True"
+  "with_request_gen=True",
+  "firmware=none"
  ],
  "banks": {
   "nvme_cfg": [
