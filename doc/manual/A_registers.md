@@ -158,9 +158,9 @@ Registers of bank `nvme`, offsets from its base (`nvme_hostmem_csr_*`).
 
 Present with `with_hostmem_csr`, which the generator turns on in `firmware` mode and off
 in `rtl` mode. `csr_adr` is a dword index from the base of the window; the
-read path uses a third port of the window memory. `csr_we` is a level: the firmware
-writes 1 then 0, and the write repeats while it stays at 1 (one dword written with
-byte enables each time).
+read path uses a third port of the window memory. `csr_we` acts on its rising edge:
+the firmware writes 1 then 0, and each rising edge writes one dword, with byte
+enables.
 
 The counters observe the PCIe side
 of the window. `rd_gap_max` counts from reset, so it is meaningful only after the
@@ -172,7 +172,7 @@ Bank `nvme_hostmem`.
 |----------------------------|-------------|--------|---------|----------------------------------------|
 | `csr_csr_adr` | `0x0064` | 32 | rw | HostMem dword address (index). Reset `0x0`. |
 | `csr_csr_wdata` | `0x0068` | 32 | rw | HostMem write data (DWORD). Reset `0x0`. |
-| `csr_csr_we` | `0x006c` | 1 | rw | HostMem write request (level: write 1 then 0). Reset `0x0`. |
+| `csr_csr_we` | `0x006c` | 1 | rw | HostMem write request (rising edge: write 1 then 0). Reset `0x0`. |
 | `csr_csr_rdata` | `0x0070` | 32 | ro | HostMem read data (DWORD). |
 | `csr_dma_wr_` `count` | `0x0074` | 32 | ro | Count of DMA beats stored. |
 | `csr_dma_rd_` `count` | `0x0078` | 32 | ro | Count of DMA beats served. |
