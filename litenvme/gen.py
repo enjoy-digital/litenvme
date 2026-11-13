@@ -202,6 +202,11 @@ class LiteNVMeCore(SoCCore):
         )
         self.pcie_phy.update_config(core_config.get("phy_config", {}))
 
+        # External Clk mode: sys and pcie are asynchronous (CDC by LitePCIe AsyncFIFOs and
+        # LiteNVMeRootCfgMgmt handshakes): no timing paths between them, as on the bench SoC.
+        if core_config.get("clk_external", False):
+            platform.add_false_path_constraints(self.crg.cd_sys.clk, self.pcie_phy.cd_pcie.clk)
+
         # PCIe RootPort one-shot reset (we drive PERST# to the SSD after link-up settle).
         self.pcie_rst_timer = WaitTimer(int(100e-3 * sys_clk_freq))  # 100ms.
         self.comb += self.pcie_rst_timer.wait.eq(1)
