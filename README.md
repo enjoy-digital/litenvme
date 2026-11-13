@@ -121,34 +121,13 @@ $ ./bench/hw_rtlinit.sh
 
 [> Documentation
 ----------------
-The **NVMe Host Core manual** is the reference of LiteNVMe: a nightly
-[PDF](https://github.com/enjoy-digital/litenvme/releases/download/manual-nightly/litenvme_manual.pdf)
-and [HTML page](https://github.com/enjoy-digital/litenvme/releases/download/manual-nightly/litenvme_manual.html)
-are published on the [manual-nightly](https://github.com/enjoy-digital/litenvme/releases/tag/manual-nightly)
-release. Sources in [doc/manual](doc/manual/README.md) (build: `python3 doc/manual/build.py`, outputs in
-`build/doc/`; pandoc, XeLaTeX and the fonts listed in the README of `doc/manual`):
+The **NVMe Host Core manual** is the reference of the project, from the primers to the integration,
+the examples, the debugging and the registers:
 
-- **Understand**: [introduction](doc/manual/01_introduction.md), [NVMe over PCIe in a nutshell](doc/manual/02_nvme_primer.md)
-  (controller registers, queues, SQEs and CQEs, PRPs, bring-up).
-- **The core**: [architecture](doc/manual/03_architecture.md), [configuration and register access](doc/manual/04_pcie_access.md),
-  [host-memory window](doc/manual/05_host_memory.md), [I/O engine](doc/manual/06_io_engine.md),
-  [front-ends](doc/manual/07_frontends.md), [bring-up](doc/manual/08_bringup.md).
-- **Use it**: [getting started](doc/manual/09_getting_started.md), [integration](doc/manual/10_integration.md),
-  [bench, firmware and host tools](doc/manual/11_examples.md), [simulation](doc/manual/12_simulation.md),
-  [debugging](doc/manual/13_debugging.md).
-- **Appendices**: [registers](doc/manual/A_registers.md), [build options](doc/manual/B_build_options.md),
-  [glossary](doc/manual/C_glossary.md), [performance and resources](doc/manual/D_performance.md),
-  [maintaining this manual](doc/manual/E_maintenance.md) (for contributors).
-
-Design notes:
-
-- `doc/DIAGRAMS.md`: Visual architecture diagrams.
-- `doc/ARCHITECTURE.md`: As-built Gen3-256b architecture.
-- `doc/STANDALONE_CORE.md`: Standalone generation, interface, resources and usage.
-- `doc/NVME_PERFORMANCE.md`: Throughput study and measured limits.
-- `doc/VALIDATION.md`: Simulation, generator and hardware-validation evidence.
-- `doc/NVME_CORE_COMPARISON.md`: Comparison with other public NVMe cores.
-- `doc/archive/PROGRESS.md`: Archived development log.
+- Read it: [PDF](https://github.com/enjoy-digital/litenvme/releases/download/manual-nightly/litenvme_manual.pdf) or
+  [HTML](https://github.com/enjoy-digital/litenvme/releases/download/manual-nightly/litenvme_manual.html) (rebuilt nightly).
+- Sources and local build: [doc/manual](doc/manual/README.md).
+- Design notes (architecture, performance, validation): [doc](doc).
 
 [> Tests
 --------
