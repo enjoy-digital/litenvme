@@ -608,11 +608,18 @@ class LiteNVMeHostMemDMA(LiteXModule):
             stmts += [NextValue(beats_sent, 0)]
             return stmts
 
+        # A request is refused when it is outside the window (or a partial-beat write with BE):
+        # it is dropped, up to its last beat. DROP is entered only when beats remain, else it
+        # would swallow the next request.
+        req_last = getattr(req, "last", 1)
+
         fsm.act("IDLE",
             req.ready.eq(Mux(req.we, wr_fifo.sink.ready, 1)),
             If(req.valid & req.ready,
                 If(~in_window | ~full_be_ok,
-                    NextState("DROP"),
+                    If(~req_last,
+                        NextState("DROP"),
+                    ),
                 ).Else(
                     *latch_req_header(),
                     If(req.we,
@@ -642,7 +649,7 @@ class LiteNVMeHostMemDMA(LiteXModule):
 
         fsm.act("DROP",
             req.ready.eq(1),
-            If(req.valid & req.ready & getattr(req, "last", 1),
+            If(req.valid & req.ready & req_last,
                 NextState("IDLE"),
             )
         )
