@@ -183,7 +183,7 @@
    },
    {
     "access": "rw",
-    "description": "HostMem write request (level: write 1 then 0).",
+    "description": "HostMem write request (rising edge: write 1 then 0).",
     "fields": [],
     "name": "csr_csr_we",
     "offset": 108,

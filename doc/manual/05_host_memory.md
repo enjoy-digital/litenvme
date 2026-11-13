@@ -189,7 +189,7 @@ to read their completions and to fill or check data buffers.
 |-----------------------|-------------------------------------------------------------|
 | `csr_adr` | Dword index in the window (byte offset divided by 4) |
 | `csr_wdata` | Data of the next write |
-| `csr_we` | Write enable (a level): write 1, then 0 |
+| `csr_we` | Write request, on its rising edge: write 1, then 0 |
 | `csr_rdata` | The dword at `csr_adr` |
 | `dma_wr_count` | Beats written by the responder |
 | `dma_rd_count` | Beats read by the responder |
@@ -199,8 +199,8 @@ to read their completions and to fill or check data buffers.
 | `rd_tlp_count` | MemWr requests accepted |
 | `rd_gap_max` | Longest run of cycles without a MemWr beat offered |
 
-The write enable is a level, not a pulse. The port takes a new write each time it sees it at 1
-and has finished the previous one, so software writes 1 then 0.
+The port issues one write each time `csr_we` goes from 0 to 1, so software writes 1 then 0. A 1
+left in the register does not repeat the write.
 
 The read data follows the address through the debug memory port with a short delay, so the
 firmware reads `csr_rdata` twice after changing `csr_adr` and keeps the second value.

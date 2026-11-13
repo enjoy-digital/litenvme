@@ -192,9 +192,9 @@ class LiteNVMeHostMemCSR(LiteXModule):
         self._csr_wdata = CSRStorage(32, description="HostMem write data (DWORD).")
 
         # csr_we:
-        # - Write request (level): a write is issued when csr_we is 1 and no write is pending, so
-        #   software writes 1 then 0 (a 1 left in it repeats the write after each completion).
-        self._csr_we = CSRStorage(1, description="HostMem write request (level: write 1 then 0).")
+        # - Write request (rising edge): one write is issued each time csr_we goes from 0 to 1, so
+        #   software writes 1 then 0 (a 1 left in it does not repeat the write).
+        self._csr_we = CSRStorage(1, description="HostMem write request (rising edge: write 1 then 0).")
 
         # csr_rdata:
         # - DWORD readback (debug).
@@ -339,12 +339,21 @@ class LiteNVMeHostMemCSR(LiteXModule):
             ),
         ]
 
-        # Latch pending writes (avoid missing pulses while busy).
+        # Latch pending writes: one write per rising edge of csr_we (a rising edge seen while a
+        # write is pending is kept in wr_request and served when that write completes).
+        csr_we_d    = Signal()
+        csr_we_rise = Signal()
+        wr_request  = Signal()
+        self.comb += csr_we_rise.eq(self._csr_we.storage & ~csr_we_d)
         self.sync += [
-            If(self._csr_we.storage & ~wr_pending,
+            csr_we_d.eq(self._csr_we.storage),
+            If((csr_we_rise | wr_request) & ~wr_pending,
+                wr_request.eq(0),
                 wr_pending.eq(1),
                 wr_pending_adr.eq(csr_dw_adr),
                 wr_pending_data.eq(self._csr_wdata.storage),
+            ).Elif(csr_we_rise,
+                wr_request.eq(1),
             ),
             If(fsm.ongoing("WRITE-RESP") & self.axi.b.valid & self.axi.b.ready,
                 wr_pending.eq(0),
