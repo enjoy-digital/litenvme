@@ -7,7 +7,7 @@ shows a first run of the suite.
 
 ## At a glance {#sim-glance}
 
-The suite is in `test/`: 16 files, 63 test cases, all Migen simulations run with
+The suite is in `test/`: 16 files, 66 test cases, all Migen simulations run with
 `run_simulation`, plus the configuration checks of the generator and an elaboration of the
 generated core. There is no Verilator
 simulation and no SSD model beyond small Python processes.
@@ -16,7 +16,7 @@ simulation and no SSD model beyond small Python processes.
 |------------------------------------|-------------------|-------|--------------------------|
 | `test_cfg_accessor.py` | Configuration accessor | 3 | Port model: read, write, timeout |
 | `test_mem_accessor.py` | MMIO accessor | 5 | Port model: read, multi-beat read, write, bad `wsel`, timeout |
-| `test_hostmem.py` | Host-memory window | 9 | MemRd of an SQE with stalls; sub-beat writes; one debug write per rising edge of `csr_we` |
+| `test_hostmem.py` | Host-memory window | 12 | MemRd of an SQE with stalls; sub-beat writes; one debug write per rising edge of `csr_we`; requests outside the window |
 | `test_nvme_sequence.py` | Host-memory window | 3 | Identify-like sequence of MemRd and MemWr, 64, 128 and 256 bits |
 | `test_io_engine.py` | I/O engine | 3 | Dword memory, doorbell and SSD models; ring wrap |
 | `test_io_engine_prp.py` | I/O engine, PRP | 5 | One, two, three and many pages, mixed sizes |

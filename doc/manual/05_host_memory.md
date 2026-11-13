@@ -82,8 +82,10 @@ first checks that the address is inside the window, then serves a write or a rea
   of the link ([Known issues](#intro-issues)). It serves one MemRd at a time; the next request
   waits until the completion has left.
 
-A request outside the window is dropped: its beats are accepted and discarded. A dropped MemRd
-gets no completion, so the SSD sees a completion timeout.
+A request outside the window is dropped: its beats are accepted and discarded, and the request
+that follows is served. A dropped MemRd gets no completion, so the SSD sees a completion timeout.
+In the core, the address decoder of the slave port already keeps such requests away from the
+responder ([Architecture](#architecture)).
 
 The responder ignores the first and last dword byte enables of a request: every write covers
 whole dwords, which is what an SSD sends for queues and data.

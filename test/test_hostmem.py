@@ -400,5 +400,115 @@ class TestHostMemCSRWrite(unittest.TestCase):
         self._run(hold_cycles=40)
 
 
+class TestHostMemOutOfWindow(unittest.TestCase):
+    """Requests outside the window are dropped, and the request that follows is served."""
+
+    base = 0x1000_0000
+    size = 0x4000
+
+    def _dut(self, data_width=128):
+        port = _PortNoBE(data_width=data_width)
+        dut  = LiteNVMeHostMemResponder(port=port, base=self.base, size=self.size,
+                                        data_width=data_width, with_csr=True)
+        return port, dut
+
+    def _send(self, port, adr, we, beats, len_dw, tag=0, req_id=0):
+        # One request: `beats` is the list of its data beats (one beat of 0 for a MemRd).
+        yield port.sink.adr.eq(adr)
+        yield port.sink.we.eq(we)
+        yield port.sink.len.eq(len_dw)
+        yield port.sink.tag.eq(tag)
+        yield port.sink.req_id.eq(req_id)
+        for i, dat in enumerate(beats):
+            yield port.sink.dat.eq(dat)
+            yield port.sink.first.eq(i == 0)
+            yield port.sink.last.eq(i == (len(beats) - 1))
+            yield port.sink.valid.eq(1)
+            yield
+            cyc = 0
+            while (yield port.sink.ready) == 0:
+                yield; cyc += 1
+                if cyc > 200: raise RuntimeError("request never accepted")
+        yield port.sink.valid.eq(0)
+        yield port.sink.first.eq(0)
+        yield port.sink.last.eq(0)
+
+    def _csr_read_dw(self, dut, dw_index):
+        yield dut.csr._csr_adr.storage.eq(dw_index)
+        for _ in range(6):
+            yield
+        return (yield dut.csr._csr_rdata.status)
+
+    def _cmp_monitor(self, port, got):
+        @passive
+        def monitor():
+            yield port.source.ready.eq(1)
+            while True:
+                if (yield port.source.valid) and (yield port.source.ready):
+                    got.append({
+                        "dat"    : (yield port.source.dat),
+                        "err"    : (yield port.source.err),
+                        "end"    : (yield port.source.end),
+                        "first"  : (yield port.source.first),
+                        "last"   : (yield port.source.last),
+                        "tag"    : (yield port.source.tag),
+                        "req_id" : (yield port.source.req_id),
+                    })
+                yield
+        return monitor
+
+    def _run_memwr(self, oow_beats):
+        # A MemWr outside the window (oow_beats beats), then a MemWr inside it.
+        port, dut = self._dut()
+        payload   = [0x1111_0000, 0x2222_0001, 0x3333_0002, 0x4444_0003]
+        got, result = [], {}
+
+        def stimulus():
+            yield port.sink.valid.eq(0)
+            yield
+            yield from self._send(port, self.base + self.size, we=1, beats=[0xdead]*oow_beats, len_dw=4*oow_beats)
+            yield from self._send(port, self.base + 0x100, we=1, beats=[_pack_dwords_to_int(payload)], len_dw=4)
+            for _ in range(40):
+                yield
+            result["dws"] = []
+            for i in range(4):
+                result["dws"].append((yield from self._csr_read_dw(dut, 0x100//4 + i)))
+
+        run_simulation(dut, [stimulus(), self._cmp_monitor(port, got)()], vcd_name=None)
+        self.assertEqual(result["dws"], payload, "MemWr after an out-of-window MemWr was lost")
+        self.assertEqual(got, [], "a MemWr must not be completed")
+
+    def test_memwr_out_of_window_single_beat(self):
+        self._run_memwr(oow_beats=1)
+
+    def test_memwr_out_of_window_multi_beat(self):
+        self._run_memwr(oow_beats=3)
+
+    def test_memrd_out_of_window(self):
+        # A MemRd outside the window, then a MemRd inside it.
+        port, dut = self._dut()
+        payload   = [0xaaaa_0000, 0xbbbb_0001, 0xcccc_0002, 0xdddd_0003]
+        got       = []
+
+        def stimulus():
+            yield port.sink.valid.eq(0)
+            yield
+            yield from self._send(port, self.base + 0x200, we=1, beats=[_pack_dwords_to_int(payload)], len_dw=4)
+            for _ in range(20):
+                yield
+            yield from self._send(port, self.base + self.size, we=0, beats=[0], len_dw=4, tag=0x5a, req_id=0x0100)
+            yield from self._send(port, self.base + 0x200,     we=0, beats=[0], len_dw=4, tag=0x5b, req_id=0x0100)
+            for _ in range(60):
+                yield
+
+        run_simulation(dut, [stimulus(), self._cmp_monitor(port, got)()], vcd_name=None)
+        self.assertEqual(len(got), 1, f"expected one completion, got {got}")
+        ok = got[0]
+        # The read outside the window is dropped; the read that follows is served with its data.
+        self.assertEqual((ok["err"], ok["first"], ok["last"], ok["end"]), (0, 1, 1, 1))
+        self.assertEqual((ok["tag"], ok["req_id"]), (0x5b, 0x0100))
+        self.assertEqual(_unpack_int_to_dwords(ok["dat"], 4), payload)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -63,7 +63,7 @@ LiteX library and the generated Verilog core.
 | Bring-up | Firmware on a soft CPU (`bench/firmware`), or the RTL init sequencer for a CPU-less design |
 | Integration | `LiteNVMe` class for LiteX SoCs; standalone Verilog core from `litenvme_gen` (UltraScale+ PHY) |
 | Bench | Alibaba XCKU3P target, firmware console, Etherbone host tools, harness scripts, LiteScope probes |
-| Verification | Python models and 63 pytest cases from the accessors to the engine, the front-ends, the init sequencer and the generator configuration |
+| Verification | Python models and 66 pytest cases from the accessors to the engine, the front-ends, the init sequencer and the generator configuration |
 
 ## Status {#intro-status}
 
