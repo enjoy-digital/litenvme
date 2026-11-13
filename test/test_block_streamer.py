@@ -283,6 +283,59 @@ class TestBlockStreamer(unittest.TestCase):
         run_simulation(dut, [main(), wr_feeder(), mmio_model(), ssd_model()])
         self.assertEqual(result["mid_done"], 0, "done not cleared during the run")
 
+    # A count of 0 or beyond the staging region is refused: error, no command, no staging access.
+    def _run_bad_count(self, write, count):
+        dut = _DUT()
+        eng, streamer = dut.eng, dut.streamer
+        mmio_model, ssd_model, sq_doorbells, *_ = self._models(dut)
+        result = {"dma": 0}
+
+        @passive
+        def dma_monitor():
+            while True:
+                if (yield streamer.dma.axi.aw.valid) or (yield streamer.dma.axi.ar.valid):
+                    result["dma"] += 1
+                yield
+
+        def main():
+            yield from self._config_engine(eng)
+            yield streamer.rd_source.ready.eq(1)
+            yield streamer.wr_sink.valid.eq(1)
+            yield streamer.write.eq(write); yield streamer.sector.eq(0); yield streamer.count.eq(count)
+            yield streamer.start.eq(1); yield
+            yield streamer.start.eq(0); yield
+            result["mid_done"] = (yield streamer.done)
+            for _ in range(2000):
+                if (yield streamer.done):
+                    break
+                yield
+            result["done"]  = (yield streamer.done)
+            result["busy"]  = (yield streamer.busy)
+            result["error"] = (yield streamer.error)
+            for _ in range(200):
+                yield
+            result["submitted"] = (yield eng.submitted)
+
+        run_simulation(dut, [main(), dma_monitor(), mmio_model(), ssd_model()])
+        self.assertEqual(result["mid_done"], 0, "done not cleared after start")
+        self.assertEqual(result["done"],  1, "refused transfer never completed")
+        self.assertEqual(result["busy"],  0)
+        self.assertEqual(result["error"], 1, "error not set on a refused count")
+        self.assertEqual(result["submitted"], 0, "a command was submitted")
+        self.assertEqual(result["dma"], 0, "the staging region was accessed")
+
+    def test_count_zero_write(self):
+        self._run_bad_count(write=1, count=0)
+
+    def test_count_zero_read(self):
+        self._run_bad_count(write=0, count=0)
+
+    def test_count_above_staging(self):
+        # Staging region of the DUT: 0x4000 bytes, 32 sectors.
+        self.assertEqual(_DUT().streamer.max_count, 32)
+        self._run_bad_count(write=1, count=33)
+        self._run_bad_count(write=0, count=0x10001)
+
 
 if __name__ == "__main__":
     unittest.main()

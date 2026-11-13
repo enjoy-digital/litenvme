@@ -28,7 +28,8 @@ Interface (control as plain signals — a CSR wrapper is added with `with_csr=Tr
 
 Data staging reuses the host-memory backend via one extra AXI master (`dma.axi`), added to
 the responder's `extra_axi_masters` — no new ports on the responder. v1 runs ONE engine
-command per transfer (assert `count*512 <= staging_size`); the engine itself builds the
+command per transfer (`count` of 0, above 65535 or with `count*512 > staging_size` is refused:
+the transfer ends at once with `error` set); the engine itself builds the
 PRP list internally for transfers spanning >2 pages, so the streamer only needs a
 page-aligned, contiguous staging buffer and a once-set `prp_list_base` on the engine.
 Multi-chunk (transfers larger than the staging region) is a follow-up — the FSM is written
@@ -229,6 +230,13 @@ class LiteNVMeBlockStreamer(LiteXModule):
         self.fsm = fsm = FSM(reset_state="IDLE")
         self.comb += self.busy.eq(~fsm.ongoing("IDLE"))
 
+        # Count check: a transfer is one engine command staged in the staging region, so `count`
+        # must be 1..max_count (staging region size and 16-bit block count of the request). A
+        # transfer outside this range is not run: it ends at once with `error` set.
+        self.max_count = max_count = min(staging_size // lba_bytes, 2**16 - 1)
+        bad_count = Signal()
+        self.comb += bad_count.eq((self.count == 0) | (self.count > max_count))
+
         fsm.act("IDLE",
             If(self.start,
                 NextValue(w_write,  self.write),
@@ -239,7 +247,10 @@ class LiteNVMeBlockStreamer(LiteXModule):
                 NextValue(buf_adr,  hostmem_base + staging_base),
                 NextValue(self.error, 0),
                 NextValue(done_r,     0),
-                If(self.write,
+                If(bad_count,
+                    NextValue(self.error, 1),
+                    NextState("DONE"),
+                ).Elif(self.write,
                     NextState("WR-FILL"),
                 ).Else(
                     NextState("RD-CMD"),
@@ -325,7 +336,7 @@ class LiteNVMeBlockStreamer(LiteXModule):
         self._status = CSRStatus(fields=[
             CSRField("done",  size=1, offset=0, description="Transfer complete / idle."),
             CSRField("busy",  size=1, offset=1, description="Transfer in progress."),
-            CSRField("error", size=1, offset=2, description="A completion returned an error status."),
+            CSRField("error", size=1, offset=2, description="A completion returned an error status, or count is 0 or larger than the staging region."),
         ])
         self._cycles = CSRStatus(32, description="Cycles from start to done (for host MB/s).")
 
