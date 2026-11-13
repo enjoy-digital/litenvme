@@ -31,6 +31,89 @@
 #endif
 
 /*-----------------------------------------------------------------------*/
+/* CSR names                                                              */
+/*-----------------------------------------------------------------------*/
+
+/* The firmware uses the bench SoC CSR names (bench/alibaba_xcku3p.py). The standalone core
+ * (litenvme_gen) collects the same registers under its "nvme" bank (nvme_cfg_*, nvme_mmio_*,
+ * nvme_io_engine_*, nvme_hostmem_*, nvme_request_gen_*): map them to the bench names. */
+
+#if !defined(CSR_CFG_CFG_CTRL_ADDR) && defined(CSR_NVME_CFG_CFG_CTRL_ADDR)
+#define cfg_cfg_ctrl_write                   nvme_cfg_cfg_ctrl_write
+#define cfg_cfg_bdf_write                    nvme_cfg_cfg_bdf_write
+#define cfg_cfg_wdata_write                  nvme_cfg_cfg_wdata_write
+#define cfg_cfg_stat_read                    nvme_cfg_cfg_stat_read
+#define cfg_cfg_rdata_read                   nvme_cfg_cfg_rdata_read
+#endif
+
+#if !defined(CSR_MMIO_MEM_CTRL_ADDR) && defined(CSR_NVME_MMIO_MEM_CTRL_ADDR)
+#define mmio_mem_ctrl_write                  nvme_mmio_mem_ctrl_write
+#define mmio_mem_adr_l_write                 nvme_mmio_mem_adr_l_write
+#define mmio_mem_adr_h_write                 nvme_mmio_mem_adr_h_write
+#define mmio_mem_wdata_write                 nvme_mmio_mem_wdata_write
+#define mmio_mem_stat_read                   nvme_mmio_mem_stat_read
+#define mmio_mem_rdata_read                  nvme_mmio_mem_rdata_read
+#define CSR_PCIE_MMIO_MEM_CTRL_ADDR          CSR_NVME_MMIO_MEM_CTRL_ADDR
+#endif
+
+#if !defined(CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR) && defined(CSR_NVME_IO_ENGINE_ENGINE_ENABLE_ADDR)
+#define nvme_engine_engine_enable_write      nvme_io_engine_engine_enable_write
+#define nvme_engine_engine_sq_base_lo_write  nvme_io_engine_engine_sq_base_lo_write
+#define nvme_engine_engine_sq_base_hi_write  nvme_io_engine_engine_sq_base_hi_write
+#define nvme_engine_engine_cq_base_lo_write  nvme_io_engine_engine_cq_base_lo_write
+#define nvme_engine_engine_cq_base_hi_write  nvme_io_engine_engine_cq_base_hi_write
+#define nvme_engine_engine_sq_db_lo_write    nvme_io_engine_engine_sq_db_lo_write
+#define nvme_engine_engine_sq_db_hi_write    nvme_io_engine_engine_sq_db_hi_write
+#define nvme_engine_engine_cq_db_lo_write    nvme_io_engine_engine_cq_db_lo_write
+#define nvme_engine_engine_cq_db_hi_write    nvme_io_engine_engine_cq_db_hi_write
+#define nvme_engine_engine_prp_list_lo_write nvme_io_engine_engine_prp_list_lo_write
+#define nvme_engine_engine_prp_list_hi_write nvme_io_engine_engine_prp_list_hi_write
+#define nvme_engine_engine_status_read       nvme_io_engine_engine_status_read
+#define nvme_engine_engine_submitted_read    nvme_io_engine_engine_submitted_read
+#define CSR_NVME_ENGINE_ENGINE_ENABLE_ADDR   CSR_NVME_IO_ENGINE_ENGINE_ENABLE_ADDR
+#endif
+
+#if !defined(CSR_HOSTMEM_CSR_CSR_ADR_ADDR) && defined(CSR_NVME_HOSTMEM_CSR_CSR_ADR_ADDR)
+#define hostmem_csr_csr_adr_write            nvme_hostmem_csr_csr_adr_write
+#define hostmem_csr_csr_wdata_write          nvme_hostmem_csr_csr_wdata_write
+#define hostmem_csr_csr_we_write             nvme_hostmem_csr_csr_we_write
+#define hostmem_csr_csr_rdata_read           nvme_hostmem_csr_csr_rdata_read
+#define hostmem_csr_dma_wr_count_read        nvme_hostmem_csr_dma_wr_count_read
+#define hostmem_csr_dma_rd_count_read        nvme_hostmem_csr_dma_rd_count_read
+#define hostmem_csr_wr_present_cycles_read   nvme_hostmem_csr_wr_present_cycles_read
+#define hostmem_csr_wr_accept_cycles_read    nvme_hostmem_csr_wr_accept_cycles_read
+#define hostmem_csr_wr_stall_cycles_read     nvme_hostmem_csr_wr_stall_cycles_read
+#define hostmem_csr_rd_tlp_count_read        nvme_hostmem_csr_rd_tlp_count_read
+#define hostmem_csr_rd_gap_max_read          nvme_hostmem_csr_rd_gap_max_read
+#define CSR_HOSTMEM_CSR_DMA_WR_COUNT_ADDR    CSR_NVME_HOSTMEM_CSR_DMA_WR_COUNT_ADDR
+#define CSR_HOSTMEM_CSR_WR_PRESENT_CYCLES_ADDR CSR_NVME_HOSTMEM_CSR_WR_PRESENT_CYCLES_ADDR
+#endif
+
+#if !defined(CSR_NVME_GEN_CTRL_ADDR) && defined(CSR_NVME_REQUEST_GEN_CTRL_ADDR)
+#define nvme_gen_op_write                    nvme_request_gen_op_write
+#define nvme_gen_nsid_write                  nvme_request_gen_nsid_write
+#define nvme_gen_base_lba_lo_write           nvme_request_gen_base_lba_lo_write
+#define nvme_gen_base_lba_hi_write           nvme_request_gen_base_lba_hi_write
+#define nvme_gen_nlb_write                   nvme_request_gen_nlb_write
+#define nvme_gen_lba_step_write              nvme_request_gen_lba_step_write
+#define nvme_gen_count_write                 nvme_request_gen_count_write
+#define nvme_gen_buf_base_lo_write           nvme_request_gen_buf_base_lo_write
+#define nvme_gen_buf_base_hi_write           nvme_request_gen_buf_base_hi_write
+#define nvme_gen_buf_stride_write            nvme_request_gen_buf_stride_write
+#define nvme_gen_qmod_write                  nvme_request_gen_qmod_write
+#define nvme_gen_ctrl_write                  nvme_request_gen_ctrl_write
+#define nvme_gen_status_read                 nvme_request_gen_status_read
+#define nvme_gen_completed_read              nvme_request_gen_completed_read
+#define nvme_gen_errors_read                 nvme_request_gen_errors_read
+#define nvme_gen_cycles_read                 nvme_request_gen_cycles_read
+#define nvme_gen_last_status_read            nvme_request_gen_last_status_read
+#define nvme_gen_first_err_status_read       nvme_request_gen_first_err_status_read
+#define nvme_gen_first_err_cid_read          nvme_request_gen_first_err_cid_read
+#define nvme_gen_first_err_idx_read          nvme_request_gen_first_err_idx_read
+#define CSR_NVME_GEN_CTRL_ADDR               CSR_NVME_REQUEST_GEN_CTRL_ADDR
+#endif
+
+/*-----------------------------------------------------------------------*/
 /* CSR feature flags                                                      */
 /*-----------------------------------------------------------------------*/
 
@@ -60,7 +143,13 @@
 /* NVMe constants/layout                                                  */
 /*-----------------------------------------------------------------------*/
 
+/* Host-memory window base, I/O queue size and PRP-list region: the standalone core passes its
+ * configuration in generated/soc.h (LITENVME_*); the defaults match the bench SoC. */
+#ifdef LITENVME_HOSTMEM_BASE
+#define HOSTMEM_BASE       ((uint32_t)LITENVME_HOSTMEM_BASE)
+#else
 #define HOSTMEM_BASE       0x10000000u
+#endif
 #define ASQ_ADDR           (HOSTMEM_BASE + 0x0000u)
 #define ACQ_ADDR           (HOSTMEM_BASE + 0x1000u)
 #define ID_BUF_ADDR        (HOSTMEM_BASE + 0x2000u)
@@ -75,8 +164,18 @@
 #define IO_BUF_BASE        (HOSTMEM_BASE + 0x10000u)
 #define IO_BUF(i)          (IO_BUF_BASE + (uint32_t)(i) * 0x1000u)
 #define ADMIN_Q_ENTRIES    2
+#ifdef LITENVME_IO_Q_ENTRIES
+#define IO_Q_ENTRIES       LITENVME_IO_Q_ENTRIES
+#else
 #define IO_Q_ENTRIES       64
+#endif
 #define IO_QD_MAX          (IO_Q_ENTRIES - 1)
+/* PRP-list region of the I/O engine: one 4 KiB page per SQ slot. */
+#ifdef LITENVME_PRP_LIST_BASE
+#define IO_PRP_LIST_ADDR   ((uint32_t)LITENVME_PRP_LIST_BASE)
+#else
+#define IO_PRP_LIST_ADDR   (IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u)
+#endif
 
 #define NVME_CAP_TRIES        2
 #define NVME_CAP_DELAY        5000
@@ -1520,7 +1619,7 @@ static void nvme_engine_bench_cmd(char *str)
 	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
 	/* PRP-list region (only used if nlb > 16; placed after the per-slot data buffers). */
 	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write,
-	                    (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u));
+	                    (uint64_t)IO_PRP_LIST_ADDR);
 	nvme_engine_engine_enable_write(1);
 
 	/* Prefill per-slot data buffers (write source pattern; read dest cleared). */
@@ -1649,7 +1748,7 @@ static int nvme_autoinit(uint64_t base_addr)
 	nvme_engine_write64(nvme_engine_engine_sq_db_lo_write,   nvme_engine_engine_sq_db_hi_write,   sq_db);
 	nvme_engine_write64(nvme_engine_engine_cq_db_lo_write,   nvme_engine_engine_cq_db_hi_write,   cq_db);
 	nvme_engine_write64(nvme_engine_engine_prp_list_lo_write, nvme_engine_engine_prp_list_hi_write,
-	                    (uint64_t)(IO_BUF_BASE + (uint32_t)IO_Q_ENTRIES * 0x1000u));
+	                    (uint64_t)IO_PRP_LIST_ADDR);
 	nvme_engine_engine_enable_write(1);
 	return 0;
 }

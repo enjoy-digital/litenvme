@@ -34,11 +34,11 @@
     "cpu"           : "vexriscv",   # bring-up only (one-time init), so the minimal variant.
     "cpu_variant"   : "minimal",
     "uart"          : "serial",
-    # "none": boot the LiteX BIOS (works today). "minimal": a code-only firmware (auto-init +
-    # idle, no console/prints) baked into a small ROM with no main_ram -> smallest CPU footprint;
-    # NOTE: minimal/auto self-init on the generated core still needs the firmware<->core CSR
-    # names aligned (the wrapper nests cfg/mmio as nvme_cfg/nvme_mmio) -- a tracked follow-up.
-    "firmware"      : "none",
+    # "minimal": a code-only firmware (auto-init + idle, no console/prints) baked into a small ROM
+    # with no main_ram, it raises status_init_done (needs a RISC-V toolchain to generate).
+    # "auto": the console firmware in ROM (run nvme_setup). "none": boot the LiteX BIOS; nothing
+    # initializes the SSD (status_init_done stays 0) until a firmware is loaded and runs nvme_setup.
+    "firmware"      : "minimal",
 
     # I/O engine + host-memory window. The block streamer issues one command at a time, so a
     # small ring (qsize/qd) is enough and keeps the PRP-list region (qsize pages) tiny. The
@@ -46,6 +46,7 @@
     # request-generator buffers -- so 256 KiB is plenty (vs 512 KiB for the benchmark variant).
     "qid"           : 1,
     "qsize"         : 8,        # PRP-list region = qsize*4KiB = 32 KiB.
+    "prp_list_offset" : 0x7000, # PRP list at 0x7000-0xf000: after the queues, below staging.
     "qd"            : 4,
     "hostmem_base"  : 0x10000000,
     "hostmem_size"  : 0x40000,  # 256 KiB.
@@ -53,9 +54,10 @@
     # Data interface: the LiteSATA-style block streamer is the sole front-end, exposed at the
     # top as wr_sink/rd_source + command/status pins. (Set with_request_gen instead for a
     # CSR-driven benchmark variant.) The CSR memory-debug frontend (which replicates the window
-    # BRAM) is dropped automatically for this pin-driven core.
+    # BRAM) is kept in firmware mode (the bring-up firmware accesses the queues through it) and
+    # dropped with init_mode "rtl".
     "with_request_gen"    : False,
     "with_block_streamer" : True,
-    "staging_base"        : 0x10000,  # 64 KiB in (clear of SQ/CQ@0x3-4000, PRP@0x5000).
+    "staging_base"        : 0x10000,  # 64 KiB in (clear of SQ/CQ@0x3-4000, PRP@0x7000-0xf000).
     "staging_size"        : 0x30000,  # 192 KiB staging -> up to 384-sector transfers.
 }

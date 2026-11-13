@@ -27,7 +27,7 @@ The standalone generator has two validated bring-up modes:
 
 | Mode | Config | Expected path |
 |------|--------|---------------|
-| Firmware | `init_mode: "firmware"` | Embedded CPU runs bring-up firmware and raises `status_init_done`. |
+| Firmware | `init_mode: "firmware"` | Embedded CPU runs bring-up firmware and raises `status_init_done` (`firmware: "minimal"`; with `"none"` the BIOS boots and nothing initializes the SSD). |
 | RTL | `init_mode: "rtl"` | CPU-less init sequencer auto-starts after PCIe PERST# release and raises `status_init_done`. |
 
 Smoke commands:
@@ -37,8 +37,9 @@ python3 -c 'from litenvme.gen import load_config; load_config("examples/alibaba_
 litenvme_gen examples/alibaba_xcku3p.yml --output-dir build --name litenvme_core
 ```
 
-For RTL-init generator checks, copy the example YAML, set `init_mode` to `"rtl"`, keep
-`firmware` at `"none"`, remove the CPU fields or set `cpu` to `None`, and keep the block streamer
+The example YAML uses `firmware: "minimal"`: generating it builds the firmware and needs a RISC-V
+toolchain. For RTL-init generator checks, copy the example YAML, set `init_mode` to `"rtl"`, set
+`firmware` to `"none"`, remove the CPU fields or set `cpu` to `None`, and keep the block streamer
 as the exposed front-end.
 
 ## Hardware Baseline

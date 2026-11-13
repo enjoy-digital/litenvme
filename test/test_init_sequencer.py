@@ -23,15 +23,25 @@ ADM_CQ_DB = BAR0 + 0x1004
 
 
 class _DUT(Module):
-    def __init__(self):
+    def __init__(self, io_q_entries=64, prp_list_base=None):
         self.submodules.seq = LiteNVMeInitSequencer(
-            bar0_base=BAR0, hostmem_base=HOSTMEM, admin_q_entries=2, io_q_entries=64,
-            poll_timeout=4096)
+            bar0_base=BAR0, hostmem_base=HOSTMEM, admin_q_entries=2, io_q_entries=io_q_entries,
+            prp_list_base=prp_list_base, poll_timeout=4096)
 
 
 class TestInitSequencer(unittest.TestCase):
     def test_bringup(self):
-        dut = _DUT()
+        result = self.run_bringup()
+        # Legacy PRP-list placement: after the per-slot buffers.
+        self.assertEqual(result["eng_prp_list"], HOSTMEM + 0x10000 + 64*0x1000, "wrong PRP list")
+
+    def test_bringup_prp_list_base(self):
+        # Standalone example layout: 8-entry ring, PRP list after the queues (below staging).
+        result = self.run_bringup(io_q_entries=8, prp_list_base=HOSTMEM + 0x7000)
+        self.assertEqual(result["eng_prp_list"], HOSTMEM + 0x7000, "wrong PRP list")
+
+    def run_bringup(self, **kwargs):
+        dut = _DUT(**kwargs)
         s = dut.seq
         mem = {}                 # host memory (dword-addressed).
         sq_doorbells = []        # admin SQ doorbell values rung.
@@ -87,12 +97,14 @@ class TestInitSequencer(unittest.TestCase):
                 else:
                     yield
 
-        # ROOT cfg-mgmt: ack the window write.
+        # ROOT cfg-mgmt: record and ack the window write.
+        root_writes = []
         @passive
         def root_model():
             yield s.root_done.eq(0)
             while True:
                 if (yield s.root_start):
+                    root_writes.append(((yield s.root_write), (yield s.root_addr), (yield s.root_wdata)))
                     yield s.root_done.eq(0)
                     yield; yield
                     yield s.root_done.eq(1)
@@ -151,6 +163,7 @@ class TestInitSequencer(unittest.TestCase):
             result["eng_enable"]  = (yield s.eng_enable)
             result["eng_sq_base"] = (yield s.eng_sq_base)
             result["eng_cq_base"] = (yield s.eng_cq_base)
+            result["eng_prp_list"] = (yield s.eng_prp_list)
 
         run_simulation(dut, [main(), cfg_model(), mmio_model(), root_model(), mem_model(), ssd_model()])
 
@@ -165,6 +178,10 @@ class TestInitSequencer(unittest.TestCase):
         # The 3 admin SQEs, in order, are Set Features (0x09), Create IO CQ (0x05), Create IO SQ
         # (0x01). Captured at submission time (the 2-entry admin ring overwrites slot 0).
         self.assertEqual(served_ops, [0x09, 0x05, 0x01], f"wrong admin opcodes: {[hex(o) for o in served_ops]}")
+        # Root port Memory Base/Limit: type-1 header byte 0x20, i.e. cfg_mgmt DWORD address 0x08
+        # (where the firmware writes it: rootcfg_wr32(0x20, ...)).
+        self.assertEqual(root_writes, [(1, 0x20 >> 2, 0xe000e000)], f"wrong root window write: {root_writes}")
+        return result
 
 
 if __name__ == "__main__":
